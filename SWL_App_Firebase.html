@@ -1,0 +1,1474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SouthWest Landscape — Weekly Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!-- ═══════════════════════════════════════════════════════
+     FIREBASE CONFIG — Replace with your project values
+     Get these from: Firebase Console → Project Settings → Your Apps
+     ═══════════════════════════════════════════════════════ -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc,
+  updateDoc, deleteDoc, query, where, orderBy, onSnapshot, serverTimestamp, Timestamp }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+// ┌─────────────────────────────────────────────────────┐
+// │  REPLACE THESE VALUES WITH YOUR FIREBASE CONFIG     │
+// └─────────────────────────────────────────────────────┘
+const firebaseConfig = {
+  apiKey: "AIzaSyCAJAp18zX6T66AmvNVRF4aHCLUWX6Tg8g",
+  authDomain: "swl-checklist.firebaseapp.com",
+  projectId: "swl-checklist",
+  storageBucket: "swl-checklist.firebasestorage.app",
+  messagingSenderId: "159768908044",
+  appId: "1:159768908044:web:6f4f4e329f91c07dbbf929"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// ═══════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════
+const ROLES = {
+  admin: { label: 'Admin', canViewAll: true, canManageUsers: true, canViewTeam: true, isManager: true },
+  branch_manager: { label: 'Branch Manager', canViewAll: false, canManageUsers: false, canViewTeam: true, isManager: true },
+  ops_manager: { label: 'Operations Manager', canViewAll: false, canManageUsers: false, canViewTeam: false, isManager: false },
+  ops_specialist: { label: 'Operations Specialist', canViewAll: false, canManageUsers: false, canViewTeam: false, isManager: false },
+  client_rep: { label: 'Client Representative', canViewAll: false, canManageUsers: false, canViewTeam: false, isManager: false },
+  irrigation_supervisor: { label: 'Irrigation Supervisor', canViewAll: false, canManageUsers: false, canViewTeam: false, isManager: false }
+};
+
+const USERS_SEED = [
+  { email: 'jim@southwestlandscapeinc.com', name: 'Jim Cunningham', role: 'branch_manager', branch: 'OC' },
+  { email: 'alfredo@southwestlandscapeinc.com', name: 'Alfredo Rosas', role: 'ops_manager', branch: 'OC' },
+  { email: 'kim@southwestlandscapeinc.com', name: 'Kim Thrall', role: 'client_rep', branch: 'OC' },
+  { email: 'sydney@southwestlandscapeinc.com', name: 'Sydney Smith', role: 'client_rep', branch: 'OC' },
+  { email: 'yocelin@southwestlandscapeinc.com', name: 'Yocelin Reynoso Prado', role: 'branch_manager', branch: 'LA' },
+  { email: 'sebastian@southwestlandscapeinc.com', name: 'Sebastian Gomez', role: 'client_rep', branch: 'LA' },
+  { email: 'juan@southwestlandscapeinc.com', name: 'Juan Zaragoza', role: 'ops_specialist', branch: 'LA' },
+  { email: 'antonio@southwestlandscapeinc.com', name: 'Antonio Ballinas', role: 'irrigation_supervisor', branch: 'LA' },
+  { email: 'admin@southwestlandscapeinc.com', name: 'Admin', role: 'admin', branch: 'ALL' }
+];
+
+// ═══════════════════════════════════════════
+// APP STATE
+// ═══════════════════════════════════════════
+let currentUser = null;
+let currentUserData = null;
+let currentWeekStart = getMonday(new Date());
+let activeScreen = 'login';
+let unsubListeners = [];
+
+// ═══════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════
+function getMonday(d) {
+  const dt = new Date(d);
+  const day = dt.getDay();
+  const diff = dt.getDate() - day + (day === 0 ? -6 : 1);
+  dt.setDate(diff);
+  dt.setHours(0, 0, 0, 0);
+  return dt;
+}
+function getSaturday(monday) {
+  const d = new Date(monday);
+  d.setDate(d.getDate() + 5);
+  return d;
+}
+function fmtDate(d) {
+  if (!d) return '—';
+  const dt = d instanceof Date ? d : d.toDate ? d.toDate() : new Date(d);
+  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function fmtDateShort(d) {
+  if (!d) return '';
+  const dt = d instanceof Date ? d : d.toDate ? d.toDate() : new Date(d);
+  return dt.toISOString().split('T')[0];
+}
+function fmtWeek(monday) {
+  const sat = getSaturday(monday);
+  return `${fmtDate(monday)} – ${fmtDate(sat)}`;
+}
+function weekKey(monday) { return fmtDateShort(monday); }
+function isFriday() { return new Date().getDay() === 5; }
+function isMonday() { return new Date().getDay() === 1; }
+function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  clearTimeout(window._toastT);
+  window._toastT = setTimeout(() => el.classList.remove('show'), 3500);
+}
+function show(screenId) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const el = document.getElementById('s-' + screenId);
+  if (el) el.classList.add('active');
+  activeScreen = screenId;
+  window.scrollTo(0, 0);
+}
+function hasPermission(perm) {
+  if (!currentUserData) return false;
+  const role = ROLES[currentUserData.role];
+  return role && role[perm];
+}
+function canViewBranch(branch) {
+  if (!currentUserData) return false;
+  if (currentUserData.role === 'admin') return true;
+  return currentUserData.branch === branch;
+}
+
+// ═══════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    currentUser = user;
+    const snap = await getDoc(doc(db, 'users', user.uid));
+    if (snap.exists()) {
+      currentUserData = snap.data();
+      if (!currentUserData.active) {
+        await signOut(auth);
+        toast('Your account has been disabled. Contact admin.', 'err');
+        return;
+      }
+      initApp();
+    } else {
+      toast('User profile not found. Contact admin.', 'err');
+      await signOut(auth);
+    }
+  } else {
+    currentUser = null;
+    currentUserData = null;
+    unsubListeners.forEach(u => u());
+    unsubListeners = [];
+    show('login');
+  }
+});
+
+async function login() {
+  const email = document.getElementById('l-email').value.trim();
+  const pass = document.getElementById('l-pass').value;
+  const btn = document.getElementById('l-btn');
+  if (!email || !pass) { toast('Enter email and password', 'err'); return; }
+  btn.textContent = 'Signing in…';
+  btn.disabled = true;
+  try {
+    await signInWithEmailAndPassword(auth, email, pass);
+  } catch (e) {
+    toast('Invalid email or password', 'err');
+    btn.textContent = 'Sign In';
+    btn.disabled = false;
+  }
+}
+
+async function logout() {
+  await signOut(auth);
+  toast('Signed out');
+}
+
+// ═══════════════════════════════════════════
+// APP INIT
+// ═══════════════════════════════════════════
+function initApp() {
+  renderNav();
+  showDashboard();
+}
+
+function renderNav() {
+  const ud = currentUserData;
+  const branchColor = ud.branch === 'OC' ? 'var(--oc)' : ud.branch === 'LA' ? 'var(--la)' : 'var(--burg)';
+  document.getElementById('nav-name').textContent = ud.name;
+  document.getElementById('nav-role').textContent = ROLES[ud.role]?.label || ud.role;
+  document.getElementById('nav-branch').textContent = ud.branch;
+  document.getElementById('nav-branch').style.background = branchColor;
+  const adminLink = document.getElementById('nav-admin');
+  if (adminLink) adminLink.style.display = ud.role === 'admin' ? '' : 'none';
+}
+
+// ═══════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════
+async function showDashboard() {
+  show('dashboard');
+  const ud = currentUserData;
+  const branch = ud.branch === 'ALL' ? null : ud.branch;
+  const wk = weekKey(currentWeekStart);
+
+  document.getElementById('dash-week').textContent = fmtWeek(currentWeekStart);
+  document.getElementById('dash-name').textContent = `Good ${getGreeting()}, ${ud.name.split(' ')[0]}`;
+  document.getElementById('dash-role').textContent = ROLES[ud.role]?.label + (branch ? ` · ${branch}` : ' · All Branches');
+
+  // Load carry-over count
+  let coQuery = query(collection(db, 'weekly_items'),
+    where('status', '==', 'not_completed'),
+    where('carriedOver', '==', false)
+  );
+  if (branch) coQuery = query(collection(db, 'weekly_items'),
+    where('branch', '==', branch),
+    where('status', '==', 'not_completed'),
+    where('carriedOver', '==', false)
+  );
+  const coSnap = await getDocs(coQuery);
+  document.getElementById('dash-carryover').textContent = coSnap.size;
+
+  // Check if current user submitted this week
+  const subQuery = query(collection(db, 'weekly_submissions'),
+    where('userId', '==', currentUser.uid),
+    where('weekStart', '==', wk)
+  );
+  const subSnap = await getDocs(subQuery);
+  const submitted = !subSnap.empty && subSnap.docs[0].data().status === 'submitted';
+  const subStatus = document.getElementById('dash-sub-status');
+  subStatus.innerHTML = submitted
+    ? `<span class="badge success">✓ Submitted this week</span>`
+    : `<span class="badge warn">⚠ Weekly check-in pending</span>`;
+
+  // Team submissions (managers only)
+  const teamSection = document.getElementById('dash-team-section');
+  if (hasPermission('canViewTeam') && teamSection) {
+    teamSection.style.display = 'block';
+    let teamQuery = query(collection(db, 'weekly_submissions'), where('weekStart', '==', wk));
+    if (branch) teamQuery = query(collection(db, 'weekly_submissions'),
+      where('weekStart', '==', wk), where('branch', '==', branch));
+    const teamSnap = await getDocs(teamQuery);
+    const submitted_count = teamSnap.docs.filter(d => d.data().status === 'submitted').length;
+    document.getElementById('dash-team-submitted').textContent = `${submitted_count} / ${teamSnap.size} submitted`;
+    renderTeamSubmissions(teamSnap.docs);
+  } else if (teamSection) {
+    teamSection.style.display = 'none';
+  }
+
+  // Show friday review prompt if it's Friday
+  const fridayBanner = document.getElementById('dash-friday-banner');
+  if (fridayBanner) fridayBanner.style.display = isFriday() ? 'block' : 'none';
+  const mondayBanner = document.getElementById('dash-monday-banner');
+  if (mondayBanner) mondayBanner.style.display = isMonday() ? 'block' : 'none';
+
+  // Carry-over items
+  loadCarryoverItems();
+}
+
+function getGreeting() {
+  const h = new Date().getHours();
+  return h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+}
+
+function renderTeamSubmissions(docs) {
+  const el = document.getElementById('dash-team-list');
+  if (!el) return;
+  if (!docs.length) { el.innerHTML = '<div class="empty-state">No submissions yet this week</div>'; return; }
+  el.innerHTML = docs.map(d => {
+    const data = d.data();
+    const status = data.status === 'submitted';
+    return `<div class="team-sub-row">
+      <div class="tsub-name">${esc(data.userName)}</div>
+      <div class="tsub-role">${ROLES[data.role]?.label || data.role}</div>
+      <div class="tsub-status">
+        <span class="badge ${status ? 'success' : 'warn'}">${status ? '✓ Submitted' : 'Pending'}</span>
+      </div>
+      ${status ? `<button class="btn-sm" onclick="viewSubmission('${d.id}')">View</button>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function loadCarryoverItems() {
+  const ud = currentUserData;
+  const branch = ud.branch === 'ALL' ? null : ud.branch;
+  const el = document.getElementById('dash-carryover-list');
+  if (!el) return;
+
+  let q = query(collection(db, 'weekly_items'),
+    where('status', '==', 'not_completed'),
+    orderBy('deadline')
+  );
+  if (branch) q = query(collection(db, 'weekly_items'),
+    where('branch', '==', branch),
+    where('status', '==', 'not_completed'),
+    orderBy('deadline')
+  );
+  const snap = await getDocs(q);
+  if (snap.empty) { el.innerHTML = '<div class="empty-state">✓ No carry-over items</div>'; return; }
+  el.innerHTML = snap.docs.map(d => {
+    const data = d.data();
+    return `<div class="carryover-item">
+      <div class="co-priority priority-${data.priority || 'medium'}"></div>
+      <div class="co-content">
+        <div class="co-title">${esc(data.title)}</div>
+        <div class="co-meta">${esc(data.ownerName)} · Due ${fmtDate(data.deadline)}</div>
+      </div>
+      <span class="badge warn">Carry-over</span>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════
+// WEEKLY CHECK-IN FORM
+// ═══════════════════════════════════════════
+async function showCheckIn() {
+  show('checkin');
+  const ud = currentUserData;
+  const wk = weekKey(currentWeekStart);
+  document.getElementById('ci-week').textContent = fmtWeek(currentWeekStart);
+  document.getElementById('ci-name').textContent = ud.name;
+
+  // Show manager section if applicable
+  const mgrSection = document.getElementById('ci-manager-section');
+  if (mgrSection) mgrSection.style.display = hasPermission('isManager') ? 'block' : 'none';
+
+  // Load existing submission
+  const q = query(collection(db, 'weekly_submissions'),
+    where('userId', '==', currentUser.uid),
+    where('weekStart', '==', wk)
+  );
+  const snap = await getDocs(q);
+  if (!snap.empty) {
+    const data = snap.docs[0].data();
+    const id = snap.docs[0].id;
+    document.getElementById('ci-doc-id').value = id;
+    ['workload','activeClients','deadlines','proposals','staffingNeeds','issues','wins','supportNeeded',
+     'managerNotes','branchPriorities','coachingNotes','operationalRisks','escalations'].forEach(f => {
+      const el = document.getElementById('ci-' + f);
+      if (el && data[f]) el.value = data[f];
+    });
+    if (data.status === 'submitted') {
+      document.getElementById('ci-submit-btn').textContent = 'Update Submission';
+    }
+  } else {
+    document.getElementById('ci-doc-id').value = '';
+  }
+}
+
+async function saveCheckIn(status) {
+  const ud = currentUserData;
+  const wk = weekKey(currentWeekStart);
+  const docId = document.getElementById('ci-doc-id').value;
+
+  const fields = ['workload','activeClients','deadlines','proposals','staffingNeeds','issues','wins','supportNeeded',
+                  'managerNotes','branchPriorities','coachingNotes','operationalRisks','escalations'];
+  const data = {
+    userId: currentUser.uid,
+    userName: ud.name,
+    branch: ud.branch,
+    role: ud.role,
+    weekStart: wk,
+    weekEnd: weekKey(getSaturday(currentWeekStart)),
+    status: status,
+    updatedAt: serverTimestamp()
+  };
+  fields.forEach(f => {
+    const el = document.getElementById('ci-' + f);
+    if (el) data[f] = el.value.trim();
+  });
+
+  try {
+    if (docId) {
+      await updateDoc(doc(db, 'weekly_submissions', docId), data);
+    } else {
+      data.submittedAt = serverTimestamp();
+      const ref = await addDoc(collection(db, 'weekly_submissions'), data);
+      document.getElementById('ci-doc-id').value = ref.id;
+    }
+    toast(status === 'submitted' ? '✓ Submitted successfully!' : '✓ Draft saved');
+    if (status === 'submitted') {
+      await logSync('submission_saved', `${ud.name} submitted week ${wk}`);
+      showDashboard();
+    }
+  } catch (e) {
+    toast('Error saving: ' + e.message, 'err');
+  }
+}
+
+// ═══════════════════════════════════════════
+// WEEKLY ITEMS (priorities/tasks)
+// ═══════════════════════════════════════════
+async function showWeeklyItems() {
+  show('items');
+  const ud = currentUserData;
+  const branch = ud.branch === 'ALL' ? null : ud.branch;
+  document.getElementById('items-week').textContent = fmtWeek(currentWeekStart);
+
+  let q = query(collection(db, 'weekly_items'), where('weekStart', '==', weekKey(currentWeekStart)), orderBy('priority'));
+  if (branch) q = query(collection(db, 'weekly_items'),
+    where('branch', '==', branch),
+    where('weekStart', '==', weekKey(currentWeekStart)),
+    orderBy('priority')
+  );
+  const snap = await getDocs(q);
+  renderItems(snap.docs);
+}
+
+function renderItems(docs) {
+  const el = document.getElementById('items-list');
+  if (!el) return;
+  if (!docs.length) { el.innerHTML = '<div class="empty-state">No items this week. Add one below.</div>'; return; }
+  el.innerHTML = docs.map(d => {
+    const item = d.data();
+    const statusClass = { pending: 'warn', completed_on_time: 'success', completed_late: 'info', not_completed: 'danger' }[item.status] || 'warn';
+    const statusLabel = { pending: 'Pending', completed_on_time: '✓ On Time', completed_late: '⚠ Late', not_completed: '✗ Not Completed' }[item.status] || 'Pending';
+    return `<div class="item-card priority-border-${item.priority || 'medium'}">
+      <div class="item-header">
+        <div class="item-title">${esc(item.title)}</div>
+        <span class="badge ${statusClass}">${statusLabel}</span>
+      </div>
+      <div class="item-meta">${esc(item.ownerName)} · Due ${fmtDate(item.deadline)} · <span class="priority-tag ${item.priority}">${item.priority || 'medium'}</span></div>
+      ${item.description ? `<div class="item-desc">${esc(item.description)}</div>` : ''}
+      <div class="item-actions">
+        <select class="status-select" onchange="updateItemStatus('${d.id}', this.value)">
+          <option value="pending" ${item.status === 'pending' ? 'selected' : ''}>Pending</option>
+          <option value="completed_on_time" ${item.status === 'completed_on_time' ? 'selected' : ''}>Completed On Time</option>
+          <option value="completed_late" ${item.status === 'completed_late' ? 'selected' : ''}>Completed Late</option>
+          <option value="not_completed" ${item.status === 'not_completed' ? 'selected' : ''}>Not Completed</option>
+        </select>
+        ${isFriday() ? `<button class="btn-sm accent" onclick="openFridayReview('${d.id}')">Friday Review</button>` : ''}
+        ${hasPermission('canViewTeam') ? `<button class="btn-sm danger" onclick="deleteItem('${d.id}')">Delete</button>` : ''}
+      </div>
+      ${item.fridayReview ? `<div class="friday-note"><strong>Friday:</strong> ${esc(item.fridayReview.reason || '')} ${item.fridayReview.newDeadline ? '· New deadline: '+fmtDate(item.fridayReview.newDeadline) : ''}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function addItem() {
+  const ud = currentUserData;
+  const title = document.getElementById('new-item-title').value.trim();
+  const deadline = document.getElementById('new-item-deadline').value;
+  const priority = document.getElementById('new-item-priority').value;
+  const desc = document.getElementById('new-item-desc').value.trim();
+  if (!title || !deadline) { toast('Title and deadline required', 'err'); return; }
+  try {
+    await addDoc(collection(db, 'weekly_items'), {
+      branch: ud.branch,
+      weekStart: weekKey(currentWeekStart),
+      title, description: desc, deadline, priority,
+      owner: currentUser.uid, ownerName: ud.name,
+      status: 'pending', carriedOver: false,
+      createdAt: serverTimestamp()
+    });
+    document.getElementById('new-item-title').value = '';
+    document.getElementById('new-item-deadline').value = '';
+    document.getElementById('new-item-desc').value = '';
+    toast('✓ Item added');
+    showWeeklyItems();
+  } catch (e) { toast('Error: ' + e.message, 'err'); }
+}
+
+async function updateItemStatus(id, status) {
+  await updateDoc(doc(db, 'weekly_items', id), { status, updatedAt: serverTimestamp() });
+  toast('✓ Status updated');
+}
+
+async function deleteItem(id) {
+  if (!confirm('Delete this item?')) return;
+  await deleteDoc(doc(db, 'weekly_items', id));
+  showWeeklyItems();
+}
+
+// ═══════════════════════════════════════════
+// FRIDAY REVIEW
+// ═══════════════════════════════════════════
+function openFridayReview(itemId) {
+  document.getElementById('fr-item-id').value = itemId;
+  document.getElementById('friday-modal').style.display = 'flex';
+}
+function closeFridayModal() {
+  document.getElementById('friday-modal').style.display = 'none';
+}
+async function saveFridayReview() {
+  const itemId = document.getElementById('fr-item-id').value;
+  const status = document.getElementById('fr-status').value;
+  const reason = document.getElementById('fr-reason').value.trim();
+  const newDeadline = document.getElementById('fr-new-deadline').value;
+  const managerNotes = document.getElementById('fr-manager-notes').value.trim();
+  const howAssist = document.getElementById('fr-how-assist').value.trim();
+
+  const fridayReview = { status, reason, newDeadline, managerNotes, howAssist, reviewedAt: new Date().toISOString() };
+  const updateData = { status, fridayReview, updatedAt: serverTimestamp() };
+  if (status === 'not_completed') {
+    updateData.carriedOver = true;
+    if (newDeadline) updateData.deadline = newDeadline;
+  }
+  await updateDoc(doc(db, 'weekly_items', itemId), updateData);
+  toast('✓ Friday review saved');
+  closeFridayModal();
+  showWeeklyItems();
+}
+
+// ═══════════════════════════════════════════
+// MONDAY SUMMARY
+// ═══════════════════════════════════════════
+async function showMondaySummary() {
+  show('summary');
+  const ud = currentUserData;
+  const branch = ud.branch === 'ALL' ? null : ud.branch;
+  const wk = weekKey(currentWeekStart);
+  document.getElementById('sum-week').textContent = fmtWeek(currentWeekStart);
+
+  // Load submissions
+  let subQ = query(collection(db, 'weekly_submissions'), where('weekStart', '==', wk));
+  if (branch) subQ = query(collection(db, 'weekly_submissions'), where('weekStart', '==', wk), where('branch', '==', branch));
+  const subSnap = await getDocs(subQ);
+
+  // Load items
+  let itemQ = query(collection(db, 'weekly_items'), where('weekStart', '==', wk));
+  if (branch) itemQ = query(collection(db, 'weekly_items'), where('weekStart', '==', wk), where('branch', '==', branch));
+  const itemSnap = await getDocs(itemQ);
+
+  // Load carry-over
+  let coQ = query(collection(db, 'weekly_items'), where('status', '==', 'not_completed'));
+  if (branch) coQ = query(collection(db, 'weekly_items'), where('branch', '==', branch), where('status', '==', 'not_completed'));
+  const coSnap = await getDocs(coQ);
+
+  renderMondaySummary(subSnap.docs, itemSnap.docs, coSnap.docs, branch);
+}
+
+function renderMondaySummary(submissions, items, carryovers, branch) {
+  const brColor = branch === 'OC' ? '#FC4C02' : branch === 'LA' ? '#005A9C' : '#0E4C2D';
+  const el = document.getElementById('sum-body');
+
+  const managerSub = submissions.find(d => ['branch_manager', 'admin'].includes(d.data().role));
+  const teamSubs = submissions.filter(d => !['branch_manager', 'admin'].includes(d.data().role));
+
+  let html = '';
+
+  // Carry-over section
+  if (carryovers.length) {
+    html += `<div class="sum-section">
+      <div class="sum-sec-hdr warn-hdr">⚠ Carry-Over Items (${carryovers.length})</div>
+      ${carryovers.map(d => {
+        const co = d.data();
+        return `<div class="sum-item"><span class="co-dot"></span><div><strong>${esc(co.title)}</strong><div class="sum-meta">${esc(co.ownerName)} · Was due ${fmtDate(co.deadline)}</div>${co.fridayReview?.reason ? `<div class="sum-note">Reason: ${esc(co.fridayReview.reason)}</div>` : ''}</div></div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  // Manager notes
+  if (managerSub) {
+    const md = managerSub.data();
+    html += `<div class="sum-section">
+      <div class="sum-sec-hdr mgr-hdr">📋 Branch Manager — ${esc(md.userName)}</div>
+      ${md.branchPriorities ? `<div class="sum-field"><label>Branch Priorities</label><p>${esc(md.branchPriorities)}</p></div>` : ''}
+      ${md.operationalRisks ? `<div class="sum-field"><label>Operational Risks</label><p>${esc(md.operationalRisks)}</p></div>` : ''}
+      ${md.escalations ? `<div class="sum-field"><label>Escalations</label><p>${esc(md.escalations)}</p></div>` : ''}
+      ${md.managerNotes ? `<div class="sum-field"><label>Notes</label><p>${esc(md.managerNotes)}</p></div>` : ''}
+    </div>`;
+  }
+
+  // This week's items
+  const pendingItems = items.filter(d => d.data().status === 'pending');
+  if (pendingItems.length) {
+    html += `<div class="sum-section">
+      <div class="sum-sec-hdr">📅 This Week's Items</div>
+      <div class="items-grid">
+        ${pendingItems.map(d => {
+          const it = d.data();
+          return `<div class="sum-item-card priority-border-${it.priority}">
+            <div class="sic-title">${esc(it.title)}</div>
+            <div class="sic-meta">${esc(it.ownerName)} · Due ${fmtDate(it.deadline)}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  // Team submissions
+  if (teamSubs.length) {
+    html += `<div class="sum-section">
+      <div class="sum-sec-hdr">👥 Team Check-Ins</div>
+      ${teamSubs.map(d => {
+        const td = d.data();
+        if (td.status !== 'submitted') return `<div class="sum-item"><span class="badge warn">⚠ ${esc(td.userName)} — not submitted yet</span></div>`;
+        return `<div class="team-checkin-block">
+          <div class="tcb-name">${esc(td.userName)} <span class="tcb-role">${ROLES[td.role]?.label || td.role}</span></div>
+          ${td.workload ? `<div class="sum-field"><label>Workload</label><p>${esc(td.workload)}</p></div>` : ''}
+          ${td.deadlines ? `<div class="sum-field"><label>Deadlines</label><p>${esc(td.deadlines)}</p></div>` : ''}
+          ${td.issues ? `<div class="sum-field warn-field"><label>Issues / Blockers</label><p>${esc(td.issues)}</p></div>` : ''}
+          ${td.wins ? `<div class="sum-field success-field"><label>Wins</label><p>${esc(td.wins)}</p></div>` : ''}
+          ${td.supportNeeded ? `<div class="sum-field"><label>Support Needed</label><p>${esc(td.supportNeeded)}</p></div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  el.innerHTML = html || '<div class="empty-state">No data for this week yet.</div>';
+}
+
+// ═══════════════════════════════════════════
+// VIEW INDIVIDUAL SUBMISSION
+// ═══════════════════════════════════════════
+async function viewSubmission(docId) {
+  const snap = await getDoc(doc(db, 'weekly_submissions', docId));
+  if (!snap.exists()) return;
+  const data = snap.data();
+  const fields = [
+    ['workload', 'Current Workload'],
+    ['activeClients', 'Active Clients / Projects'],
+    ['deadlines', 'Deadlines'],
+    ['proposals', 'Proposals'],
+    ['staffingNeeds', 'Staffing Needs'],
+    ['issues', 'Issues / Blockers'],
+    ['wins', 'Wins'],
+    ['supportNeeded', 'Support Needed'],
+    ['branchPriorities', 'Branch Priorities'],
+    ['operationalRisks', 'Operational Risks'],
+    ['escalations', 'Escalations'],
+    ['managerNotes', 'Manager Notes'],
+    ['coachingNotes', 'Coaching Notes']
+  ];
+  const modal = document.getElementById('view-modal');
+  const body = document.getElementById('view-modal-body');
+  body.innerHTML = `
+    <div class="vm-header">
+      <div class="vm-name">${esc(data.userName)}</div>
+      <div class="vm-meta">${ROLES[data.role]?.label || data.role} · ${data.branch} · Week of ${data.weekStart}</div>
+    </div>
+    ${fields.filter(([k]) => data[k]).map(([k, label]) =>
+      `<div class="vm-field"><div class="vm-label">${label}</div><div class="vm-value">${esc(data[k])}</div></div>`
+    ).join('')}
+  `;
+  modal.style.display = 'flex';
+}
+function closeViewModal() { document.getElementById('view-modal').style.display = 'none'; }
+
+// ═══════════════════════════════════════════
+// PDF EXPORT
+// ═══════════════════════════════════════════
+async function exportMondayPDF() {
+  const ud = currentUserData;
+  const branch = ud.branch === 'ALL' ? null : ud.branch;
+  const wk = weekKey(currentWeekStart);
+  const brColor = branch === 'OC' ? '#FC4C02' : branch === 'LA' ? '#005A9C' : '#0E4C2D';
+  const brLabel = branch || 'All Branches';
+
+  let subQ = query(collection(db, 'weekly_submissions'), where('weekStart', '==', wk));
+  if (branch) subQ = query(collection(db, 'weekly_submissions'), where('weekStart', '==', wk), where('branch', '==', branch));
+  const subSnap = await getDocs(subQ);
+
+  let itemQ = query(collection(db, 'weekly_items'), where('weekStart', '==', wk));
+  if (branch) itemQ = query(collection(db, 'weekly_items'), where('weekStart', '==', wk), where('branch', '==', branch));
+  const itemSnap = await getDocs(itemQ);
+
+  let coQ = query(collection(db, 'weekly_items'), where('status', '==', 'not_completed'));
+  if (branch) coQ = query(collection(db, 'weekly_items'), where('branch', '==', branch), where('status', '==', 'not_completed'));
+  const coSnap = await getDocs(coQ);
+
+  const subs = subSnap.docs.map(d => d.data());
+  const items = itemSnap.docs.map(d => d.data());
+  const carryovers = coSnap.docs.map(d => d.data());
+  const managerSub = subs.find(s => ['branch_manager'].includes(s.role));
+  const teamSubs = subs.filter(s => !['branch_manager', 'admin'].includes(s.role) && s.status === 'submitted');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>SWL Monday Summary — ${brLabel} — ${fmtWeek(currentWeekStart)}</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:#f5f5f5;padding:32px;color:#111;font-size:13px}
+.page{max-width:800px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.08)}
+.hdr{background:#0E4C2D;padding:28px 32px;border-top:6px solid ${brColor};color:#fff;position:relative}
+.hdr h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.hdr p{font-size:13px;opacity:.75}
+.branch-tag{display:inline-block;background:${brColor};padding:4px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-bottom:10px}
+.body{padding:28px 32px}
+.section{margin-bottom:24px;padding-bottom:24px;border-bottom:1px solid #eee}
+.section:last-child{border:none}
+.sec-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #eee}
+.sec-title.warn{border-color:#F97316;color:#C2410C}
+.sec-title.mgr{border-color:#0E4C2D;color:#0E4C2D}
+.field{margin-bottom:10px}
+.field label{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:3px}
+.field p{font-size:13px;line-height:1.6;color:#222}
+.co-item{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #fde;font-size:13px}
+.co-dot{width:8px;height:8px;border-radius:50%;background:#F97316;flex-shrink:0;margin-top:5px}
+.team-block{background:#f9f9f9;border-radius:8px;padding:14px 16px;margin-bottom:10px;border-left:4px solid ${brColor}}
+.team-name{font-size:14px;font-weight:700;margin-bottom:8px}
+.team-role{font-size:11px;color:#888;font-weight:500;margin-left:8px}
+.items-table{width:100%;border-collapse:collapse;font-size:12px}
+.items-table th{text-align:left;padding:6px 10px;border-bottom:2px solid #eee;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#888}
+.items-table td{padding:6px 10px;border-bottom:1px solid #f3f3f3}
+.priority-high{color:#DC2626;font-weight:600}
+.priority-medium{color:#D97706;font-weight:600}
+.priority-low{color:#059669;font-weight:600}
+.footer{text-align:center;font-size:11px;color:#bbb;padding:16px;border-top:1px solid #eee}
+@media print{body{background:#fff;padding:0}.page{box-shadow:none;border-radius:0}}
+</style></head><body><div class="page">
+<div class="hdr">
+  <div class="branch-tag">${brLabel}</div>
+  <h1>Monday Meeting Summary</h1>
+  <p>Work Week: ${fmtWeek(currentWeekStart)} &nbsp;·&nbsp; Generated ${new Date().toLocaleString()}</p>
+</div>
+<div class="body">
+${carryovers.length ? `<div class="section">
+  <div class="sec-title warn">⚠ Carry-Over Items (${carryovers.length})</div>
+  ${carryovers.map(co => `<div class="co-item"><div class="co-dot"></div><div><strong>${esc(co.title)}</strong> — ${esc(co.ownerName)} · Was due ${fmtDate(co.deadline)}${co.fridayReview?.reason ? '<br><span style="color:#888">'+esc(co.fridayReview.reason)+'</span>' : ''}</div></div>`).join('')}
+</div>` : ''}
+${managerSub ? `<div class="section">
+  <div class="sec-title mgr">Branch Manager — ${esc(managerSub.userName)}</div>
+  ${managerSub.branchPriorities ? `<div class="field"><label>Branch Priorities</label><p>${esc(managerSub.branchPriorities)}</p></div>` : ''}
+  ${managerSub.operationalRisks ? `<div class="field"><label>Operational Risks</label><p>${esc(managerSub.operationalRisks)}</p></div>` : ''}
+  ${managerSub.escalations ? `<div class="field"><label>Escalations</label><p>${esc(managerSub.escalations)}</p></div>` : ''}
+  ${managerSub.managerNotes ? `<div class="field"><label>Notes</label><p>${esc(managerSub.managerNotes)}</p></div>` : ''}
+</div>` : ''}
+${items.length ? `<div class="section">
+  <div class="sec-title">This Week's Items</div>
+  <table class="items-table">
+    <tr><th>Item</th><th>Owner</th><th>Deadline</th><th>Priority</th><th>Status</th></tr>
+    ${items.map(it => `<tr><td>${esc(it.title)}</td><td>${esc(it.ownerName)}</td><td>${fmtDate(it.deadline)}</td><td class="priority-${it.priority}">${it.priority||'medium'}</td><td>${it.status?.replace(/_/g,' ')||'pending'}</td></tr>`).join('')}
+  </table>
+</div>` : ''}
+${teamSubs.length ? `<div class="section">
+  <div class="sec-title">Team Check-Ins</div>
+  ${teamSubs.map(td => `<div class="team-block">
+    <div class="team-name">${esc(td.userName)}<span class="team-role">${ROLES[td.role]?.label||td.role}</span></div>
+    ${td.workload ? `<div class="field"><label>Workload</label><p>${esc(td.workload)}</p></div>` : ''}
+    ${td.deadlines ? `<div class="field"><label>Deadlines</label><p>${esc(td.deadlines)}</p></div>` : ''}
+    ${td.issues ? `<div class="field"><label>Issues / Blockers</label><p>${esc(td.issues)}</p></div>` : ''}
+    ${td.wins ? `<div class="field"><label>Wins</label><p>${esc(td.wins)}</p></div>` : ''}
+    ${td.supportNeeded ? `<div class="field"><label>Support Needed</label><p>${esc(td.supportNeeded)}</p></div>` : ''}
+  </div>`).join('')}
+</div>` : ''}
+</div>
+<div class="footer">SouthWest Landscape Inc. · Confidential Internal Document · ${new Date().toLocaleDateString()}</div>
+</div>
+<script>window.onload=()=>setTimeout(()=>window.print(),500);<\/script>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+  toast('PDF ready — use browser Print to save');
+}
+
+// ═══════════════════════════════════════════
+// ADMIN PANEL
+// ═══════════════════════════════════════════
+async function showAdmin() {
+  if (currentUserData.role !== 'admin') { toast('Admin access only', 'err'); return; }
+  show('admin');
+  loadUsers();
+}
+
+async function loadUsers() {
+  const snap = await getDocs(collection(db, 'users'));
+  const el = document.getElementById('admin-user-list');
+  el.innerHTML = snap.docs.map(d => {
+    const u = d.data();
+    return `<div class="admin-user-row ${!u.active ? 'disabled' : ''}">
+      <div class="aur-info">
+        <div class="aur-name">${esc(u.name)}</div>
+        <div class="aur-meta">${esc(u.email)} · ${ROLES[u.role]?.label || u.role} · ${u.branch}</div>
+      </div>
+      <div class="aur-actions">
+        <span class="badge ${u.active ? 'success' : 'danger'}">${u.active ? 'Active' : 'Disabled'}</span>
+        <button class="btn-sm" onclick="toggleUser('${d.id}', ${u.active})">${u.active ? 'Disable' : 'Enable'}</button>
+        <button class="btn-sm" onclick="editUser('${d.id}')">Edit</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleUser(uid, active) {
+  await updateDoc(doc(db, 'users', uid), { active: !active });
+  toast(`User ${active ? 'disabled' : 'enabled'}`);
+  loadUsers();
+}
+
+async function createUser() {
+  const name = document.getElementById('nu-name').value.trim();
+  const email = document.getElementById('nu-email').value.trim();
+  const role = document.getElementById('nu-role').value;
+  const branch = document.getElementById('nu-branch').value;
+  if (!name || !email || !role || !branch) { toast('All fields required', 'err'); return; }
+  try {
+    // Note: creating Firebase Auth users from client requires Admin SDK
+    // Instruct admin to create auth user in Firebase Console, then this creates the Firestore profile
+    toast('Create the user in Firebase Console → Authentication first, then add their UID below', 'warn');
+  } catch (e) { toast('Error: ' + e.message, 'err'); }
+}
+
+function editUser(uid) {
+  toast('Open Firebase Console → Firestore → users → ' + uid + ' to edit', 'warn');
+}
+
+// ═══════════════════════════════════════════
+// SYNC LOG
+// ═══════════════════════════════════════════
+async function logSync(action, details) {
+  try {
+    await addDoc(collection(db, 'sync_log'), {
+      userId: currentUser.uid,
+      userName: currentUserData.name,
+      action, details,
+      timestamp: serverTimestamp()
+    });
+  } catch (e) { /* silent fail */ }
+}
+
+async function showSyncLog() {
+  if (currentUserData.role !== 'admin') return;
+  const snap = await getDocs(query(collection(db, 'sync_log'), orderBy('timestamp', 'desc')));
+  const el = document.getElementById('sync-log-list');
+  el.innerHTML = snap.docs.slice(0, 50).map(d => {
+    const log = d.data();
+    const ts = log.timestamp?.toDate ? log.timestamp.toDate().toLocaleString() : '—';
+    return `<div class="log-row"><span class="log-ts">${ts}</span><span class="log-user">${esc(log.userName)}</span><span class="log-action">${esc(log.action)}</span><span class="log-detail">${esc(log.details)}</span></div>`;
+  }).join('');
+}
+
+// Week navigation
+function prevWeek() {
+  currentWeekStart = new Date(currentWeekStart);
+  currentWeekStart.setDate(currentWeekStart.getDate() - 7);
+  refreshCurrentScreen();
+}
+function nextWeek() {
+  currentWeekStart = new Date(currentWeekStart);
+  currentWeekStart.setDate(currentWeekStart.getDate() + 7);
+  refreshCurrentScreen();
+}
+function refreshCurrentScreen() {
+  const screens = { dashboard: showDashboard, checkin: showCheckIn, items: showWeeklyItems, summary: showMondaySummary };
+  if (screens[activeScreen]) screens[activeScreen]();
+}
+
+// Enter key on login
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('l-pass')?.addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+});
+</script>
+
+<style>
+/* ═══════════════════════════════════════════
+   CSS VARIABLES + RESET
+═══════════════════════════════════════════ */
+:root {
+  --burg: #7A1C2E; --burg2: #5E1522; --burg3: #3D0D16;
+  --green: #0E4C2D; --green2: #0A3A22; --green3: #EFF4F1;
+  --sage: #D3DED7; --sage2: #B8CEC3;
+  --oc: #FC4C02; --oc-l: #FFF0E8;
+  --la: #005A9C; --la-l: #E8F2FB;
+  --bg: #F2F4F2; --surface: #fff; --surface2: #F8FAF8;
+  --border: #E2EAE5; --border2: #C8D8CE;
+  --text: #111; --text2: #3D4F46; --text3: #7A9088;
+  --success: #059669; --success-l: #ECFDF5;
+  --warn: #D97706; --warn-l: #FFFBEB;
+  --danger: #DC2626; --danger-l: #FEF2F2;
+  --info: #2563EB; --info-l: #EFF6FF;
+  --r: 8px; --rl: 12px; --rxl: 16px;
+  --sh: 0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
+  --shm: 0 4px 16px rgba(0,0,0,.10);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; background: var(--bg); color: var(--text); min-height: 100vh; -webkit-font-smoothing: antialiased; }
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* ── LAYOUT ── */
+.app-shell { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 240px; flex-shrink: 0; background: var(--green); min-height: 100vh;
+  display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+  z-index: 10;
+}
+.main { flex: 1; min-width: 0; }
+.page-wrap { max-width: 900px; margin: 0 auto; padding: 28px 24px 80px; }
+
+/* ── SIDEBAR ── */
+.sb-logo { padding: 20px 20px 16px; border-bottom: 1px solid rgba(255,255,255,.1); }
+.sb-logo-text { font-size: 15px; font-weight: 700; color: #fff; line-height: 1.2; }
+.sb-logo-sub { font-size: 11px; color: rgba(211,222,215,.6); margin-top: 2px; }
+.sb-user { padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,.1); }
+.sb-name { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-role { font-size: 11px; color: rgba(211,222,215,.7); }
+.sb-branch { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 10px; margin-top: 5px; letter-spacing: .04em; }
+.sb-nav { flex: 1; padding: 12px 0; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 20px;
+  font-size: 13px; font-weight: 500; color: rgba(211,222,215,.75);
+  cursor: pointer; transition: all .15s; border: none; background: none;
+  width: 100%; text-align: left; font-family: inherit;
+}
+.nav-item:hover { background: rgba(255,255,255,.08); color: #fff; }
+.nav-item.active { background: rgba(255,255,255,.14); color: #fff; }
+.nav-item svg { flex-shrink: 0; opacity: .7; }
+.nav-item.active svg { opacity: 1; }
+.nav-divider { height: 1px; background: rgba(255,255,255,.1); margin: 8px 0; }
+.sb-bottom { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,.1); }
+.week-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.week-nav-lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: rgba(211,222,215,.6); margin-bottom: 6px; }
+.week-nav button { background: rgba(255,255,255,.1); border: none; color: #fff; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.week-nav button:hover { background: rgba(255,255,255,.2); }
+.week-nav span { font-size: 11px; color: rgba(211,222,215,.8); flex: 1; text-align: center; }
+.logout-btn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(211,222,215,.6); cursor: pointer; background: none; border: none; font-family: inherit; }
+.logout-btn:hover { color: #fff; }
+
+/* ── PAGE HEADER ── */
+.page-hdr { margin-bottom: 24px; }
+.page-hdr h1 { font-size: 22px; font-weight: 700; color: var(--text); letter-spacing: -.3px; }
+.page-hdr p { font-size: 13px; color: var(--text2); margin-top: 3px; }
+.page-hdr-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+
+/* ── CARDS ── */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--rl); padding: 20px; margin-bottom: 16px; box-shadow: var(--sh); }
+.card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.card-accent-oc { border-top: 3px solid var(--oc); }
+.card-accent-la { border-top: 3px solid var(--la); }
+.card-accent-green { border-top: 3px solid var(--green); }
+.card-accent-warn { border-top: 3px solid var(--warn); }
+
+/* ── STATS ROW ── */
+.stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+.stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--rl); padding: 16px 18px; box-shadow: var(--sh); }
+.stat-num { font-size: 28px; font-weight: 700; line-height: 1; letter-spacing: -1px; color: var(--green); }
+.stat-lbl { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text3); margin-top: 5px; }
+
+/* ── BUTTONS ── */
+.btn { display: inline-flex; align-items: center; gap: 7px; padding: 9px 18px; font-size: 13px; font-weight: 600; border: 1px solid var(--border2); border-radius: var(--r); background: var(--surface); color: var(--text); cursor: pointer; transition: all .15s; font-family: inherit; }
+.btn:hover { background: var(--surface2); }
+.btn.primary { background: var(--green); color: #fff; border-color: var(--green); }
+.btn.primary:hover { background: var(--green2); }
+.btn.burg { background: var(--burg); color: #fff; border-color: var(--burg); }
+.btn.burg:hover { background: var(--burg2); }
+.btn.warn { background: var(--warn-l); color: var(--warn); border-color: #FDE68A; }
+.btn.success { background: var(--success-l); color: var(--success); border-color: #A7F3D0; }
+.btn-sm { padding: 5px 11px; font-size: 12px; font-weight: 600; border: 1px solid var(--border2); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; font-family: inherit; }
+.btn-sm:hover { background: var(--surface2); }
+.btn-sm.accent { background: var(--green); color: #fff; border-color: var(--green); }
+.btn-sm.danger { background: var(--danger-l); color: var(--danger); border-color: #FECACA; }
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+
+/* ── BADGES ── */
+.badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 12px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.badge.success { background: var(--success-l); color: var(--success); border: 1px solid #A7F3D0; }
+.badge.warn { background: var(--warn-l); color: var(--warn); border: 1px solid #FDE68A; }
+.badge.danger { background: var(--danger-l); color: var(--danger); border: 1px solid #FECACA; }
+.badge.info { background: var(--info-l); color: var(--info); border: 1px solid #BFDBFE; }
+
+/* ── FORM FIELDS ── */
+.field-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.field-group label { font-size: 11px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; }
+.field-group input, .field-group select, .field-group textarea {
+  font-size: 13px; padding: 9px 12px; border: 1px solid var(--border2);
+  border-radius: var(--r); background: var(--surface); color: var(--text);
+  font-family: inherit; width: 100%; transition: border-color .15s;
+}
+.field-group input:focus, .field-group select:focus, .field-group textarea:focus {
+  outline: none; border-color: var(--green); box-shadow: 0 0 0 3px rgba(14,76,45,.08);
+}
+.field-group textarea { resize: vertical; min-height: 80px; line-height: 1.6; }
+.field-group .hint { font-size: 11px; color: var(--text3); }
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.g3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+/* ── LOGIN SCREEN ── */
+#s-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--green); }
+.login-card {
+  background: #fff; border-radius: 20px; padding: 40px; width: 100%; max-width: 420px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.2); position: relative; overflow: hidden;
+}
+.login-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 5px; background: var(--burg); }
+.login-logo { margin-bottom: 24px; }
+.login-logo-name { font-size: 22px; font-weight: 700; color: var(--burg); line-height: 1.1; }
+.login-logo-sub { font-size: 13px; color: var(--green); font-weight: 600; margin-top: 2px; }
+.login-tagline { font-size: 12px; color: var(--text3); margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+.login-card h2 { font-size: 16px; font-weight: 700; margin-bottom: 20px; }
+#l-btn { width: 100%; justify-content: center; padding: 12px; font-size: 14px; margin-top: 8px; }
+
+/* ── DASHBOARD ── */
+.dash-greeting { font-size: 24px; font-weight: 700; letter-spacing: -.4px; color: var(--text); }
+.dash-role { font-size: 13px; color: var(--text3); margin-top: 3px; margin-bottom: 20px; }
+.carryover-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.carryover-item:last-child { border: none; }
+.co-priority { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+.co-content { flex: 1; }
+.co-title { font-size: 13px; font-weight: 600; }
+.co-meta { font-size: 12px; color: var(--text3); margin-top: 2px; }
+.team-sub-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.team-sub-row:last-child { border: none; }
+.tsub-name { font-size: 13px; font-weight: 600; flex: 1; }
+.tsub-role { font-size: 11px; color: var(--text3); }
+.tsub-status { }
+.priority-high { background: var(--danger); }
+.priority-medium { background: var(--warn); }
+.priority-low { background: var(--success); }
+
+/* ── CHECK-IN FORM ── */
+.ci-section-hdr { font-size: 13px; font-weight: 700; color: var(--green); background: var(--green3); border-radius: var(--r); padding: 10px 14px; margin-bottom: 14px; margin-top: 4px; border-left: 4px solid var(--green); }
+.ci-section-hdr.mgr { color: var(--burg); background: #FFF0F0; border-color: var(--burg); }
+
+/* ── WEEKLY ITEMS ── */
+.item-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--rl); padding: 16px; margin-bottom: 10px; box-shadow: var(--sh); }
+.item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 6px; }
+.item-title { font-size: 14px; font-weight: 600; }
+.item-meta { font-size: 12px; color: var(--text3); margin-bottom: 8px; }
+.item-desc { font-size: 12px; color: var(--text2); line-height: 1.5; margin-bottom: 8px; }
+.item-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.status-select { font-size: 12px; padding: 5px 8px; border: 1px solid var(--border2); border-radius: 6px; background: var(--surface); color: var(--text); font-family: inherit; cursor: pointer; }
+.friday-note { font-size: 12px; background: var(--warn-l); border: 1px solid #FDE68A; border-radius: 6px; padding: 8px 10px; margin-top: 8px; color: var(--warn); }
+.priority-border-high { border-left: 4px solid var(--danger); }
+.priority-border-medium { border-left: 4px solid var(--warn); }
+.priority-border-low { border-left: 4px solid var(--success); }
+.priority-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; }
+.priority-tag.high { background: var(--danger-l); color: var(--danger); }
+.priority-tag.medium { background: var(--warn-l); color: var(--warn); }
+.priority-tag.low { background: var(--success-l); color: var(--success); }
+.add-item-form { background: var(--surface2); border: 1px dashed var(--border2); border-radius: var(--rl); padding: 16px; margin-top: 16px; }
+
+/* ── SUMMARY ── */
+.sum-section { margin-bottom: 20px; }
+.sum-sec-hdr { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); padding: 8px 14px; background: var(--surface2); border-radius: 6px; margin-bottom: 12px; }
+.sum-sec-hdr.warn-hdr { background: var(--warn-l); color: var(--warn); }
+.sum-sec-hdr.mgr-hdr { background: var(--green3); color: var(--green); }
+.sum-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.sum-meta { font-size: 12px; color: var(--text3); margin-top: 2px; }
+.sum-note { font-size: 12px; color: var(--text2); font-style: italic; margin-top: 4px; }
+.sum-field { margin-bottom: 10px; }
+.sum-field label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text3); display: block; margin-bottom: 3px; }
+.sum-field p { font-size: 13px; line-height: 1.6; color: var(--text); }
+.sum-field.warn-field { background: var(--warn-l); border-radius: 6px; padding: 8px 10px; }
+.sum-field.success-field { background: var(--success-l); border-radius: 6px; padding: 8px 10px; }
+.team-checkin-block { background: var(--surface2); border-radius: var(--r); padding: 14px; margin-bottom: 10px; border-left: 3px solid var(--green); }
+.tcb-name { font-size: 14px; font-weight: 700; margin-bottom: 10px; color: var(--green); }
+.tcb-role { font-size: 11px; color: var(--text3); font-weight: 500; margin-left: 6px; }
+.items-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sum-item-card { background: var(--surface2); border-radius: var(--r); padding: 10px 12px; border-left: 4px solid var(--border); }
+.sic-title { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+.sic-meta { font-size: 11px; color: var(--text3); }
+
+/* ── ADMIN ── */
+.admin-user-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.admin-user-row.disabled { opacity: .5; }
+.admin-user-row:last-child { border: none; }
+.aur-info { flex: 1; }
+.aur-name { font-size: 13px; font-weight: 600; }
+.aur-meta { font-size: 11px; color: var(--text3); margin-top: 2px; }
+.aur-actions { display: flex; align-items: center; gap: 8px; }
+.log-row { display: grid; grid-template-columns: 160px 140px 160px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.log-ts { color: var(--text3); font-family: 'DM Mono', monospace; }
+.log-action { font-weight: 600; color: var(--green); }
+
+/* ── MODALS ── */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
+.modal-overlay.show { display: flex; }
+.modal { background: #fff; border-radius: var(--rxl); padding: 28px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shm); }
+.modal-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.modal-hdr h2 { font-size: 16px; font-weight: 700; }
+.modal-close { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--text3); }
+.vm-header { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.vm-name { font-size: 18px; font-weight: 700; }
+.vm-meta { font-size: 12px; color: var(--text3); margin-top: 4px; }
+.vm-field { margin-bottom: 12px; }
+.vm-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--text3); margin-bottom: 3px; }
+.vm-value { font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+
+/* ── EMPTY STATE ── */
+.empty-state { text-align: center; padding: 32px 20px; color: var(--text3); font-size: 13px; }
+
+/* ── TOAST ── */
+.toast { position: fixed; bottom: 24px; right: 24px; background: var(--green); color: #fff; padding: 12px 20px; border-radius: var(--rl); font-size: 13px; font-weight: 600; box-shadow: var(--shm); transform: translateY(80px); opacity: 0; transition: all .25s; z-index: 999; }
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.err { background: var(--danger); }
+.toast.warn { background: var(--warn); }
+
+/* ── FRIDAY BANNER ── */
+.day-banner { border-radius: var(--rl); padding: 14px 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; }
+.day-banner.friday { background: var(--warn-l); border: 1px solid #FDE68A; }
+.day-banner.monday { background: var(--success-l); border: 1px solid #A7F3D0; }
+.day-banner-icon { font-size: 22px; }
+.day-banner-text h3 { font-size: 13px; font-weight: 700; }
+.day-banner-text p { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+/* ── CO DOT ── */
+.co-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex-shrink: 0; margin-top: 5px; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .stats-row { grid-template-columns: 1fr 1fr; }
+  .g2, .g3 { grid-template-columns: 1fr; }
+  .items-grid { grid-template-columns: 1fr; }
+  .page-wrap { padding: 16px 12px 60px; }
+}
+</style>
+
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════
+     LOGIN SCREEN
+═══════════════════════════════════════════ -->
+<div id="s-login" class="screen active">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-name">SouthWest Landscape</div>
+      <div class="login-logo-sub">Operations Portal</div>
+    </div>
+    <div class="login-tagline">Weekly planning · Accountability · Branch management</div>
+    <h2>Sign in to your account</h2>
+    <div class="field-group">
+      <label>Work Email</label>
+      <input type="email" id="l-email" placeholder="you@southwestlandscapeinc.com" autocomplete="email">
+    </div>
+    <div class="field-group">
+      <label>Password</label>
+      <input type="password" id="l-pass" placeholder="Your password" autocomplete="current-password">
+    </div>
+    <button class="btn primary" id="l-btn" onclick="login()">Sign In</button>
+    <p style="font-size:11px;color:var(--text3);margin-top:16px;text-align:center">Having trouble? Contact your Admin for access.</p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     APP SHELL (shown when logged in)
+═══════════════════════════════════════════ -->
+<div id="s-app" class="screen">
+<div class="app-shell">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sb-logo">
+    <div class="sb-logo-text">SouthWest<br>Landscape</div>
+    <div class="sb-logo-sub">Operations Portal</div>
+  </div>
+  <div class="sb-user">
+    <div class="sb-name" id="nav-name">—</div>
+    <div class="sb-role" id="nav-role">—</div>
+    <div class="sb-branch" id="nav-branch">—</div>
+  </div>
+  <nav class="sb-nav">
+    <button class="nav-item active" onclick="showDashboard()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </button>
+    <button class="nav-item" onclick="showCheckIn()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      Weekly Check-In
+    </button>
+    <button class="nav-item" onclick="showWeeklyItems()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      Weekly Items
+    </button>
+    <button class="nav-item" onclick="showMondaySummary()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Monday Summary
+    </button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" id="nav-admin" onclick="showAdmin()" style="display:none">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M12 14c-6 0-8 3-8 4v1h16v-1c0-1-2-4-8-4z"/><path d="M18 2l2 2-8 8-2-2z"/></svg>
+      Admin Panel
+    </button>
+  </nav>
+  <div class="sb-bottom">
+    <div class="week-nav-lbl">Work Week</div>
+    <div class="week-nav">
+      <button onclick="prevWeek()">‹</button>
+      <span id="sb-week-lbl">—</span>
+      <button onclick="nextWeek()">›</button>
+    </div>
+    <button class="logout-btn" onclick="logout()">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Sign Out
+    </button>
+  </div>
+</aside>
+
+<!-- MAIN CONTENT -->
+<main class="main">
+
+<!-- DASHBOARD -->
+<div id="s-dashboard" class="screen active">
+<div class="page-wrap">
+  <div id="dash-friday-banner" class="day-banner friday" style="display:none">
+    <div class="day-banner-icon">📋</div>
+    <div class="day-banner-text"><h3>It's Friday — Time for your accountability review</h3><p>Update each weekly item with its completion status.</p></div>
+    <button class="btn warn" onclick="showWeeklyItems()">Go to Items →</button>
+  </div>
+  <div id="dash-monday-banner" class="day-banner monday" style="display:none">
+    <div class="day-banner-icon">🌅</div>
+    <div class="day-banner-text"><h3>Monday — New week, check carry-over items below</h3><p>Submit your weekly check-in to start the week.</p></div>
+    <button class="btn success" onclick="showCheckIn()">Submit Check-In →</button>
+  </div>
+  <div class="page-hdr">
+    <div id="dash-name" class="dash-greeting">Good morning</div>
+    <div id="dash-role" class="dash-role">—</div>
+    <div id="dash-sub-status"></div>
+  </div>
+  <div class="stats-row">
+    <div class="stat-card card-accent-warn"><div class="stat-num" id="dash-carryover">0</div><div class="stat-lbl">Carry-Over Items</div></div>
+    <div class="stat-card card-accent-green"><div class="stat-num" id="dash-team-submitted" style="font-size:16px;padding-top:6px">—</div><div class="stat-lbl">Team Submitted</div></div>
+    <div class="stat-card"><div class="stat-num" style="color:var(--burg)" id="dash-week-num">—</div><div class="stat-lbl">Current Week</div></div>
+  </div>
+  <div class="card card-accent-warn">
+    <div class="card-title">⚠ Carry-Over from Last Week</div>
+    <div id="dash-carryover-list"><div class="empty-state">Loading…</div></div>
+  </div>
+  <div class="card" id="dash-team-section" style="display:none">
+    <div class="card-title">👥 Team Check-In Status This Week</div>
+    <div id="dash-team-list"><div class="empty-state">Loading…</div></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn primary" onclick="showCheckIn()">Submit My Check-In</button>
+    <button class="btn" onclick="showWeeklyItems()">View Weekly Items</button>
+    <button class="btn" onclick="showMondaySummary()">Monday Summary</button>
+    <button class="btn burg" onclick="exportMondayPDF()">Export PDF</button>
+  </div>
+</div>
+</div>
+
+<!-- WEEKLY CHECK-IN -->
+<div id="s-checkin" class="screen">
+<div class="page-wrap">
+  <div class="page-hdr">
+    <div class="page-hdr-row">
+      <div><h1>Weekly Check-In</h1><p id="ci-name">—</p><p style="font-size:12px;color:var(--text3);margin-top:2px">Work Week: <span id="ci-week">—</span></p></div>
+      <button class="btn" onclick="showDashboard()">← Dashboard</button>
+    </div>
+  </div>
+  <input type="hidden" id="ci-doc-id">
+
+  <div class="card">
+    <div class="card-title">My Weekly Report</div>
+    <div class="ci-section-hdr">📊 This Week's Overview</div>
+    <div class="field-group"><label>Current Workload</label><textarea id="ci-workload" placeholder="Describe your current workload and capacity…" rows="3"></textarea></div>
+    <div class="field-group"><label>Active Clients / Projects</label><textarea id="ci-activeClients" placeholder="Which clients or projects are you actively working on?…" rows="3"></textarea></div>
+    <div class="field-group"><label>Upcoming Deadlines</label><textarea id="ci-deadlines" placeholder="List any deadlines this week…" rows="2"></textarea></div>
+    <div class="ci-section-hdr">💼 Business Development</div>
+    <div class="field-group"><label>Proposals</label><textarea id="ci-proposals" placeholder="Any proposals in progress or submitted?…" rows="2"></textarea></div>
+    <div class="ci-section-hdr">⚠ Issues & Support</div>
+    <div class="field-group"><label>Staffing Needs</label><textarea id="ci-staffingNeeds" placeholder="Any staffing concerns or requests?…" rows="2"></textarea></div>
+    <div class="field-group"><label>Issues / Blockers</label><textarea id="ci-issues" placeholder="What's slowing you down or needs to be resolved?…" rows="3"></textarea></div>
+    <div class="ci-section-hdr" style="background:var(--success-l);color:var(--success);border-color:var(--success)">🏆 Wins & Needs</div>
+    <div class="field-group"><label>Wins This Week</label><textarea id="ci-wins" placeholder="Any wins or positive highlights?…" rows="2"></textarea></div>
+    <div class="field-group"><label>Support Needed from Management</label><textarea id="ci-supportNeeded" placeholder="What do you need help with from leadership?…" rows="2"></textarea></div>
+  </div>
+
+  <!-- Manager Section -->
+  <div id="ci-manager-section" class="card" style="display:none;border-top:3px solid var(--burg)">
+    <div class="card-title">🗂 Branch Manager — Planning Section</div>
+    <div class="ci-section-hdr mgr">How are you planning your week?</div>
+    <div class="field-group"><label>Branch Priorities This Week</label><textarea id="ci-branchPriorities" placeholder="What are the top priorities for the branch this week?…" rows="3"></textarea></div>
+    <div class="field-group"><label>Operational Risks</label><textarea id="ci-operationalRisks" placeholder="Any risks that could impact operations?…" rows="2"></textarea></div>
+    <div class="field-group"><label>Escalations</label><textarea id="ci-escalations" placeholder="What needs to be escalated to VP or Admin?…" rows="2"></textarea></div>
+    <div class="field-group"><label>Coaching Notes</label><textarea id="ci-coachingNotes" placeholder="Notes on team coaching or development…" rows="2"></textarea></div>
+    <div class="field-group"><label>Manager Notes</label><textarea id="ci-managerNotes" placeholder="Additional notes for the record…" rows="2"></textarea></div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn primary" id="ci-submit-btn" onclick="saveCheckIn('submitted')">Submit Weekly Check-In</button>
+    <button class="btn" onclick="saveCheckIn('draft')">Save as Draft</button>
+    <button class="btn" onclick="showDashboard()">Cancel</button>
+  </div>
+</div>
+</div>
+
+<!-- WEEKLY ITEMS -->
+<div id="s-items" class="screen">
+<div class="page-wrap">
+  <div class="page-hdr">
+    <div class="page-hdr-row">
+      <div><h1>Weekly Items</h1><p>Work Week: <span id="items-week">—</span></p></div>
+      <button class="btn" onclick="showDashboard()">← Dashboard</button>
+    </div>
+  </div>
+  <div id="items-list"><div class="empty-state">Loading…</div></div>
+  <div class="add-item-form card">
+    <div class="card-title">+ Add New Item</div>
+    <div class="field-group"><label>Item Title *</label><input type="text" id="new-item-title" placeholder="What needs to get done?"></div>
+    <div class="g3">
+      <div class="field-group"><label>Deadline *</label><input type="date" id="new-item-deadline"></div>
+      <div class="field-group"><label>Priority</label>
+        <select id="new-item-priority">
+          <option value="high">High</option>
+          <option value="medium" selected>Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+    </div>
+    <div class="field-group"><label>Description</label><textarea id="new-item-desc" placeholder="Optional details…" rows="2"></textarea></div>
+    <button class="btn primary" onclick="addItem()">Add Item</button>
+  </div>
+</div>
+</div>
+
+<!-- MONDAY SUMMARY -->
+<div id="s-summary" class="screen">
+<div class="page-wrap">
+  <div class="page-hdr">
+    <div class="page-hdr-row">
+      <div><h1>Monday Meeting Summary</h1><p>Work Week: <span id="sum-week">—</span></p></div>
+      <div class="btn-row" style="margin-top:0">
+        <button class="btn" onclick="showDashboard()">← Back</button>
+        <button class="btn burg" onclick="exportMondayPDF()">Export PDF</button>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div id="sum-body"><div class="empty-state">Loading…</div></div>
+  </div>
+</div>
+</div>
+
+<!-- ADMIN PANEL -->
+<div id="s-admin" class="screen">
+<div class="page-wrap">
+  <div class="page-hdr"><h1>Admin Panel</h1><p>User management · System settings · Sync logs</p></div>
+
+  <div class="card">
+    <div class="card-title">Users</div>
+    <div id="admin-user-list"><div class="empty-state">Loading…</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Add New User</div>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px;background:var(--warn-l);border-radius:6px;padding:10px;border:1px solid #FDE68A">
+      <strong>Note:</strong> First create the user in Firebase Console → Authentication → Add User. Then fill this form to create their profile with the correct role and branch access.
+    </p>
+    <div class="g2">
+      <div class="field-group"><label>Full Name</label><input type="text" id="nu-name" placeholder="Full name"></div>
+      <div class="field-group"><label>Email</label><input type="email" id="nu-email" placeholder="email@southwestlandscapeinc.com"></div>
+    </div>
+    <div class="g2">
+      <div class="field-group"><label>Role</label>
+        <select id="nu-role">
+          <option value="">Select role…</option>
+          <option value="branch_manager">Branch Manager</option>
+          <option value="ops_manager">Operations Manager</option>
+          <option value="ops_specialist">Operations Specialist</option>
+          <option value="client_rep">Client Representative</option>
+          <option value="irrigation_supervisor">Irrigation Supervisor</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      <div class="field-group"><label>Branch</label>
+        <select id="nu-branch">
+          <option value="">Select branch…</option>
+          <option value="OC">OC — Orange County</option>
+          <option value="LA">LA — Los Angeles</option>
+          <option value="ALL">ALL — Admin Access</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn primary" onclick="createUser()">Create User Profile</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Sync Log (Last 50 Events)</div>
+    <button class="btn" onclick="showSyncLog()" style="margin-bottom:14px">Load Log</button>
+    <div id="sync-log-list"></div>
+  </div>
+</div>
+</div>
+
+</main>
+</div>
+</div>
+
+<!-- FRIDAY REVIEW MODAL -->
+<div class="modal-overlay" id="friday-modal">
+  <div class="modal">
+    <div class="modal-hdr">
+      <h2>Friday Review</h2>
+      <button class="modal-close" onclick="closeFridayModal()">✕</button>
+    </div>
+    <input type="hidden" id="fr-item-id">
+    <div class="field-group">
+      <label>Completion Status</label>
+      <select id="fr-status">
+        <option value="completed_on_time">✓ Completed On Time</option>
+        <option value="completed_late">⚠ Completed Late</option>
+        <option value="not_completed">✗ Not Completed — Carry Forward</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label>Reason / Notes</label>
+      <textarea id="fr-reason" placeholder="What happened? Why?" rows="3"></textarea>
+    </div>
+    <div class="field-group">
+      <label>New Deadline (if not completed)</label>
+      <input type="date" id="fr-new-deadline">
+    </div>
+    <div class="field-group">
+      <label>Manager Notes</label>
+      <textarea id="fr-manager-notes" placeholder="Manager's notes on this item…" rows="2"></textarea>
+    </div>
+    <div class="field-group">
+      <label>How Can I Assist?</label>
+      <textarea id="fr-how-assist" placeholder="What support is needed to resolve this?…" rows="2"></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn primary" onclick="saveFridayReview()">Save Review</button>
+      <button class="btn" onclick="closeFridayModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- VIEW SUBMISSION MODAL -->
+<div class="modal-overlay" id="view-modal">
+  <div class="modal">
+    <div class="modal-hdr">
+      <h2>Submission Details</h2>
+      <button class="modal-close" onclick="closeViewModal()">✕</button>
+    </div>
+    <div id="view-modal-body"></div>
+    <div class="btn-row" style="margin-top:16px">
+      <button class="btn" onclick="closeViewModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// Update sidebar week label
+function updateSidebarWeek() {
+  const el = document.getElementById('sb-week-lbl');
+  if (el) {
+    const sat = getSaturday(currentWeekStart);
+    const opts = { month: 'short', day: 'numeric' };
+    el.textContent = currentWeekStart.toLocaleDateString('en-US', opts) + ' – ' + sat.toLocaleDateString('en-US', opts);
+  }
+  const wn = document.getElementById('dash-week-num');
+  if (wn) {
+    const start = new Date(currentWeekStart.getFullYear(), 0, 1);
+    const week = Math.ceil((((currentWeekStart - start) / 86400000) + start.getDay() + 1) / 7);
+    wn.textContent = `W${week}`;
+  }
+}
+setInterval(updateSidebarWeek, 1000);
+updateSidebarWeek();
+
+// Switch app screen visibility
+const origShow = show;
+window.show = function(id) {
+  const appScreens = ['dashboard','checkin','items','summary','admin'];
+  if (appScreens.includes(id)) {
+    if (currentUser) {
+      document.getElementById('s-login').classList.remove('active');
+      document.getElementById('s-app').classList.add('active');
+      document.querySelectorAll('#s-app .screen').forEach(s => s.classList.remove('active'));
+      const target = document.getElementById('s-' + id);
+      if (target) target.classList.add('active');
+      // update nav
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      activeScreen = id;
+      updateSidebarWeek();
+      window.scrollTo(0, 0);
+    }
+  } else if (id === 'login') {
+    document.getElementById('s-app').classList.remove('active');
+    document.getElementById('s-login').classList.add('active');
+  }
+};
+</script>
+
+</body>
+</html>
