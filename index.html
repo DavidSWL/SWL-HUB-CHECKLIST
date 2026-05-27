@@ -155,27 +155,37 @@ function canViewBranch(branch) {
 // ═══════════════════════════════════════════
 // AUTH
 // ═══════════════════════════════════════════
-onAuthStateChanged(auth, async (user) => {
-  if (user) {
+// Auth state observer — handles page refresh/session restore
+auth.onAuthStateChanged(async (user) => {
+  if (user && !currentUserData) {
+    // Only run if we don't already have user data (avoid double-init on login)
     currentUser = user;
-    const snap = await getDoc(doc(db, 'users', user.uid));
-    if (snap.exists()) {
-      currentUserData = snap.data();
-      if (!currentUserData.active) {
-        await signOut(auth);
-        toast('Your account has been disabled. Contact admin.', 'err');
-        return;
+    try {
+      const snap = await db.collection('users').doc(user.uid).get();
+      if (snap.exists) {
+        currentUserData = snap.data();
+        if (!currentUserData.active) {
+          await auth.signOut();
+          document.getElementById('l-error').textContent = 'Your account has been disabled.';
+          return;
+        }
+        initApp();
+      } else {
+        await auth.signOut();
+        document.getElementById('l-error').textContent = 'User profile not found. Contact admin.';
       }
-      initApp();
-    } else {
-      toast('User profile not found. Contact admin.', 'err');
-      await signOut(auth);
+    } catch(e) {
+      console.error('Auth state error:', e);
+      document.getElementById('l-error').textContent = 'Connection error: ' + e.message;
     }
-  } else {
+  } else if (!user) {
     currentUser = null;
     currentUserData = null;
     unsubListeners.forEach(u => u());
     unsubListeners = [];
+    // Reset login button
+    const btn = document.getElementById('l-btn');
+    if (btn) { btn.textContent = 'Sign In'; btn.disabled = false; }
     show('login');
   }
 });
@@ -184,13 +194,47 @@ async function login() {
   const email = document.getElementById('l-email').value.trim();
   const pass = document.getElementById('l-pass').value;
   const btn = document.getElementById('l-btn');
-  if (!email || !pass) { toast('Enter email and password', 'err'); return; }
+  const errEl = document.getElementById('l-error');
+  if (!email || !pass) { errEl.textContent = 'Enter email and password'; return; }
   btn.textContent = 'Signing in…';
   btn.disabled = true;
+  errEl.textContent = '';
   try {
-    await signInWithEmailAndPassword(auth, email, pass);
+    console.log('Attempting login for:', email);
+    const result = await auth.signInWithEmailAndPassword(email, pass);
+    console.log('Auth success:', result.user.uid);
+    // Manually trigger the auth state check
+    const snap = await db.collection('users').doc(result.user.uid).get();
+    console.log('User doc exists:', snap.exists, 'Data:', snap.data());
+    if (!snap.exists) {
+      errEl.textContent = 'User profile not found in database. Contact admin.';
+      btn.textContent = 'Sign In';
+      btn.disabled = false;
+      await auth.signOut();
+      return;
+    }
+    currentUser = result.user;
+    currentUserData = snap.data();
+    if (!currentUserData.active) {
+      errEl.textContent = 'Your account is disabled. Contact admin.';
+      btn.textContent = 'Sign In';
+      btn.disabled = false;
+      await auth.signOut();
+      return;
+    }
+    console.log('User data loaded:', currentUserData);
+    initApp();
   } catch (e) {
-    toast('Invalid email or password', 'err');
+    console.error('Login error:', e.code, e.message);
+    const msgs = {
+      'auth/user-not-found': 'No account found with that email.',
+      'auth/wrong-password': 'Incorrect password.',
+      'auth/invalid-email': 'Invalid email format.',
+      'auth/invalid-credential': 'Invalid email or password.',
+      'auth/too-many-requests': 'Too many attempts. Try again in a few minutes.',
+      'auth/network-request-failed': 'Network error — check your internet connection.',
+    };
+    errEl.textContent = msgs[e.code] || ('Error: ' + e.message);
     btn.textContent = 'Sign In';
     btn.disabled = false;
   }
@@ -205,6 +249,11 @@ async function logout() {
 // APP INIT
 // ═══════════════════════════════════════════
 function initApp() {
+  // First make sure app shell is visible
+  const loginEl = document.getElementById('s-login');
+  const appEl = document.getElementById('s-app');
+  if (loginEl) loginEl.classList.remove('active');
+  if (appEl) appEl.classList.add('active');
   renderNav();
   showDashboard();
 }
@@ -212,10 +261,12 @@ function initApp() {
 function renderNav() {
   const ud = currentUserData;
   const branchColor = ud.branch === 'OC' ? 'var(--oc)' : ud.branch === 'LA' ? 'var(--la)' : 'var(--burg)';
-  document.getElementById('nav-name').textContent = ud.name;
-  document.getElementById('nav-role').textContent = ROLES[ud.role]?.label || ud.role;
-  document.getElementById('nav-branch').textContent = ud.branch;
-  document.getElementById('nav-branch').style.background = branchColor;
+  const nn = document.getElementById('nav-name');
+  const nr = document.getElementById('nav-role');
+  const nb = document.getElementById('nav-branch');
+  if (nn) nn.textContent = ud.name;
+  if (nr) nr.textContent = ROLES[ud.role]?.label || ud.role;
+  if (nb) { nb.textContent = ud.branch; nb.style.background = branchColor; }
   const adminLink = document.getElementById('nav-admin');
   if (adminLink) adminLink.style.display = ud.role === 'admin' ? '' : 'none';
 }
@@ -229,9 +280,12 @@ async function showDashboard() {
   const branch = ud.branch === 'ALL' ? null : ud.branch;
   const wk = weekKey(currentWeekStart);
 
-  document.getElementById('dash-week').textContent = fmtWeek(currentWeekStart);
-  document.getElementById('dash-name').textContent = `Good ${getGreeting()}, ${ud.name.split(' ')[0]}`;
-  document.getElementById('dash-role').textContent = ROLES[ud.role]?.label + (branch ? ` · ${branch}` : ' · All Branches');
+  const dashWeek = document.getElementById('dash-week');
+  const dashName = document.getElementById('dash-name');
+  const dashRole = document.getElementById('dash-role');
+  if (dashWeek) dashWeek.textContent = fmtWeek(currentWeekStart);
+  if (dashName) dashName.textContent = `Good ${getGreeting()}, ${ud.name.split(' ')[0]}`;
+  if (dashRole) dashRole.textContent = (ROLES[ud.role]?.label || ud.role) + (branch ? ` · ${branch}` : ' · All Branches');
 
   // Load carry-over count
   let coQuery = query(collection(db, 'weekly_items'),
@@ -254,7 +308,7 @@ async function showDashboard() {
   const subSnap = await getDocs(subQuery);
   const submitted = !subSnap.empty && subSnap.docs[0].data().status === 'submitted';
   const subStatus = document.getElementById('dash-sub-status');
-  subStatus.innerHTML = submitted
+  if (subStatus) subStatus.innerHTML = submitted
     ? `<span class="badge success">✓ Submitted this week</span>`
     : `<span class="badge warn">⚠ Weekly check-in pending</span>`;
 
@@ -1148,6 +1202,7 @@ body { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; backgroun
       <input type="password" id="l-pass" placeholder="Your password" autocomplete="current-password">
     </div>
     <button class="btn primary" id="l-btn" onclick="login()">Sign In</button>
+    <div id="l-error" style="margin-top:12px;padding:10px 14px;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;color:#DC2626;font-size:13px;font-weight:500;min-height:0"></div>
     <p style="font-size:11px;color:var(--text3);margin-top:16px;text-align:center">Having trouble? Contact your Admin for access.</p>
   </div>
 </div>
@@ -1473,27 +1528,28 @@ setInterval(updateSidebarWeek, 1000);
 updateSidebarWeek();
 
 // Switch app screen visibility
-const origShow = show;
-window.show = function(id) {
+function show(id) {
   const appScreens = ['dashboard','checkin','items','summary','admin'];
   if (appScreens.includes(id)) {
-    if (currentUser) {
-      document.getElementById('s-login').classList.remove('active');
-      document.getElementById('s-app').classList.add('active');
-      document.querySelectorAll('#s-app .screen').forEach(s => s.classList.remove('active'));
-      const target = document.getElementById('s-' + id);
-      if (target) target.classList.add('active');
-      // update nav
-      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-      activeScreen = id;
-      updateSidebarWeek();
-      window.scrollTo(0, 0);
-    }
+    // Show app shell, hide login
+    const loginEl = document.getElementById('s-login');
+    const appEl = document.getElementById('s-app');
+    if (loginEl) loginEl.classList.remove('active');
+    if (appEl) appEl.classList.add('active');
+    // Hide all inner screens, show target
+    document.querySelectorAll('#s-app .screen').forEach(s => s.classList.remove('active'));
+    const target = document.getElementById('s-' + id);
+    if (target) target.classList.add('active');
+    activeScreen = id;
+    updateSidebarWeek();
+    window.scrollTo(0, 0);
   } else if (id === 'login') {
-    document.getElementById('s-app').classList.remove('active');
-    document.getElementById('s-login').classList.add('active');
+    const loginEl = document.getElementById('s-login');
+    const appEl = document.getElementById('s-app');
+    if (appEl) appEl.classList.remove('active');
+    if (loginEl) loginEl.classList.add('active');
   }
-};
+}
 </script>
 
 </body>
