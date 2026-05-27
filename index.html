@@ -608,8 +608,16 @@ function buildSidebar() {
   if (['client_rep','admin'].includes(role)) {
     const isBranchOC = branch==='OC' || branch==='ALL';
     const isBranchLA = branch==='LA' || branch==='ALL';
-    if (isBranchOC) html += navBtn('checkin-cr-oc','Client Rep (OC)','🤝','oc');
-    if (isBranchLA) html += navBtn('checkin-cr-la','Client Rep (LA)','🤝','la');
+    // If user has a specific formType, show only that form
+    if (CD?.formType && CD.formType.startsWith('cr-')) {
+      const ft = CD.formType;
+      const brLabel = ft==='cr-oc'?'OC':'LA';
+      const accent = ft==='cr-oc'?'oc':'la';
+      html += navBtn('checkin-'+ft, `Client Rep (${brLabel})`, '🤝', accent);
+    } else {
+      if (isBranchOC) html += navBtn('checkin-cr-oc','Client Rep (OC)','🤝','oc');
+      if (isBranchLA) html += navBtn('checkin-cr-la','Client Rep (LA)','🤝','la');
+    }
   }
 
   // Weekly items
@@ -802,6 +810,8 @@ async function renderDashboard() {
 }
 
 function getFirstCheckinRole() {
+  // If user has a specific formType assigned (e.g. extra client rep), use that
+  if (CD?.formType) return CD.formType;
   const r = CD?.role;
   if (r==='branch_manager') return 'bm';
   if (r==='ops_manager') return 'om';
@@ -1478,27 +1488,58 @@ async function renderAdmin() {
         </div>`;
       }).join('')}
     </div>
-    <div class="card">
-      <div class="card-header"><div class="card-title">Add / Update User Profile</div></div>
-      <p style="font-size:12px;color:var(--text2);margin-bottom:14px;background:var(--warn-l);padding:10px;border-radius:var(--r);border:1px solid #FDE68A">
-        First create the user in <strong>Firebase Console → Authentication → Add user</strong>, then fill this form with their Firebase UID to create their Firestore profile.
-      </p>
-      <div class="g2" style="margin-bottom:12px">
-        <div class="fg"><label>Firebase UID</label><input type="text" id="nu-uid" placeholder="From Firebase Auth"></div>
-        <div class="fg"><label>Full Name</label><input type="text" id="nu-name" placeholder="Full name"></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><div class="card-title">Add New Team Member</div></div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:16px;background:var(--info-l);padding:10px 12px;border-radius:var(--r);border:1px solid #BFDBFE;line-height:1.6">
+        <strong>Step 1:</strong> Go to <strong>Firebase Console → Authentication → Add user</strong> and create their account with their work email and a temporary password.<br>
+        <strong>Step 2:</strong> Copy their <strong>User UID</strong> from Firebase Auth and paste it below.<br>
+        <strong>Step 3:</strong> Fill in the rest and click Create Profile.
       </div>
       <div class="g2" style="margin-bottom:12px">
-        <div class="fg"><label>Email</label><input type="email" id="nu-email" placeholder="work email"></div>
-        <div class="fg"><label>Role</label>
+        <div class="fg"><label>Firebase UID <span class="req">*</span><span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">(from Firebase Auth)</span></label>
+          <input type="text" id="nu-uid" placeholder="e.g. 5h2YTmuRRMcqmgxd…"></div>
+        <div class="fg"><label>Full Name <span class="req">*</span></label>
+          <input type="text" id="nu-name" placeholder="First and last name"></div>
+      </div>
+      <div class="g2" style="margin-bottom:12px">
+        <div class="fg"><label>Work Email <span class="req">*</span></label>
+          <input type="email" id="nu-email" placeholder="name@southwestlandscapeinc.com"></div>
+        <div class="fg"><label>Role <span class="req">*</span></label>
           <select id="nu-role">
             ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}
+            <option value="client_rep_2">Client Representative 2</option>
           </select>
         </div>
       </div>
-      <div class="fg" style="max-width:200px"><label>Branch</label>
-        <select id="nu-branch"><option value="OC">OC</option><option value="LA">LA</option><option value="ALL">ALL</option></select>
+      <div class="g2" style="margin-bottom:16px">
+        <div class="fg"><label>Branch <span class="req">*</span></label>
+          <select id="nu-branch">
+            <option value="OC">OC — Orange County</option>
+            <option value="LA">LA — Los Angeles</option>
+            <option value="ALL">ALL — Admin Access</option>
+          </select>
+        </div>
+        <div class="fg"><label>Form access <span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none">(which check-in form they see)</span></label>
+          <select id="nu-formtype">
+            <option value="">Auto (based on role)</option>
+            <option value="bm">Branch Manager Check-In</option>
+            <option value="om">Operations Manager (OC)</option>
+            <option value="os">Operations Specialist (LA)</option>
+            <option value="sv">Supervisor (LA)</option>
+            <option value="cr-oc">Client Rep (OC)</option>
+            <option value="cr-la">Client Rep (LA)</option>
+          </select>
+        </div>
       </div>
-      <button class="btn primary" onclick="createUserProfile()">Create / Update User Profile</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn primary" onclick="createUserProfile()">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          Create User Profile
+        </button>
+        <span style="font-size:12px;color:var(--text3)">or</span>
+        <button class="btn" onclick="updateUserProfile()">Update Existing Profile</button>
+      </div>
+      <div id="nu-result" style="margin-top:12px;display:none"></div>
     </div>`;
 }
 
@@ -1508,14 +1549,97 @@ async function toggleUser(uid, active) {
 }
 
 async function createUserProfile() {
-  const uid = document.getElementById('nu-uid').value.trim();
-  const name = document.getElementById('nu-name').value.trim();
-  const email = document.getElementById('nu-email').value.trim();
-  const role = document.getElementById('nu-role').value;
+  const uid      = document.getElementById('nu-uid').value.trim();
+  const name     = document.getElementById('nu-name').value.trim();
+  const email    = document.getElementById('nu-email').value.trim();
+  const role     = document.getElementById('nu-role').value;
+  const branch   = document.getElementById('nu-branch').value;
+  const formType = document.getElementById('nu-formtype').value;
+  const result   = document.getElementById('nu-result');
+
+  if (!uid)    { toast('Firebase UID is required','err'); return; }
+  if (!name)   { toast('Full name is required','err'); return; }
+  if (!email)  { toast('Email is required','err'); return; }
+  if (!role)   { toast('Role is required','err'); return; }
+  if (!branch) { toast('Branch is required','err'); return; }
+
+  // Determine the correct formType if not manually set
+  const autoFormType = formType || (
+    role === 'branch_manager'        ? 'bm'    :
+    role === 'ops_manager'           ? 'om'    :
+    role === 'ops_specialist'        ? 'os'    :
+    role === 'irrigation_supervisor' ? 'sv'    :
+    role === 'client_rep' || role === 'client_rep_2' ? (branch==='LA'?'cr-la':'cr-oc') : 'cr-oc'
+  );
+
+  const actualRole = role === 'client_rep_2' ? 'client_rep' : role;
+
+  try {
+    await db.collection('users').doc(uid).set({
+      name, email,
+      role: actualRole,
+      branch,
+      formType: autoFormType,
+      active: true,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Show success inline
+    if (result) {
+      result.style.display = 'block';
+      result.innerHTML = `<div style="background:var(--success-l);border:1px solid #A7F3D0;border-radius:var(--r);padding:10px 14px;font-size:13px;color:var(--success)">
+        <strong>✓ Profile created for ${esc(name)}</strong><br>
+        <span style="font-size:11px;color:var(--text2)">Role: ${ROLES[actualRole]?.label||actualRole} · Branch: ${branch} · Form: ${autoFormType}</span><br>
+        <span style="font-size:11px;color:var(--text3)">They can now log in with their Firebase Auth email and password.</span>
+      </div>`;
+    }
+
+    toast('✓ User profile created for ' + name);
+
+    // Clear form
+    ['nu-uid','nu-name','nu-email'].forEach(id => document.getElementById(id).value = '');
+
+    // Refresh user list
+    setTimeout(() => renderAdmin(), 800);
+
+  } catch(e) {
+    toast('Error: ' + e.message, 'err');
+    if (result) {
+      result.style.display = 'block';
+      result.innerHTML = `<div style="background:var(--danger-l);border:1px solid #FECACA;border-radius:var(--r);padding:10px 14px;font-size:13px;color:var(--danger)">Error: ${esc(e.message)}</div>`;
+    }
+  }
+}
+
+async function updateUserProfile() {
+  const uid    = document.getElementById('nu-uid').value.trim();
+  const name   = document.getElementById('nu-name').value.trim();
+  const email  = document.getElementById('nu-email').value.trim();
+  const role   = document.getElementById('nu-role').value;
   const branch = document.getElementById('nu-branch').value;
-  if (!uid||!name||!email) { toast('UID, name and email required','err'); return; }
-  await db.collection('users').doc(uid).set({ name, email, role, branch, active:true, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-  toast('✓ User profile created/updated'); renderAdmin();
+  const formType = document.getElementById('nu-formtype').value;
+  const result = document.getElementById('nu-result');
+
+  if (!uid) { toast('Firebase UID is required to update','err'); return; }
+
+  const updates = {};
+  if (name)   updates.name   = name;
+  if (email)  updates.email  = email;
+  if (role)   updates.role   = role === 'client_rep_2' ? 'client_rep' : role;
+  if (branch) updates.branch = branch;
+  if (formType) updates.formType = formType;
+
+  try {
+    await db.collection('users').doc(uid).update(updates);
+    toast('✓ Profile updated');
+    if (result) {
+      result.style.display = 'block';
+      result.innerHTML = `<div style="background:var(--success-l);border:1px solid #A7F3D0;border-radius:var(--r);padding:10px 14px;font-size:13px;color:var(--success)">✓ Profile updated successfully.</div>`;
+    }
+    setTimeout(() => renderAdmin(), 800);
+  } catch(e) {
+    toast('Error: ' + e.message, 'err');
+  }
 }
 
 // ══════════════════════════════════════════════════
