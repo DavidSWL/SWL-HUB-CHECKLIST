@@ -578,6 +578,17 @@ function buildSidebar() {
   document.getElementById('sb-role').textContent = ROLES[role]?.label || role;
   const btag = document.getElementById('sb-branch-tag');
   btag.textContent = branch; btag.className = 'sb-branch-tag ' + (branch==='ALL'?'all':branch.toLowerCase());
+  // Show photo if available
+  const sbUser = document.querySelector('.sb-user');
+  const existingPhoto = sbUser.querySelector('.sb-photo');
+  if (existingPhoto) existingPhoto.remove();
+  if (CD.photoURL) {
+    const img = document.createElement('img');
+    img.className = 'sb-photo';
+    img.src = CD.photoURL;
+    img.style.cssText = 'width:40px;height:40px;border-radius:50%;object-fit:cover;margin-bottom:6px;border:2px solid rgba(255,255,255,.2)';
+    sbUser.insertBefore(img, sbUser.firstChild);
+  }
 
   const nav = document.getElementById('sb-nav');
   const isManager = ROLES[role]?.isManager || role === 'admin';
@@ -625,6 +636,10 @@ function buildSidebar() {
     <button class="nav-btn" onclick="navigateTo('items')">
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
       Weekly Items
+    </button>
+    <button class="nav-btn" onclick="navigateTo('friday-recap')">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Friday Recap
     </button>`;
 
   // Manager/Admin extras
@@ -695,6 +710,7 @@ function renderScreen(screen) {
     'checkin-cr-oc':{ title:'Client Rep Check-In (OC)', fn: ()=>renderCheckin('cr-oc') },
     'checkin-cr-la':{ title:'Client Rep Check-In (LA)', fn: ()=>renderCheckin('cr-la') },
     'items':        { title:'Weekly Items',        fn: renderItems },
+    'friday-recap': { title:'Friday Recap',           fn: renderFridayRecap },
     'summary':      { title:'Monday Meeting Summary', fn: renderSummary },
     'team':         { title:'Team Overview',       fn: renderTeam },
     'admin':        { title:'Admin Panel',         fn: renderAdmin },
@@ -840,9 +856,11 @@ async function loadCarryoverForDash(branch) {
       <span class="priority-dot ${it.priority||'medium'}"></span>
       <div class="item-content">
         <div class="item-title">${esc(it.title)}</div>
-        <div class="item-meta">${esc(it.ownerName)} · Was due ${fmtDate(it.deadline)}</div>
+        <div class="item-meta">${esc(it.ownerName)} · Was due ${fmtDate(it.deadline)}${it.fridayReview?.reason ? ' · ' + esc(it.fridayReview.reason) : ''}</div>
+        ${it.fridayReview?.newDeadline ? `<div style="font-size:11px;color:var(--info);margin-top:2px">New deadline: ${fmtDate(it.fridayReview.newDeadline)}</div>` : ''}
+        ${it.needsAssistance ? `<div style="font-size:11px;color:var(--danger);margin-top:2px;font-weight:600">⚠ ${it.assistanceLevel==='upper_management'?'Upper management':'Branch manager'} assistance needed</div>` : ''}
       </div>
-      <span class="badge warn">Carry-over</span>
+      <span class="badge ${it.needsAssistance?'danger':'warn'}">Carry-over${it.needsAssistance?' · Help needed':''}</span>
     </div>`;
   }).join('') + (snap.size>5?`<div style="padding:8px 0;font-size:12px;color:var(--text3)">+${snap.size-5} more…</div>`:'');
 }
@@ -853,10 +871,13 @@ async function loadTeamStatus(branch, wk) {
   let q = db.collection('weekly_submissions').where('weekStart','==',wk);
   if (branch) q = q.where('branch','==',branch);
   const snap = await q.get();
+  // Build a map of submitted emails and userIds
   const submittedUIDs = new Set(snap.docs.filter(d=>d.data().status==='submitted').map(d=>d.data().userId));
+  const submittedEmails = new Set(snap.docs.filter(d=>d.data().status==='submitted').map(d=>d.data().userEmail||d.data().userName));
   const teamToShow = TEAM.filter(t => !branch || t.branch===branch || branch==='ALL').filter(t=>t.role!=='admin');
   el.innerHTML = teamToShow.map(t => {
-    const done = submittedUIDs.has(t.email); // Note: in real data userId = firebase uid
+    // Match on email (most reliable since UIDs require actual login to map)
+    const done = submittedEmails.has(t.email) || submittedEmails.has(t.name);
     return `<div class="team-member-row">
       <div class="tmr-avatar" style="background:${t.color};color:#fff">${t.initials}</div>
       <div style="flex:1">
@@ -935,7 +956,7 @@ function buildCheckinForm(type, data) {
       const cells = cols.map((c,ci)=>`<input type="text" id="f-${id}-r${r}c${ci}" value="${esc(d[id]?.[r]?.[ci]||'')}" placeholder="${c}…">`).join('');
       rowsHtml+=`<div class="rt-row">${cells}</div>`;
     }
-    return `<div class="row-table ${cls}"><div class="rt-header">${hdr}</div>${rowsHtml}<button class="add-row-btn" onclick="addTableRow('${id}',${JSON.stringify(cols)})">+ Add row</button></div>${hint?`<div style="font-size:11px;color:var(--text3);margin-top:4px">${hint}</div>`:''}`;
+    return `<div class="row-table ${cls}"><div class="rt-header">${hdr}</div>${rowsHtml}<button class="add-row-btn" onclick="addTableRow(this,'${id}',${JSON.stringify(cols)})">+ Add row</button></div>${hint?`<div style="font-size:11px;color:var(--text3);margin-top:4px">${hint}</div>`:''}`;
   };
 
   if (type === 'bm') return `
@@ -1096,18 +1117,16 @@ function toggleSection(hdr) {
   body.classList.toggle('open');
 }
 
-function addTableRow(id, cols) {
-  const table = document.querySelector(`[id^="f-${id}-r"]`);
-  if (!table) return;
-  // Find the row table container and add a row
-  const btn = event.target;
-  const container = btn.parentElement;
+function addTableRow(btn, id, cols) {
+  // btn = the button element passed via onclick="addTableRow(this,...)"
+  const container = btn.closest('.row-table');
+  if (!container) return;
   const rows = container.querySelectorAll('.rt-row').length;
-  const ncols = cols.length;
-  const cls = `rt-c${ncols}`;
   const newRow = document.createElement('div');
   newRow.className = 'rt-row';
-  newRow.innerHTML = cols.map((c,ci)=>`<input type="text" id="f-${id}-r${rows}c${ci}" placeholder="${c}…">`).join('');
+  newRow.innerHTML = cols.map((c,ci) =>
+    `<div class="rf"><input type="text" id="f-${id}-r${rows}c${ci}" placeholder="${c}…"></div>`
+  ).join('');
   container.insertBefore(newRow, btn);
 }
 
@@ -1116,6 +1135,7 @@ async function submitCheckin(type, existingId, status) {
   const wk = weekKey(CW);
   const data = {
     userId: CU.uid,
+    userEmail: CU.email,
     userName: CD.name,
     branch: type.includes('oc')||type==='om' ? 'OC' : type.includes('la')||type==='os'||type==='sv' ? 'LA' : CD.branch,
     role: CD.role,
@@ -1143,18 +1163,27 @@ async function submitCheckin(type, existingId, status) {
 
 function collectFormFields() {
   const result = {};
+  // First pass: gather all row-table fields grouped by table key and row index
+  const rowData = {};
   document.querySelectorAll('#checkin-form-body [id^="f-"]').forEach(el => {
     const key = el.id.replace('f-','');
-    // Handle row table inputs (f-key-rXcY)
     const match = key.match(/^(.+)-r(\d+)c(\d+)$/);
     if (match) {
-      const [,tableKey,row,col] = match;
-      if (!result[tableKey]) result[tableKey] = [];
-      if (!result[tableKey][+row]) result[tableKey][+row] = [];
-      result[tableKey][+row][+col] = el.value.trim();
+      const [,tableKey,rowIdx,colIdx] = match;
+      if (!rowData[tableKey]) rowData[tableKey] = {};
+      if (!rowData[tableKey][+rowIdx]) rowData[tableKey][+rowIdx] = {};
+      rowData[tableKey][+rowIdx][+colIdx] = el.value.trim();
     } else {
       result[key] = el.value.trim();
     }
+  });
+  // Second pass: convert row data to flat array of objects (no nested arrays)
+  // Firestore does not support nested arrays
+  Object.entries(rowData).forEach(([tableKey, rows]) => {
+    const flatRows = Object.values(rows)
+      .map(cols => Object.values(cols).join(' | '))
+      .filter(r => r.replace(/\s*\|\s*/g,'').trim());
+    if (flatRows.length) result[tableKey] = flatRows; // array of strings, not arrays
   });
   return result;
 }
@@ -1162,6 +1191,118 @@ function collectFormFields() {
 // ══════════════════════════════════════════════════
 // WEEKLY ITEMS
 // ══════════════════════════════════════════════════
+async function renderFridayRecap() {
+  const ca = document.getElementById('content-area');
+  const wk = weekKey(CW);
+  const branch = getUserBranch() || CD.branch;
+
+  // Load existing friday recap submission
+  let existingData = {}; let existingId = null;
+  const q = await db.collection('weekly_submissions')
+    .where('userId','==',CU.uid).where('weekStart','==',wk).where('formType','==','friday-recap').get();
+  if (!q.empty) { existingId = q.docs[0].id; existingData = q.docs[0].data(); }
+  const v = (k, fallback='') => esc(existingData[k]||fallback);
+  const ta = (id,lbl,ph,rows=3) => `<div class="fg"><label>${lbl}</label><textarea id="fr2-${id}" rows="${rows}" placeholder="${ph}">${v(id)}</textarea></div>`;
+
+  ca.innerHTML = `
+    <div style="background:var(--success-l);border:1px solid #A7F3D0;border-left:4px solid var(--success);border-radius:var(--rl);padding:12px 16px;margin-bottom:16px">
+      <div style="font-size:13px;font-weight:600;color:var(--success)">Friday Recap — Week of ${fmtWeek(CW)}</div>
+      <div style="font-size:12px;color:var(--text2);margin-top:2px">Review this week's accomplishments, missed items, and prepare for next week.</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+      <span class="badge ${existingData.status==='submitted'?'success':existingData.status==='draft'?'warn':'neutral'}">${existingData.status==='submitted'?'✓ Submitted':existingData.status==='draft'?'Draft':'Not started'}</span>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-hdr open" onclick="toggleSection(this)">
+        <div class="fsh-left"><div class="fsh-icon" style="background:#ECFDF520;color:var(--success)">✅</div>
+        <div><div class="fsh-title">Accomplishments This Week</div></div></div>
+        <span class="fsh-chevron open">▾</span>
+      </div>
+      <div class="form-section-body open">
+        ${ta('accomplishments','What did you accomplish this week?','List your key wins, completed tasks, and positive outcomes this week…',4)}
+        ${ta('client_wins','Client wins / positive feedback','Any positive client feedback or wins to share with the team?',2)}
+        ${ta('team_wins','Team wins','Recognize any team members or highlight team accomplishments…',2)}
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-hdr open" onclick="toggleSection(this)">
+        <div class="fsh-left"><div class="fsh-icon" style="background:#FEF2F220;color:var(--danger)">⚠</div>
+        <div><div class="fsh-title">Missed Items & Issues</div></div></div>
+        <span class="fsh-chevron open">▾</span>
+      </div>
+      <div class="form-section-body open">
+        ${ta('missed_items','What did not get completed this week?','List any tasks or items that were not completed and why…',3)}
+        ${ta('issues_encountered','Issues encountered','What problems came up this week that impacted your work?',3)}
+        ${ta('blockers','Blockers / what slowed you down','What got in the way? What do you need resolved?',2)}
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-hdr open" onclick="toggleSection(this)">
+        <div class="fsh-left"><div class="fsh-icon" style="background:#EFF6FF20;color:var(--info)">📅</div>
+        <div><div class="fsh-title">Next Week Preparation</div></div></div>
+        <span class="fsh-chevron open">▾</span>
+      </div>
+      <div class="form-section-body open">
+        ${ta('next_week_priorities','Top priorities for next week','What are your most important focus areas going into next week?',3)}
+        ${ta('carryover_notes','Carry-over items / unfinished business','What is carrying forward and what is the plan for it?',2)}
+        ${ta('support_needed','Support or resources needed','What do you need from your manager or team going into next week?',2)}
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-hdr open" onclick="toggleSection(this)">
+        <div class="fsh-left"><div class="fsh-icon" style="background:#F3F4F620;color:var(--text3)">📝</div>
+        <div><div class="fsh-title">Overall Week Assessment</div></div></div>
+        <span class="fsh-chevron open">▾</span>
+      </div>
+      <div class="form-section-body open">
+        <div class="fg"><label>How would you rate this week overall?</label>
+          <select id="fr2-week_rating">
+            <option value="" ${!existingData.week_rating?'selected':''}>Select…</option>
+            <option value="5_excellent" ${existingData.week_rating==='5_excellent'?'selected':''}>⭐⭐⭐⭐⭐ Excellent</option>
+            <option value="4_good" ${existingData.week_rating==='4_good'?'selected':''}>⭐⭐⭐⭐ Good</option>
+            <option value="3_average" ${existingData.week_rating==='3_average'?'selected':''}>⭐⭐⭐ Average</option>
+            <option value="2_challenging" ${existingData.week_rating==='2_challenging'?'selected':''}>⭐⭐ Challenging</option>
+            <option value="1_difficult" ${existingData.week_rating==='1_difficult'?'selected':''}>⭐ Very Difficult</option>
+          </select>
+        </div>
+        ${ta('general_notes','General notes','Any other thoughts or observations for the record…',3)}
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn primary" onclick="submitFridayRecap('${existingId||''}','submitted')">Submit Friday Recap</button>
+      <button class="btn" onclick="submitFridayRecap('${existingId||''}','draft')">Save Draft</button>
+      <button class="btn" onclick="navigateTo('dashboard')">Cancel</button>
+    </div>`;
+}
+
+async function submitFridayRecap(existingId, status) {
+  const fields = {};
+  document.querySelectorAll('#content-area [id^="fr2-"]').forEach(el => {
+    fields[el.id.replace('fr2-','')] = el.value.trim();
+  });
+  const data = {
+    userId: CU.uid, userEmail: CU.email, userName: CD.name,
+    branch: getUserBranch() || CD.branch, role: CD.role,
+    formType: 'friday-recap', weekStart: weekKey(CW), weekEnd: weekKey(getSaturday(CW)),
+    status, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), ...fields
+  };
+  if (!existingId) data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+  try {
+    if (existingId) {
+      await db.collection('weekly_submissions').doc(existingId).update(data);
+    } else {
+      await db.collection('weekly_submissions').add(data);
+    }
+    toast(status==='submitted'?'✓ Friday recap submitted!':'✓ Draft saved');
+    if (status==='submitted') navigateTo('dashboard');
+  } catch(e) { toast('Error: '+e.message,'err'); }
+}
+
 async function renderItems() {
   const ca = document.getElementById('content-area');
   const branch = getUserBranch();
@@ -1263,23 +1404,46 @@ function openFridayModal(id, title) {
   modal.id = 'friday-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px';
   modal.innerHTML = `
-    <div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:500px;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">
+    <div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:540px;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <div style="font-size:14px;font-weight:700">Friday Review</div>
+        <div style="font-size:14px;font-weight:700">Friday Accountability Review</div>
         <button onclick="document.getElementById('friday-modal').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button>
       </div>
-      <div style="font-size:12px;color:var(--text3);margin-bottom:16px;padding:8px 10px;background:var(--surface2);border-radius:var(--r)">${esc(title)}</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:16px;padding:8px 10px;background:var(--surface2);border-radius:var(--r);font-weight:500">${esc(title)}</div>
       <div class="fg"><label>Completion Status</label>
-        <select id="fr-status">
+        <select id="fr-status" onchange="toggleCarryoverFields()">
           <option value="completed_on_time">✓ Completed On Time</option>
           <option value="completed_late">⚠ Completed Late</option>
           <option value="not_completed">✗ Not Completed — Carry Forward</option>
         </select>
       </div>
-      <div class="fg"><label>Reason / Notes</label><textarea id="fr-reason" rows="3" placeholder="What happened?"></textarea></div>
-      <div class="fg"><label>New Deadline (if not completed)</label><input type="date" id="fr-deadline"></div>
-      <div class="fg"><label>How can I assist?</label><textarea id="fr-assist" rows="2" placeholder="What support is needed?"></textarea></div>
-      <div style="display:flex;gap:8px;margin-top:12px">
+      <div class="fg"><label>Reason / Notes</label>
+        <textarea id="fr-reason" rows="3" placeholder="What happened? What was accomplished or why was it not completed?"></textarea>
+      </div>
+      <div id="fr-carryover-fields" style="display:none">
+        <div style="background:var(--warn-l);border:1px solid #FDE68A;border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-size:12px;color:var(--warn);font-weight:500">
+          ⚠ This item will carry forward to next week
+        </div>
+        <div class="g2">
+          <div class="fg"><label>New Deadline <span class="req">*</span></label>
+            <input type="date" id="fr-deadline">
+          </div>
+          <div class="fg"><label>Assistance Required</label>
+            <select id="fr-assist-level">
+              <option value="none">No assistance needed</option>
+              <option value="branch_manager">Branch Manager assistance needed</option>
+              <option value="upper_management">Upper management assistance needed</option>
+            </select>
+          </div>
+        </div>
+        <div class="fg"><label>What assistance is needed?</label>
+          <textarea id="fr-assist" rows="2" placeholder="Describe what help is needed to resolve this item…"></textarea>
+        </div>
+      </div>
+      <div class="fg"><label>How can management support? (Optional)</label>
+        <textarea id="fr-mgr-support" rows="2" placeholder="What can management do to help move this forward?"></textarea>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
         <button class="btn primary" onclick="saveFridayReview('${id}')">Save Review</button>
         <button class="btn" onclick="document.getElementById('friday-modal').remove()">Cancel</button>
       </div>
@@ -1287,16 +1451,38 @@ function openFridayModal(id, title) {
   document.body.appendChild(modal);
 }
 
+function toggleCarryoverFields() {
+  const status = document.getElementById('fr-status').value;
+  const fields = document.getElementById('fr-carryover-fields');
+  if (fields) fields.style.display = status === 'not_completed' ? 'block' : 'none';
+}
+
 async function saveFridayReview(id) {
   const status = document.getElementById('fr-status').value;
+  const newDeadline = document.getElementById('fr-deadline')?.value || '';
+  if (status === 'not_completed' && !newDeadline) {
+    toast('Please set a new deadline for carry-over items','err'); return;
+  }
   const review = {
-    status, reason: document.getElementById('fr-reason').value.trim(),
-    newDeadline: document.getElementById('fr-deadline').value,
-    howAssist: document.getElementById('fr-assist').value.trim(),
-    reviewedAt: new Date().toISOString()
+    status,
+    reason: document.getElementById('fr-reason').value.trim(),
+    newDeadline,
+    assistLevel: document.getElementById('fr-assist-level')?.value || 'none',
+    assistDetails: document.getElementById('fr-assist')?.value.trim() || '',
+    mgrSupport: document.getElementById('fr-mgr-support')?.value.trim() || '',
+    reviewedAt: new Date().toISOString(),
+    reviewedBy: CD.name
   };
-  const update = { status, fridayReview: review, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
-  if (status==='not_completed') { update.carriedOver=true; if(review.newDeadline) update.deadline=review.newDeadline; }
+  const update = {
+    status, fridayReview: review,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  if (status === 'not_completed') {
+    update.carriedOver = true;
+    if (newDeadline) update.deadline = newDeadline;
+    update.needsAssistance = review.assistLevel !== 'none';
+    update.assistanceLevel = review.assistLevel;
+  }
   await db.collection('weekly_items').doc(id).update(update);
   document.getElementById('friday-modal').remove();
   toast('✓ Friday review saved'); renderItems();
@@ -1305,16 +1491,29 @@ async function saveFridayReview(id) {
 // ══════════════════════════════════════════════════
 // MONDAY SUMMARY
 // ══════════════════════════════════════════════════
+function setSummaryFilter(branch) {
+  window._summaryBranchFilter = branch;
+  renderSummary();
+}
+
 async function renderSummary() {
   const ca = document.getElementById('content-area');
   const wk = weekKey(CW);
   ca.innerHTML = '<div class="empty">Loading summary…</div>';
 
-  const [subSnap, itemSnap, coSnap] = await Promise.all([
-    db.collection('weekly_submissions').where('weekStart','==',wk).get(),
-    db.collection('weekly_items').where('weekStart','==',wk).get(),
-    db.collection('weekly_items').where('status','==','not_completed').get()
-  ]);
+  // Branch managers only see their own branch; admin can filter
+  const summaryBranch = CD.role === 'admin'
+    ? (window._summaryBranchFilter || null)
+    : getUserBranch();
+
+  let subQ = db.collection('weekly_submissions').where('weekStart','==',wk);
+  if (summaryBranch) subQ = subQ.where('branch','==',summaryBranch);
+  let itemQ = db.collection('weekly_items').where('weekStart','==',wk);
+  if (summaryBranch) itemQ = itemQ.where('branch','==',summaryBranch);
+  let coQ = db.collection('weekly_items').where('status','==','not_completed');
+  if (summaryBranch) coQ = coQ.where('branch','==',summaryBranch);
+
+  const [subSnap, itemSnap, coSnap] = await Promise.all([subQ.get(), itemQ.get(), coQ.get()]);
 
   const subs = subSnap.docs.map(d=>({id:d.id,...d.data()}));
   const items = itemSnap.docs.map(d=>({id:d.id,...d.data()}));
@@ -1332,11 +1531,12 @@ async function renderSummary() {
     return fields.map(([k,v]) => {
       const label = k.replace(/^[a-z]+_/,'').replace(/_/g,' ');
       if (Array.isArray(v) && v.length) {
-        const rows = v.filter(r=>Array.isArray(r)&&r.some(c=>c));
+        // Support both old nested array format and new flat string format
+        const rows = v.map(r => Array.isArray(r) ? r.filter(Boolean).join(' · ') : String(r)).filter(Boolean);
         if (!rows.length) return '';
         return `<div class="sum-field">
           <div class="sum-field-label">${esc(label)}</div>
-          <div>${rows.map(r=>`<div style="font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)">${r.filter(Boolean).map(c=>esc(c)).join(' · ')}</div>`).join('')}</div>
+          <div>${rows.map(r=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">${esc(r)}</div>`).join('')}</div>
         </div>`;
       }
       if (typeof v === 'string' && v.trim()) {
@@ -1364,6 +1564,11 @@ async function renderSummary() {
       <div class="sum-title">Monday Meeting Summary</div>
       <div class="sum-sub">Combined operational briefing — all branches</div>
       <div class="sum-week-badge">Work Week: ${fmtWeek(CW)}</div>
+    ${CD.role==='admin'?`<div style="margin-top:12px;display:flex;gap:8px">
+      <button onclick="setSummaryFilter(null)" style="padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:${!window._summaryBranchFilter?'rgba(255,255,255,.25)':'rgba(255,255,255,.1)'};color:#fff">All</button>
+      <button onclick="setSummaryFilter('OC')" style="padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:${window._summaryBranchFilter==='OC'?'var(--oc)':'rgba(255,255,255,.1)'};color:#fff">OC Only</button>
+      <button onclick="setSummaryFilter('LA')" style="padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:${window._summaryBranchFilter==='LA'?'var(--la)':'rgba(255,255,255,.1)'};color:#fff">LA Only</button>
+    </div>`:''}
     </div>
 
     ${carryovers.length ? `
@@ -1475,14 +1680,21 @@ async function renderAdmin() {
       <div class="card-header"><div class="card-title">User Management</div></div>
       ${snap.docs.map(d => {
         const u = d.data();
-        return `<div class="settings-row ${!u.active?'opacity:.4':''}">
-          <div class="tmr-avatar" style="background:${ROLES[u.role]?.color||'#666'};color:#fff">${u.name.split(' ').map(n=>n[0]).slice(0,2).join('')}</div>
+        const initials = u.name.split(' ').map(n=>n[0]).slice(0,2).join('');
+        const avatarHtml = u.photoURL
+          ? `<img src="${esc(u.photoURL)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0">`
+          : `<div class="tmr-avatar" style="background:${ROLES[u.role]?.color||'#666'};color:#fff;width:32px;height:32px">${initials}</div>`;
+        return `<div class="settings-row ${!u.active?'opacity:.5':''}">
+          ${avatarHtml}
           <div class="sr-info">
             <div class="sr-name">${esc(u.name)} ${!u.active?'<span class="badge danger">Disabled</span>':''}</div>
             <div class="sr-meta">${esc(u.email)} · ${ROLES[u.role]?.label||u.role} · ${u.branch}</div>
           </div>
           <div class="sr-actions">
             <span class="badge ${u.active?'success':'danger'}">${u.active?'Active':'Disabled'}</span>
+            <label class="btn sm" style="cursor:pointer" title="Upload photo">
+              📷 <input type="file" accept="image/*" style="display:none" onchange="uploadUserPhoto('${d.id}',this)">
+            </label>
             <button class="btn sm" onclick="toggleUser('${d.id}',${u.active})">${u.active?'Disable':'Enable'}</button>
           </div>
         </div>`;
@@ -1541,6 +1753,21 @@ async function renderAdmin() {
       </div>
       <div id="nu-result" style="margin-top:12px;display:none"></div>
     </div>`;
+}
+
+async function uploadUserPhoto(uid, input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { toast('Please select an image file','err'); return; }
+  if (file.size > 500000) { toast('Image must be under 500KB','err'); return; }
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const dataURL = e.target.result;
+    await db.collection('users').doc(uid).update({ photoURL: dataURL });
+    toast('✓ Photo uploaded');
+    renderAdmin();
+  };
+  reader.readAsDataURL(file);
 }
 
 async function toggleUser(uid, active) {
@@ -1646,8 +1873,57 @@ async function updateUserProfile() {
 // PDF EXPORT
 // ══════════════════════════════════════════════════
 async function exportSummaryPDF() {
-  toast('Preparing PDF… use Print to save as PDF');
-  setTimeout(() => window.print(), 500);
+  const summaryEl = document.getElementById('content-area');
+  if (!summaryEl) { toast('No summary to export','err'); return; }
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>SWL Monday Summary — ${fmtWeek(CW)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;font-size:13px;color:#0D1B12;background:#fff;padding:24px}
+.summary-header{background:#0E4C2D;border-radius:10px;padding:20px 24px;margin-bottom:16px;color:#fff}
+.sum-title{font-size:18px;font-weight:700;margin-bottom:3px}
+.sum-sub{font-size:12px;opacity:.7}
+.sum-week-badge{background:rgba(255,255,255,.15);padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;display:inline-block;margin-top:6px}
+.card{background:#fff;border:1px solid #E2E8E4;border-radius:8px;padding:16px;margin-bottom:12px}
+.card-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#7A9088;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #E2E8E4}
+.sum-branch-hdr{padding:8px 12px;border-radius:6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.sum-branch-hdr.oc{background:#FFF0E8;color:#C93D00;border-left:4px solid #FC4C02}
+.sum-branch-hdr.la{background:#E8F2FB;color:#003F6E;border-left:4px solid #005A9C}
+.sum-role-block{border:1px solid #E2E8E4;border-radius:8px;margin-bottom:8px;overflow:hidden}
+.sum-role-hdr{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#F8F9FA;border-bottom:1px solid #E2E8E4}
+.sum-role-name{font-size:12px;font-weight:700}
+.sum-fields{padding:10px 12px}
+.sum-field{margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #F0F2F0}
+.sum-field:last-child{border:none;margin-bottom:0}
+.sum-field-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#7A9088;margin-bottom:3px}
+.sum-field-value{font-size:12px;line-height:1.6;white-space:pre-wrap}
+.badge{display:inline-flex;font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px;text-transform:uppercase;letter-spacing:.03em}
+.badge.success{background:#ECFDF5;color:#059669;border:1px solid #A7F3D0}
+.badge.warn{background:#FFFBEB;color:#D97706;border:1px solid #FDE68A}
+.badge.danger{background:#FEF2F2;color:#DC2626;border:1px solid #FECACA}
+.badge.oc{background:#FFF0E8;color:#C93D00;border:1px solid #FFD5BA}
+.badge.la{background:#E8F2FB;color:#003F6E;border:1px solid #BFDBF7}
+.item-row{display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #E2E8E4}
+.priority-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;margin-top:4px}
+.priority-dot.high{background:#DC2626}.priority-dot.medium{background:#D97706}.priority-dot.low{background:#059669}.priority-dot.critical{background:#7C3AED}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:5px 8px;background:#F8F9FA;border-bottom:2px solid #E2E8E4;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7A9088}
+td{padding:5px 8px;border-bottom:1px solid #F0F2F0;vertical-align:top}
+.footer{text-align:center;font-size:11px;color:#B0C4BB;margin-top:20px;padding-top:12px;border-top:1px solid #E2E8E4}
+@media print{body{padding:12px}}
+</style></head><body>
+${summaryEl.innerHTML}
+<div class="footer">SouthWest Landscape Inc. · Confidential Internal Document · Generated ${new Date().toLocaleString()}</div>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) { toast('Pop-up blocked — allow pop-ups and try again','err'); return; }
+  w.document.write(html);
+  w.document.close();
+  w.onload = () => setTimeout(() => w.print(), 400);
+  toast('PDF ready — use browser Print → Save as PDF');
 }
 </script>
 </body>
