@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>SWL Operations Hub</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -382,12 +385,6 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
       <!-- dynamically populated based on role -->
     </nav>
     <div class="sb-footer">
-      <div class="sb-week">Work week</div>
-      <div class="sb-week-val" id="sb-week-val">—</div>
-      <div class="week-nav-btns">
-        <button onclick="prevWeek()">‹ Prev</button>
-        <button onclick="nextWeek()">Next ›</button>
-      </div>
       <button class="signout-btn" onclick="doSignOut()">
         <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         Sign out
@@ -399,8 +396,12 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   <div class="main-area">
     <div class="top-bar">
       <div class="tb-title" id="tb-title">Dashboard</div>
-      <div class="tb-week" id="tb-week">—</div>
-      <div id="tb-extras"></div>
+      <div style="flex:1"></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button onclick="prevWeek()" style="width:28px;height:28px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;color:var(--text2)" title="Previous week">‹</button>
+        <div class="tb-week" id="tb-week" style="min-width:180px;text-align:center">—</div>
+        <button onclick="nextWeek()" style="width:28px;height:28px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;color:var(--text2)" title="Next week">›</button>
+      </div>
     </div>
     <div class="content-area" id="content-area">
       <!-- screens injected here -->
@@ -711,9 +712,7 @@ function prevWeek() { CW = new Date(CW); CW.setDate(CW.getDate()-7); updateWeekD
 function nextWeek() { CW = new Date(CW); CW.setDate(CW.getDate()+7); updateWeekDisplay(); renderScreen(activeScreen); }
 function updateWeekDisplay() {
   const wk = fmtWeek(CW);
-  const el = document.getElementById('sb-week-val');
   const tb = document.getElementById('tb-week');
-  if (el) el.textContent = wk;
   if (tb) tb.textContent = wk;
 }
 
@@ -835,10 +834,11 @@ async function renderDashboard() {
         </div>
         <div id="dash-team-list"><div class="empty">Loading…</div></div>
       </div>` : `<div class="card">
-        <div class="card-header"><div class="card-title">📝 My Quick Actions</div></div>
-        <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="card-header"><div class="card-title">📝 My Week</div></div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
           <button class="btn primary" onclick="navigateTo('checkin-${getFirstCheckinRole()}')">Complete My Check-In</button>
-          <button class="btn" onclick="navigateTo('items')">View Weekly Items</button>
+          <button class="btn" onclick="navigateTo('friday-recap')">Friday Recap</button>
+          <button class="btn" onclick="navigateTo('my-history')">My Submission History</button>
         </div>
       </div>`}
     </div>`;
@@ -846,6 +846,47 @@ async function renderDashboard() {
   // Load carry-over
   loadCarryoverForDash(branch);
   if (isMgr) loadTeamStatus(branch, wk);
+  else loadMyRecentHistory(); // employees see their own history timeline
+}
+
+async function loadMyRecentHistory() {
+  // Load last 8 weeks of submissions for this user
+  const snap = await db.collection('weekly_submissions')
+    .where('userId','==',CU.uid)
+    .get();
+  const subs = snap.docs.map(d=>({id:d.id,...d.data()}))
+    .sort((a,b)=>(b.weekStart||'').localeCompare(a.weekStart||''))
+    .slice(0,8);
+
+  if (!subs.length) return;
+
+  const ca = document.getElementById('content-area');
+  if (!ca) return;
+
+  const historyHtml = `
+    <div class="card" style="margin-top:16px">
+      <div class="card-header">
+        <div class="card-title">📚 My Recent Submissions</div>
+        <button class="btn sm" onclick="navigateTo('my-history')">View all →</button>
+      </div>
+      ${subs.map(s => {
+        const isCurrent = s.weekStart === weekKey(CW);
+        return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+          <div style="width:8px;height:8px;border-radius:50%;background:${s.status==='submitted'?'var(--success)':'var(--warn)'};flex-shrink:0"></div>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:${isCurrent?'700':'500'};color:${isCurrent?'var(--swl-green)':'var(--text)'}">
+              ${s.formType?.toUpperCase()||'Check-in'} — Week of ${s.weekStart||'—'}
+              ${isCurrent?'<span style="font-size:10px;background:var(--swl-green);color:#fff;padding:1px 6px;border-radius:10px;margin-left:6px">Current</span>':''}
+            </div>
+            <div style="font-size:11px;color:var(--text3);margin-top:1px">${s.branch} · ${s.status==='submitted'?'Submitted':'Draft'}</div>
+          </div>
+          <span class="badge ${s.status==='submitted'?'success':'warn'}">${s.status==='submitted'?'✓':'Draft'}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  // Append to content area
+  ca.insertAdjacentHTML('beforeend', historyHtml);
 }
 
 function getFirstCheckinRole() {
@@ -944,13 +985,24 @@ async function renderCheckin(type) {
   const branchLabel = type.includes('oc')||type==='om' ? 'OC' : type.includes('la')||type==='os'||type==='sv' ? 'LA' : '';
   const accentClass = branchLabel==='OC'?'oc-btn':branchLabel==='LA'?'la-btn':'primary';
 
+  // Load Spanish preference
+  const spanishTypes = ['os','sv'];
+  const useSpanish = spanishTypes.includes(type)
+    && localStorage.getItem('swl-lang-' + CU.uid) === 'es';
+
   ca.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
       ${branchLabel?`<span class="badge ${branchLabel.toLowerCase()}">${branchLabel}</span>`:''}
       <span class="badge ${isSubmitted?'success':isDraft?'warn':'neutral'}">${isSubmitted?'✓ Submitted':isDraft?'Draft':'Not started'}</span>
       ${existingData.submittedAt?`<span style="font-size:11px;color:var(--text3)">Last saved: ${fmtDate(existingData.updatedAt||existingData.submittedAt)}</span>`:''}
+      ${spanishTypes.includes(type)?`<div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+        <span style="font-size:11px;color:var(--text3)">Language / Idioma:</span>
+        <button onclick="toggleLanguage('${type}')" class="btn sm" style="background:${useSpanish?'var(--la)':'var(--surface)'};color:${useSpanish?'#fff':'var(--text)'};border-color:${useSpanish?'var(--la)':'var(--border2)'}">
+          ${useSpanish?'🇲🇽 Español':'🇺🇸 English'}
+        </button>
+      </div>`:''}
     </div>
-    <div id="checkin-form-body">${buildCheckinForm(type, existingData)}</div>
+    <div id="checkin-form-body">${buildCheckinForm(type, existingData, useSpanish)}</div>
     <div class="btn-row">
       <button class="btn ${accentClass}" onclick="submitCheckin('${type}','${existingId||''}','submitted')">
         ${isSubmitted?'Update Submission':'Submit Check-In'}
@@ -960,15 +1012,35 @@ async function renderCheckin(type) {
     </div>`;
 }
 
-function buildCheckinForm(type, data) {
+function toggleLanguage(type) {
+  const current = localStorage.getItem('swl-lang-' + CU.uid);
+  localStorage.setItem('swl-lang-' + CU.uid, current === 'es' ? 'en' : 'es');
+  renderCheckin(type); // re-render with new language
+}
+
+function buildCheckinForm(type, data, useSpanish) {
   const d = data || {};
   const v = (key, fallback='') => esc(d[key]||fallback);
+  const sp = useSpanish; // Spanish mode flag
   const ta = (id, label, placeholder, rows=3) =>
     `<div class="fg"><label>${label}</label><textarea id="f-${id}" rows="${rows}" placeholder="${placeholder}">${v(id)}</textarea></div>`;
   const inp = (id, label, type2='text', placeholder='') =>
     `<div class="fg"><label>${label}</label><input type="${type2}" id="f-${id}" value="${v(id)}" placeholder="${placeholder}"></div>`;
   const sel = (id, label, options) =>
     `<div class="fg"><label>${label}</label><select id="f-${id}">${options.map(o=>`<option value="${o}" ${d[id]===o?'selected':''}>${o}</option>`).join('')}</select></div>`;
+
+  // Bilingual textarea: shows EN label + ES label, accepts Spanish input
+  // Browser lang tag enables auto-translate in Chrome/Edge
+  const ta_es = (id, labelEn, labelEs, phEn, phEs, rows=3) => {
+    const inputLang = sp ? 'es' : 'en';
+    const label = sp ? `${labelEs} <span style="font-size:10px;opacity:.6">(${labelEn})</span>` : `${labelEn} <span style="font-size:10px;opacity:.6">(${labelEs})</span>`;
+    const ph = sp ? phEs : phEn;
+    return `<div class="fg"><label>${label}</label>
+      <textarea id="f-${id}" rows="${rows}" lang="${inputLang}"
+        placeholder="${ph}"
+        style="border-left:3px solid var(--la)">${v(id)}</textarea>
+    </div>`;
+  };
 
   const section = (icon, title, color, body) => `
     <div class="form-section">
@@ -1063,58 +1135,58 @@ function buildCheckinForm(type, data) {
     ${section('📝','Notes','var(--text3)',`${ta('om_notes','Additional notes','Anything else to flag?',3)}`)}`;
 
   if (type === 'os') return `
-    ${section('📊','Week at a Glance (LA)','var(--la)',`
+    ${section('📊', sp?'Resumen de la Semana (LA)':'Week at a Glance (LA)','var(--la)',`
       <div class="g2">
-        ${ta('os_focus','Key focus this week','What are you focused on this week?')}
-        ${sel('os_capacity','Field capacity',['Full capacity','Slightly stretched','Very stretched','Under capacity'])}
+        ${ta_es('os_focus','Key focus this week','Enfoque principal esta semana','What are you focused on?','¿En qué te estás enfocando?')}
+        ${sel('os_capacity', sp?'Capacidad del equipo':'Field capacity',['Full capacity / Capacidad completa','Slightly stretched / Un poco sobrecargado','Very stretched / Muy sobrecargado','Under capacity / Por debajo de capacidad'])}
       </div>
     `)}
-    ${section('🏠','Property / Operations Status (LA)','var(--la)',`
-      ${rowTable('os_props',['Property','Status','Issue / Flag'],3)}
-      ${ta('os_workorders','Open work orders','Any open work orders to flag?',2)}
+    ${section('🏠', sp?'Estado de Propiedades (LA)':'Property / Operations Status (LA)','var(--la)',`
+      ${rowTable('os_props',sp?['Propiedad','Estado','Problema / Nota']:['Property','Status','Issue / Flag'],3)}
+      ${ta_es('os_workorders','Open work orders','Órdenes de trabajo abiertas','Any open work orders to flag?','¿Alguna orden de trabajo abierta?',2)}
     `)}
-    ${section('📅','2-Week Project Outlook (LA)','var(--la)',`
-      ${rowTable('os_projects',['Project / Property','Sched week','Client OK?','Concerns'],2)}
+    ${section('📅', sp?'Proyectos Próximas 2 Semanas':'2-Week Project Outlook (LA)','var(--la)',`
+      ${rowTable('os_projects',sp?['Proyecto / Propiedad','Semana','¿Cliente OK?','Problemas']:['Project / Property','Sched week','Client OK?','Concerns'],2)}
     `)}
-    ${section('💧','Water & Irrigation (LA)','#2563EB',`
-      ${rowTable('os_water_off',['Property / Zone','Reason','Est. Restore'],2)}
-      ${ta('os_irrigation_issues','Unapproved irrigation','Any irrigation running without approval?',2)}
+    ${section('💧', sp?'Agua e Irrigación':'Water & Irrigation (LA)','#2563EB',`
+      ${rowTable('os_water_off',sp?['Propiedad / Zona','Razón','Fecha estimada']:['Property / Zone','Reason','Est. Restore'],2)}
+      ${ta_es('os_irrigation_issues','Unapproved irrigation','Irrigación no aprobada','Any irrigation running without approval?','¿Hay irrigación funcionando sin aprobación?',2)}
     `)}
-    ${section('🌤','Weather & Equipment (LA)','var(--la)',`
-      ${ta('os_weather','Weather impact','How is weather affecting work?',2)}
-      ${ta('os_equipment','Equipment / crew blockers','Equipment issues or crew conflicts?',2)}
+    ${section('🌤', sp?'Clima y Equipo':'Weather & Equipment (LA)','var(--la)',`
+      ${ta_es('os_weather','Weather impact','Impacto del clima','How is weather affecting work?','¿Cómo afecta el clima al trabajo?',2)}
+      ${ta_es('os_equipment','Equipment / crew blockers','Problemas de equipo / cuadrilla','Equipment issues or crew conflicts?','¿Problemas con equipo o cuadrilla?',2)}
     `)}
-    ${section('📝','Notes','var(--text3)',`${ta('os_notes','Additional notes','Anything else?',3)}`)}`;
+    ${section('📝', sp?'Notas Adicionales':'Notes','var(--text3)',`${ta_es('os_notes','Additional notes','Notas adicionales','Anything else?','¿Algo más?',3)}`)}`;
 
   if (type === 'sv') return `
-    ${section('📊','Week at a Glance (Supervisor)','var(--la)',`
+    ${section('📊', sp?'Resumen de la Semana (Supervisor)':'Week at a Glance (Supervisor)','var(--la)',`
       <div class="g2">
-        ${ta('sv_crews','Crews supervised this week','Which crews are you overseeing?')}
-        ${sel('sv_capacity','Crew capacity',['Full capacity','Slightly stretched','Very stretched','Under capacity'])}
+        ${ta_es('sv_crews','Crews supervised this week','Cuadrillas supervisadas esta semana','Which crews are you overseeing?','¿Qué cuadrillas estás supervisando?')}
+        ${sel('sv_capacity', sp?'Capacidad de la cuadrilla':'Crew capacity',['Full capacity / Capacidad completa','Slightly stretched / Un poco sobrecargado','Very stretched / Muy sobrecargado','Under capacity / Por debajo de capacidad'])}
       </div>
     `)}
-    ${section('👷','Crew & Field Performance','var(--la)',`
-      ${ta('sv_attendance','Crew attendance','Any attendance issues to flag?',2)}
-      ${ta('sv_performance','Performance notes','Any performance concerns or highlights?',2)}
-      ${ta('sv_safety','Safety incidents / near-misses','Any safety incidents to report?',2)}
-      ${ta('sv_quality','Quality of work','Is quality meeting standards on all sites?',2)}
+    ${section('👷', sp?'Desempeño del Equipo':'Crew & Field Performance','var(--la)',`
+      ${ta_es('sv_attendance','Crew attendance','Asistencia de la cuadrilla','Any attendance issues to flag?','¿Algún problema de asistencia?',2)}
+      ${ta_es('sv_performance','Performance notes','Notas de desempeño','Any performance concerns or highlights?','¿Alguna preocupación o logro de desempeño?',2)}
+      ${ta_es('sv_safety','Safety incidents / near-misses','Incidentes de seguridad','Any safety incidents to report?','¿Algún incidente de seguridad que reportar?',2)}
+      ${ta_es('sv_quality','Quality of work','Calidad del trabajo','Is quality meeting standards on all sites?','¿La calidad cumple los estándares en todos los sitios?',2)}
     `)}
-    ${section('🏠','Site Conditions','var(--la)',`
-      ${rowTable('sv_sites',['Property','Status','Issue / Flag'],2)}
-      ${ta('sv_hazards','On-site hazards','Any hazards or safety concerns on sites?',2)}
+    ${section('🏠', sp?'Condiciones del Sitio':'Site Conditions','var(--la)',`
+      ${rowTable('sv_sites',sp?['Propiedad','Estado','Problema / Nota']:['Property','Status','Issue / Flag'],2)}
+      ${ta_es('sv_hazards','On-site hazards','Peligros en el sitio','Any hazards or safety concerns?','¿Algún peligro o preocupación de seguridad?',2)}
     `)}
-    ${section('💧','Water-Off & Irrigation (Supervisor)','#2563EB',`
-      ${rowTable('sv_water_off',['Property / Zone','Reason','Est. Restore'],2)}
-      ${ta('sv_irrigation','Unapproved irrigation on assigned properties','Anything running without client approval?',2)}
+    ${section('💧', sp?'Agua e Irrigación':'Water-Off & Irrigation','#2563EB',`
+      ${rowTable('sv_water_off',sp?['Propiedad / Zona','Razón','Fecha estimada']:['Property / Zone','Reason','Est. Restore'],2)}
+      ${ta_es('sv_irrigation','Unapproved irrigation','Irrigación no aprobada','Anything running without client approval?','¿Algo funcionando sin aprobación del cliente?',2)}
     `)}
-    ${section('🌤','Weather Impact (Supervisor)','var(--la)',`
-      ${ta('sv_weather','Weather impact on crews','Rain days, heat concerns, schedule changes?',2)}
+    ${section('🌤', sp?'Impacto del Clima':'Weather Impact','var(--la)',`
+      ${ta_es('sv_weather','Weather impact on crews','Impacto del clima en cuadrillas','Rain days, heat concerns, schedule changes?','¿Días de lluvia, calor, cambios de horario?',2)}
     `)}
-    ${section('🤝','Client Visits & Equipment','var(--la)',`
-      ${rowTable('sv_visits',['Property','Visit Date','Contact','Prep Status'],1)}
-      ${ta('sv_equipment','Equipment / supply needs','Any equipment issues affecting your crews?',2)}
+    ${section('🤝', sp?'Visitas de Clientes y Equipo':'Client Visits & Equipment','var(--la)',`
+      ${rowTable('sv_visits',sp?['Propiedad','Fecha de visita','Contacto','Estado']:['Property','Visit Date','Contact','Prep Status'],1)}
+      ${ta_es('sv_equipment','Equipment / supply needs','Necesidades de equipo / materiales','Any equipment issues affecting your crews?','¿Algún problema de equipo que afecte a tus cuadrillas?',2)}
     `)}
-    ${section('📝','Notes','var(--text3)',`${ta('sv_notes','Additional notes','Anything else?',3)}`)}`;
+    ${section('📝', sp?'Notas Adicionales':'Notes','var(--text3)',`${ta_es('sv_notes','Additional notes','Notas adicionales','Anything else?','¿Algo más?',3)}`)}`;
 
   if (type === 'cr-oc' || type === 'cr-la') {
     const br = type==='cr-oc'?'OC':'LA';
@@ -1754,27 +1826,45 @@ async function renderItems() {
 }
 
 function renderItemCard(it) {
+  const isMgr = ROLES[CD.role]?.isManager || CD.role==='admin';
   const statusColors = { pending:'warn', completed_on_time:'success', completed_late:'info', not_completed:'danger' };
   const statusLabels = { pending:'Pending', completed_on_time:'✓ On Time', completed_late:'⚠ Late', not_completed:'✗ Not Complete' };
+  const statusBadge = `<span class="badge ${statusColors[it.status||'pending']}">${statusLabels[it.status||'pending']}</span>`;
+
+  // Employees can only add Friday review notes — managers set the actual status
+  const actionBtns = isMgr
+    ? `<select class="btn sm" style="cursor:pointer" onchange="updateItemStatusWithLog('${it.id}',this.value)">
+        ${['pending','completed_on_time','completed_late','not_completed'].map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]}</option>`).join('')}
+       </select>
+       <button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}')">Update</button>`
+    : isFriday()
+    ? `<button class="btn sm" onclick="openFridayModal('${it.id}','${esc(it.title)}')">Submit My Notes</button>`
+    : `${statusBadge}`;
+
+  // Show deadline — employees cannot edit it after creation
+  const deadlineDisplay = isMgr
+    ? `Due ${fmtDate(it.deadline)}`
+    : `Due ${fmtDate(it.deadline)}`;  // locked for employees too, just no edit UI
+
   return `<div class="item-row" data-status="${it.status||'pending'}">
     <span class="priority-dot ${it.priority||'medium'}"></span>
     <div class="item-content">
       <div class="item-title">${esc(it.title)}</div>
-      <div class="item-meta">${esc(it.ownerName||it.owner)} · Due ${fmtDate(it.deadline)}
-        ${it.fridayReview?.reason?`· <em>${esc(it.fridayReview.reason)}</em>`:''}
-      </div>
+      <div class="item-meta">${esc(it.ownerName||it.owner)} · ${deadlineDisplay}</div>
+      ${it.fridayReview?.reason?`<div style="font-size:11px;color:var(--text2);margin-top:2px;font-style:italic">Employee note: ${esc(it.fridayReview.reason)}</div>`:''}
     </div>
-    <select class="btn sm" style="cursor:pointer" onchange="updateItemStatus('${it.id}',this.value)">
-      ${['pending','completed_on_time','completed_late','not_completed'].map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]}</option>`).join('')}
-    </select>
-    ${isFriday()?`<button class="btn sm" onclick="openFridayModal('${it.id}','${esc(it.title)}')">Friday Review</button>`:''}
-    ${(ROLES[CD.role]?.isManager||CD.role==='admin')&&it.carriedOver?`<button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}')">Manager Update</button>`:''}
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+      ${actionBtns}
+    </div>
   </div>
   ${it.managerUpdate?`<div style="margin-top:8px;padding:8px 10px;background:var(--info-l);border-radius:var(--r);font-size:11px;border-left:3px solid var(--info)">
-    <strong>Manager update (${esc(it.managerUpdate.by||'')}):</strong> ${esc(it.managerUpdate.note||'')}
+    <strong>Manager (${esc(it.managerUpdate.by||'')}):</strong> ${esc(it.managerUpdate.note||'')}
     ${it.managerUpdate.newDeadline?` · New deadline: <strong>${fmtDate(it.managerUpdate.newDeadline)}</strong>`:''}
     ${it.managerUpdate.assistanceLevel&&it.managerUpdate.assistanceLevel!=='none'?` · <span style="color:var(--danger);font-weight:600">⚠ ${it.managerUpdate.assistanceLevel==='upper_management'?'Upper mgmt':'Branch mgr'} assistance needed</span>`:''}
     <span style="color:var(--text3);margin-left:6px">${it.managerUpdate.ts||''}</span>
+  </div>`:''}
+  ${it.changeLog?.length?`<div style="margin-top:6px;font-size:10px;color:var(--text3);padding:4px 8px;border-left:2px solid var(--border)">
+    Last changed by ${esc(it.changeLog[it.changeLog.length-1]?.by||'')} · ${esc(it.changeLog[it.changeLog.length-1]?.ts||'')}
   </div>`:''}`;
 }
 
@@ -1790,20 +1880,48 @@ async function addItem() {
   const deadline = document.getElementById('ni-deadline').value;
   if (!title||!deadline) { toast('Title and deadline required','err'); return; }
   const branch = getUserBranch() || CD.branch;
+  const isMgr = ROLES[CD.role]?.isManager || CD.role==='admin';
   await db.collection('weekly_items').add({
     branch, weekStart: weekKey(CW), title,
     description: document.getElementById('ni-desc').value.trim(),
-    deadline, priority: document.getElementById('ni-priority').value,
+    deadline,
+    deadlineLockedAt: new Date().toISOString(),   // deadline locked after creation
+    deadlineLockedBy: CD.name,
+    priority: document.getElementById('ni-priority').value,
     owner: CU.uid, ownerName: document.getElementById('ni-owner').value||CD.name,
     status:'pending', carriedOver:false,
+    deadlineEditableByManager: true,  // only managers can change
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
   toast('✓ Item added'); renderItems();
 }
 
 async function updateItemStatus(id, status) {
-  await db.collection('weekly_items').doc(id).update({ status, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  // Keep for backward compat — redirects to logged version
+  await updateItemStatusWithLog(id, status);
+}
+
+async function updateItemStatusWithLog(id, status) {
+  if (!ROLES[CD.role]?.isManager && CD.role !== 'admin') {
+    toast('Only managers can set item status', 'err'); return;
+  }
+  const statusLabels = { pending:'Pending', completed_on_time:'Completed On Time', completed_late:'Completed Late', not_completed:'Not Completed' };
+  const logEntry = {
+    by: CD.name, role: CD.role,
+    from: '', to: status,
+    toLabel: statusLabels[status] || status,
+    ts: new Date().toLocaleString()
+  };
+  await db.collection('weekly_items').doc(id).update({
+    status,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    lastStatusBy: CD.name,
+    lastStatusRole: CD.role,
+    lastStatusAt: new Date().toISOString(),
+    changeLog: firebase.firestore.FieldValue.arrayUnion(logEntry)
+  });
   toast('✓ Status updated');
+  renderItems();
 }
 
 // Friday Modal
@@ -2238,6 +2356,213 @@ async function renderTeam() {
 // ══════════════════════════════════════════════════
 // ADMIN
 // ══════════════════════════════════════════════════
+// ════════════════════════════════════════════
+// BACKUP & RESTORE
+// ════════════════════════════════════════════
+
+async function backupAllData() {
+  await backupCollections(
+    ['users','weekly_submissions','weekly_items','sync_log','monday_summaries'],
+    'SWL_Full_Backup'
+  );
+}
+
+async function backupCollections(collectionNames, filePrefix) {
+  const btn = document.getElementById('backup-btn');
+  const statusEl = document.getElementById('backup-status');
+  if (btn) { btn.textContent = 'Backing up…'; btn.disabled = true; }
+  if (statusEl) { statusEl.style.display = 'block'; statusEl.innerHTML = '<div style="font-size:12px;color:var(--text2)">Collecting data…</div>'; }
+
+  try {
+    const backup = {
+      metadata: {
+        exportedAt: new Date().toISOString(),
+        exportedBy: CD?.name || 'Admin',
+        projectId: 'swl-checklist',
+        collections: collectionNames,
+        version: '1.0'
+      },
+      data: {}
+    };
+
+    let totalDocs = 0;
+    for (const colName of collectionNames) {
+      if (statusEl) statusEl.innerHTML = `<div style="font-size:12px;color:var(--text2)">Exporting ${colName}…</div>`;
+      try {
+        const snap = await db.collection(colName).get();
+        backup.data[colName] = {};
+        snap.docs.forEach(d => {
+          // Convert Firestore timestamps to ISO strings for portability
+          const data = d.data();
+          const cleaned = cleanForExport(data);
+          backup.data[colName][d.id] = cleaned;
+        });
+        totalDocs += snap.size;
+      } catch(e) {
+        backup.data[colName] = { _error: `Could not export: ${e.message}` };
+      }
+    }
+
+    // Create download
+    const json = JSON.stringify(backup, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toTimeString().slice(0,5).replace(':','-');
+    a.download = `${filePrefix}_${dateStr}_${timeStr}.json`;
+    a.href = url;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <div style="background:var(--success-l);border:1px solid #A7F3D0;border-radius:var(--r);padding:10px 14px;font-size:13px">
+          <strong style="color:var(--success)">✓ Backup downloaded successfully</strong><br>
+          <span style="font-size:12px;color:var(--text2)">${totalDocs} documents exported from ${collectionNames.length} collection(s) · ${(json.length/1024).toFixed(1)} KB</span><br>
+          <span style="font-size:11px;color:var(--text3)">File: ${a.download} · Save this to your OneDrive backup folder</span>
+        </div>`;
+    }
+
+    // Log the backup
+    try {
+      await db.collection('sync_log').add({
+        userId: CU.uid, userName: CD.name,
+        action: 'data_backup',
+        details: `Exported ${totalDocs} docs from: ${collectionNames.join(', ')}`,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch(e) { /* silent */ }
+
+    toast(`✓ Backup downloaded — ${totalDocs} records`);
+
+  } catch(e) {
+    if (statusEl) statusEl.innerHTML = `<div style="background:var(--danger-l);border:1px solid #FECACA;border-radius:var(--r);padding:10px 14px;font-size:13px;color:var(--danger)">Error: ${esc(e.message)}</div>`;
+    toast('Backup failed: ' + e.message, 'err');
+  } finally {
+    if (btn) { btn.textContent = 'Download Full Backup (JSON)'; btn.disabled = false; }
+  }
+}
+
+function cleanForExport(data) {
+  // Recursively convert Firestore special types to plain JS
+  if (data === null || data === undefined) return data;
+  if (typeof data !== 'object') return data;
+  if (data.toDate && typeof data.toDate === 'function') {
+    // Firestore Timestamp
+    return data.toDate().toISOString();
+  }
+  if (Array.isArray(data)) return data.map(cleanForExport);
+  const result = {};
+  Object.entries(data).forEach(([k, v]) => { result[k] = cleanForExport(v); });
+  return result;
+}
+
+function previewRestore(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const nameEl = document.getElementById('restore-filename');
+  const previewEl = document.getElementById('restore-preview');
+  if (nameEl) nameEl.textContent = file.name;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const backup = JSON.parse(e.target.result);
+      const meta = backup.metadata || {};
+      const collections = Object.keys(backup.data || {});
+      const totalDocs = collections.reduce((sum, col) => {
+        return sum + Object.keys(backup.data[col] || {}).length;
+      }, 0);
+
+      if (previewEl) {
+        previewEl.style.display = 'block';
+        previewEl.innerHTML = `
+          <div style="background:var(--warn-l);border:1px solid #FDE68A;border-radius:var(--r);padding:14px 16px">
+            <div style="font-size:13px;font-weight:700;color:var(--warn);margin-bottom:10px">⚠ Restore Preview — Review before proceeding</div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.8;margin-bottom:12px">
+              <div><strong>Exported:</strong> ${esc(meta.exportedAt||'Unknown')}</div>
+              <div><strong>Exported by:</strong> ${esc(meta.exportedBy||'Unknown')}</div>
+              <div><strong>Collections:</strong> ${esc(collections.join(', '))}</div>
+              <div><strong>Total records:</strong> ${totalDocs}</div>
+            </div>
+            ${collections.map(col => {
+              const count = Object.keys(backup.data[col]||{}).length;
+              return `<div style="font-size:12px;padding:4px 0;border-bottom:1px solid #FDE68A">
+                <strong>${esc(col)}</strong>: ${count} documents
+              </div>`;
+            }).join('')}
+            <div style="margin-top:14px;display:flex;gap:8px">
+              <button class="btn danger" onclick="confirmRestore(${JSON.stringify(JSON.stringify(backup)).slice(0,10)})" 
+                onclick="restoreFromBackup(this._backup)" 
+                style="cursor:pointer"
+                data-backup='${JSON.stringify(backup).replace(/'/g,"&#39;")}'>
+                ⚠ Restore This Backup
+              </button>
+              <button class="btn" onclick="document.getElementById('restore-preview').style.display='none'">Cancel</button>
+            </div>
+            <div style="font-size:11px;color:var(--danger);margin-top:8px;font-weight:500">Warning: Restoring will overwrite current data in these collections. This cannot be undone.</div>
+          </div>`;
+
+        // Attach the full backup to the restore button
+        const restoreBtn = previewEl.querySelector('[data-backup]');
+        if (restoreBtn) {
+          restoreBtn.onclick = () => restoreFromData(backup);
+        }
+      }
+    } catch(e) {
+      if (previewEl) {
+        previewEl.style.display = 'block';
+        previewEl.innerHTML = `<div style="background:var(--danger-l);border:1px solid #FECACA;border-radius:var(--r);padding:10px 14px;font-size:13px;color:var(--danger)">Invalid backup file: ${esc(e.message)}</div>`;
+      }
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function restoreFromData(backup) {
+  if (!confirm('⚠️ This will overwrite existing data. Are you absolutely sure?')) return;
+  if (!confirm('Second confirmation: this CANNOT be undone. Proceed with restore?')) return;
+
+  const statusEl = document.getElementById('backup-status');
+  if (statusEl) { statusEl.style.display='block'; statusEl.innerHTML='<div style="font-size:12px;color:var(--text2)">Restoring…</div>'; }
+
+  try {
+    const collections = Object.keys(backup.data || {});
+    let totalRestored = 0;
+
+    for (const colName of collections) {
+      const docs = backup.data[colName];
+      if (!docs || typeof docs !== 'object') continue;
+      const entries = Object.entries(docs);
+      if (statusEl) statusEl.innerHTML = `<div style="font-size:12px;color:var(--text2)">Restoring ${colName} (${entries.length} docs)…</div>`;
+
+      // Batch write in groups of 500 (Firestore limit)
+      for (let i = 0; i < entries.length; i += 400) {
+        const batch = db.batch();
+        entries.slice(i, i+400).forEach(([docId, data]) => {
+          const ref = db.collection(colName).doc(docId);
+          batch.set(ref, data);
+        });
+        await batch.commit();
+        totalRestored += Math.min(400, entries.length - i);
+      }
+    }
+
+    if (statusEl) statusEl.innerHTML = `
+      <div style="background:var(--success-l);border:1px solid #A7F3D0;border-radius:var(--r);padding:10px 14px;font-size:13px">
+        <strong style="color:var(--success)">✓ Restore complete</strong><br>
+        <span style="font-size:12px;color:var(--text2)">${totalRestored} documents restored across ${collections.length} collection(s)</span>
+      </div>`;
+    toast(`✓ Restored ${totalRestored} records`);
+
+  } catch(e) {
+    if (statusEl) statusEl.innerHTML = `<div style="background:var(--danger-l);border:1px solid #FECACA;border-radius:var(--r);padding:10px 14px;font-size:13px;color:var(--danger)">Restore failed: ${esc(e.message)}</div>`;
+    toast('Restore failed: ' + e.message, 'err');
+  }
+}
+
 async function renderAdmin() {
   const ca = document.getElementById('content-area');
   if (CD.role !== 'admin') { ca.innerHTML='<div class="empty">Access denied</div>'; return; }
@@ -2319,7 +2644,47 @@ async function renderAdmin() {
         <button class="btn" onclick="updateUserProfile()">Update Existing Profile</button>
       </div>
       <div id="nu-result" style="margin-top:12px;display:none"></div>
-    </div>`;
+    </div>
+
+    <div class="card" style="margin-top:16px;border-top:3px solid var(--swl-green)">
+      <div class="card-header">
+        <div class="card-title">💾 Data Backup</div>
+        <span class="badge success">Admin only</span>
+      </div>
+      <p style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:16px;background:var(--success-l);padding:10px 12px;border-radius:var(--r);border:1px solid #A7F3D0">
+        Downloads a complete backup of all your data — users, weekly submissions, weekly items, and sync logs — as a single JSON file.
+        Save this file to your OneDrive backup folder. <strong>Run this weekly or before making any major changes.</strong>
+      </p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn primary" onclick="backupAllData()" id="backup-btn">
+          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download Full Backup (JSON)
+        </button>
+        <button class="btn" onclick="backupCollections(['weekly_submissions'],'SWL_Submissions_Backup')">
+          Submissions Only
+        </button>
+        <button class="btn" onclick="backupCollections(['users'],'SWL_Users_Backup')">
+          Users Only
+        </button>
+      </div>
+      <div id="backup-status" style="margin-top:12px;display:none"></div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Restore from backup</div>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6">
+          To restore data: select a previously downloaded JSON backup file. 
+          <strong style="color:var(--danger)">Warning: this will overwrite existing data in the selected collections.</strong>
+        </p>
+        <div style="display:flex;gap:10px;align-items:center">
+          <label class="btn" style="cursor:pointer">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Select Backup File
+            <input type="file" accept=".json" style="display:none" onchange="previewRestore(this)">
+          </label>
+          <span id="restore-filename" style="font-size:12px;color:var(--text3)">No file selected</span>
+        </div>
+        <div id="restore-preview" style="display:none;margin-top:12px"></div>
+      </div>
+    </div>\`;
 }
 
 async function uploadUserPhoto(uid, input) {
