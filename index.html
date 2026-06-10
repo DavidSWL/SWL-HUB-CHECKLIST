@@ -54,12 +54,7 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 /* ═══════════════════════════════════════
    APP LAYOUT
 ═══════════════════════════════════════ */
-#login-wrap{
-  position:fixed;inset:0;background:var(--swl-green);
-  display:flex;align-items:center;justify-content:center;
-  z-index:1000;transition:opacity .3s,visibility .3s;
-}
-#login-wrap.hidden{opacity:0;visibility:hidden;pointer-events:none}
+/* login-wrap handled by scene CSS below */
 
 .app{display:flex;height:100vh;overflow:hidden}
 .sidebar{
@@ -342,13 +337,13 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 }
 
 /* ════ TIME-OF-DAY SCENE ════ */
-#login-wrap { position:fixed;inset:0;overflow:hidden; }
+#login-wrap { position:fixed;inset:0;overflow:hidden;background:#0E4C2D; }
 #login-wrap.hidden { display:none; }
 .ls-scene {
   position:absolute;inset:0;
   transition:background 3s ease, filter 3s ease;
 }
-.ls-scene.dawn      { background:linear-gradient(180deg,#12103a 0%,#3d1f5a 12%,#8a3455 24%,#c45c30 34%,#e8904a 44%,#f0c060 54%,#8ac5e8 68%,#b8dcf0 82%,#cce8aa 92%,#4a8030 100%); }
+.ls-scene.dawn      { background:linear-gradient(180deg,#12103a 0%,#3d1f5a 12%,#8a3455 24%,#c45c30 34%,#e8904a 44%,#f0c060 54%,#8ac5e8 68%,#b8dcf0 82%,#cce8aa 92%,#4a8030 100%) !important; }
 .ls-scene.morning   { background:linear-gradient(180deg,#4888c0 0%,#72b4e4 22%,#a4d4f4 44%,#c4e8f4 62%,#d4eec8 78%,#a4d468 90%,#5a9828 100%); }
 .ls-scene.midday    { background:linear-gradient(180deg,#1868bc 0%,#3888d8 20%,#68b4ec 42%,#a4d8f8 58%,#cceec0 74%,#88c448 88%,#4a8822 100%); }
 .ls-scene.afternoon { background:linear-gradient(180deg,#2868a8 0%,#488cc8 22%,#78b6e8 44%,#b4d6ee 62%,#d4e8b8 78%,#8abc48 90%,#4a8822 100%); }
@@ -656,7 +651,7 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
       <div class="ls-bird ls-b3"></div>
     </div>
     <!-- Trees drawn by JS on canvas (no SVG blobs) -->
-    <canvas id="ls-canvas" style="position:absolute;bottom:22%;left:0;right:0;width:100%;pointer-events:none;"></canvas>
+    <canvas id="ls-canvas" style="position:absolute;bottom:0;left:0;right:0;width:100%;pointer-events:none;"></canvas>
     <div class="ls-grass-field"  id="ls-grass"></div>
     <div class="ls-flowers-layer" id="ls-flowers"></div>
     <div class="ls-ground"><div class="ls-ground-base"></div><div class="ls-ground-top"></div></div>
@@ -3401,7 +3396,7 @@ function initLoginScene(){
   // Canvas trees — draw 3 trees + bushes using canvas API
   const canvas=document.getElementById('ls-canvas');
   if(!canvas)return;
-  const W=window.innerWidth,H=Math.round(window.innerHeight*0.4);
+  const W=window.innerWidth,H=window.innerHeight;
   canvas.width=W;canvas.height=H;
   const ctx=canvas.getContext('2d');
   canvas.style.height=H+'px';
@@ -3409,7 +3404,7 @@ function initLoginScene(){
   // Draw a tree at position x (0-1 of width), height h, trunk width tw
   function drawTree(xRatio,treeH,tw,leafDark,leafMid,leafBright,delay){
     setTimeout(()=>{
-      const x=W*xRatio,baseY=H;
+      const x=W*xRatio,baseY=groundY;
       // Trunk
       ctx.strokeStyle='#6b4423';ctx.lineWidth=tw;ctx.lineCap='round';
       ctx.beginPath();ctx.moveTo(x,baseY);
@@ -3442,27 +3437,29 @@ function initLoginScene(){
   // Draw a bush at x,y with radius r
   function drawBush(cx2,by,r,c1,c2,c3,delay){
     setTimeout(()=>{
-      [[r*.95,by,c1],[r*.75,by-r*.15,c2],[r*.55,by-r*.28,c3],[r*.38,by-r*.42,c3]].forEach(([rx,y,col])=>{ctx.fillStyle=col;ctx.beginPath();ctx.ellipse(cx2,y,rx,rx*.62,0,0,Math.PI*2);ctx.fill();});
-      // Side bumps
-      ctx.fillStyle=c1;[[cx2-r*.6,by-r*.1,r*.35],[cx2+r*.55,by-r*.08,r*.32]].forEach(([bx,by2,br])=>{ctx.beginPath();ctx.arc(bx,by2,br,0,Math.PI*2);ctx.fill();});
+      const by2=groundY;
+      [[r*.95,by2,c1],[r*.75,by2-r*.15,c2],[r*.55,by2-r*.28,c3],[r*.38,by2-r*.42,c3]].forEach(([rx,y,col])=>{ctx.fillStyle=col;ctx.beginPath();ctx.ellipse(cx2,y,rx,rx*.62,0,0,Math.PI*2);ctx.fill();});
+      ctx.fillStyle=c1;[[cx2-r*.6,by2-r*.1,r*.35],[cx2+r*.55,by2-r*.08,r*.32]].forEach(([bx,by3,br])=>{ctx.beginPath();ctx.arc(bx,by3,br,0,Math.PI*2);ctx.fill();});
     },delay);
   }
 
-  const treeBase=H;
+  // Ground level = 78% down the canvas (22% from bottom is the ground)
+  const groundY = H * 0.78;
+  // Tree heights relative to canvas height
   // 3 main foreground trees
-  drawTree(.08, H*.92, 22,'#0f2a0f','#1e4a1e','#3a8a3a', 500);
-  drawTree(.50, H*1.0, 28,'#0d280d','#1a451a','#348a34', 200);
-  drawTree(.92, H*.88, 20,'#102a10','#1e481e','#388838', 800);
+  drawTree(.08, H*.55, 22,'#0f2a0f','#1e4a1e','#3a8a3a', 500);
+  drawTree(.50, H*.62, 28,'#0d280d','#1a451a','#348a34', 200);
+  drawTree(.92, H*.52, 20,'#102a10','#1e481e','#388838', 800);
   // 2 mid-ground trees (smaller)
-  drawTree(.26, H*.72, 15,'#122812','#1c3c1c','#2e6e2e',1400);
-  drawTree(.74, H*.68, 14,'#122a12','#1c3e1c','#2c6c2c',1600);
-  // Far background trees (very small)
-  drawTree(.15, H*.48, 9,'#1a301a','#264026','#386838',2000);
-  drawTree(.62, H*.44, 8,'#1a301a','#264026','#386838',2200);
-  drawTree(.85, H*.50, 9,'#1a301a','#264026','#386838',2400);
+  drawTree(.26, H*.42, 15,'#122812','#1c3c1c','#2e6e2e',1400);
+  drawTree(.74, H*.40, 14,'#122a12','#1c3e1c','#2c6c2c',1600);
+  // Far background trees (very small, sit on hills)
+  drawTree(.15, H*.28, 9,'#1a301a','#264026','#386838',2000);
+  drawTree(.62, H*.26, 8,'#1a301a','#264026','#386838',2200);
+  drawTree(.85, H*.30, 9,'#1a301a','#264026','#386838',2400);
 
   // Bushes scattered across base
-  const bY=H;
+  const bY=groundY;
   const bd=['#1a4a1a','#246024','#2d7a2d'],bm=['#1e521e','#2a6a2a','#328232'],bs=['#205220','#2a6a2a','#368236'];
   [[.02,bY,38,bd],[.18,bY,28,bm],[.30,bY,22,bs],[.38,bY,32,bd],[.48,bY,24,bm],
    [.58,bY,28,bs],[.68,bY,34,bd],[.78,bY,26,bm],[.88,bY,22,bs],[.96,bY,30,bd],
