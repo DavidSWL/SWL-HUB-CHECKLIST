@@ -1223,6 +1223,7 @@ function renderBadgeChips(ids){
 
 async function renderDashboard() {
   const ca = document.getElementById('content-area');
+  if (!ca) return;
   const branch = getUserBranch();
   const wk = weekKey(CW);
   const firstName = CD.name.split(' ')[0];
@@ -1232,155 +1233,135 @@ async function renderDashboard() {
   const isLA  = branch === 'LA';
   const accentColor = isOC ? '#FC6020' : isLA ? '#1E88E5' : '#4CAF50';
   const accentBg    = isOC ? 'rgba(200,75,0,.1)' : isLA ? 'rgba(0,80,170,.1)' : 'rgba(56,142,60,.09)';
-  const accentBorder= isOC ? '#FC6020' : isLA ? '#1E88E5' : '#4CAF50';
   const primaryBtn  = isOC ? '#C84B00' : isLA ? '#0D47A1' : '#1B5E20';
 
   let subQuery = db.collection('weekly_submissions').where('weekStart','==',wk);
   if (branch && branch !== 'ALL') subQuery = subQuery.where('branch','==',branch);
+
   const [subSnap, mySubSnap] = await Promise.all([
     subQuery.get(),
     db.collection('weekly_submissions').where('userId','==',CU.uid).where('weekStart','==',wk).get()
   ]);
 
-  const submitted    = !mySubSnap.empty && mySubSnap.docs[0].data().status === 'submitted';
-  const submittedTs  = submitted ? (mySubSnap.docs[0].data().submittedAt?.toDate?.()?.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) || '') : '';
-  const teamMembers  = TEAM.filter(t => !branch || branch === 'ALL' || t.branch === branch);
-  const teamCount    = teamMembers.length;
-  const submittedCount = subSnap.docs.filter(d => d.data().status === 'submitted').length;
-  const pendingCount = teamCount - submittedCount;
+  const submitted     = !mySubSnap.empty && mySubSnap.docs[0]?.data().status === 'submitted';
+  const teamMembers   = TEAM.filter(t => !branch || branch === 'ALL' || t.branch === branch);
+  const teamCount     = teamMembers.length;
+  const submittedCount= subSnap.docs.filter(d => d.data().status === 'submitted').length;
+  const pendingCount  = teamCount - submittedCount;
   const pct = teamCount ? Math.round(submittedCount/teamCount*100) : 0;
 
-  // Load badges
+  // Badges
   const userBadges = await computeBadges(CU.uid, CD.role);
 
   // Day banner
-  const dayBanner = isFriday()
-    ? `<div style="background:rgba(217,119,6,.12);border:1px solid rgba(217,119,6,.25);border-left:3px solid #D97706;border-radius:var(--rl);padding:11px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px">
-        <span style="font-size:16px">📋</span>
-        <div><div style="font-size:12px;font-weight:700;color:#FBBF24">It's Friday — complete your accountability review</div>
-        <div style="font-size:11px;color:#888;margin-top:1px">Update each weekly item with its final status before end of day.</div></div>
-        <button class="btn sm" onclick="navigateTo('items')" style="margin-left:auto">View Items →</button>
-       </div>`
-    : isMonday()
-    ? `<div style="background:rgba(74,138,48,.1);border:1px solid rgba(74,138,48,.22);border-left:3px solid #4CAF50;border-radius:var(--rl);padding:11px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px">
-        <span style="font-size:16px">🌅</span>
-        <div><div style="font-size:12px;font-weight:700;color:#7DC855">New week — submit your check-in</div>
-        <div style="font-size:11px;color:#888;margin-top:1px">Start the week by completing your role's check-in form.</div></div>
-        <button class="btn primary sm" onclick="navigateTo('checkin-${getFirstCheckinRole()}')" style="margin-left:auto">Check In →</button>
-       </div>` : '';
+  let dayBanner = '';
+  if (isFriday()) {
+    dayBanner = '<div style="background:rgba(217,119,6,.12);border:1px solid rgba(217,119,6,.25);border-left:3px solid #D97706;border-radius:8px;padding:11px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px">'
+      + '<span style="font-size:16px">📋</span>'
+      + '<div><div style="font-size:12px;font-weight:700;color:#FBBF24">Friday — complete your accountability review</div>'
+      + '<div style="font-size:11px;color:#888;margin-top:1px">Update weekly items before end of day.</div></div>'
+      + '<button class="btn sm" onclick="navigateTo('items')" style="margin-left:auto">View Items →</button></div>';
+  } else if (isMonday()) {
+    dayBanner = '<div style="background:rgba(74,138,48,.1);border:1px solid rgba(74,138,48,.22);border-left:3px solid #4CAF50;border-radius:8px;padding:11px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px">'
+      + '<span style="font-size:16px">🌅</span>'
+      + '<div><div style="font-size:12px;font-weight:700;color:#7DC855">New week — submit your check-in</div>'
+      + '<div style="font-size:11px;color:#888;margin-top:1px">Complete your role check-in to start the week.</div></div>'
+      + '<button class="btn primary sm" onclick="navigateTo('checkin-' + getFirstCheckinRole() + '')" style="margin-left:auto">Check In →</button></div>';
+  }
 
   if (!isMgr) {
-    // ── EMPLOYEE DASHBOARD ──────────────────────────────
-    ca.innerHTML = `
-      ${dayBanner}
-      <div style="margin-bottom:18px">
-        <div style="font-size:20px;font-weight:700;color:#F0F0F0;letter-spacing:-.3px;margin-bottom:2px">${greet()}, ${esc(firstName)}!</div>
-        <div style="font-size:12px;color:#888;margin-bottom:8px">${ROLES[CD.role]?.label||CD.role} &middot; ${branchLabel} &middot; ${fmtWeek(CW)}</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-          ${submitted
-            ? `<span class="badge success">✓ Submitted</span><span style="font-size:10px;color:#555;margin-top:3px">${submittedTs}</span>`
-            : `<span class="badge warn">⚠ Check-in pending</span>`}
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:5px">${renderBadgeChips(userBadges)}</div>
-      </div>
+    // ── EMPLOYEE DASHBOARD ──
+    const submittedLabel = submitted
+      ? '<span class="badge success">✓ Submitted this week</span>'
+      : '<span class="badge warn">⚠ Check-in pending</span>';
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
-        <div onclick="navigateTo('checkin-${getFirstCheckinRole()}')" style="background:${primaryBtn};border:1px solid ${primaryBtn};border-radius:10px;padding:13px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
-          <div style="width:34px;height:34px;border-radius:8px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📋</div>
-          <div><div style="font-size:11px;font-weight:600;color:#fff;margin-bottom:2px">Monday check-in</div><div style="font-size:10px;color:rgba(255,255,255,.6)">${submitted?'Submitted this week':'Submit now'}</div></div>
-        </div>
-        <div onclick="navigateTo('friday-recap')" style="background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:13px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
-          <div style="width:34px;height:34px;border-radius:8px;background:rgba(217,119,6,.14);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📅</div>
-          <div><div style="font-size:11px;font-weight:600;color:#E0E0E0;margin-bottom:2px">Friday recap</div><div style="font-size:10px;color:#666">End-of-week review</div></div>
-        </div>
-        <div onclick="navigateTo('my-history')" style="background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:13px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
-          <div style="width:34px;height:34px;border-radius:8px;background:rgba(23,95,165,.14);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📚</div>
-          <div><div style="font-size:11px;font-weight:600;color:#E0E0E0;margin-bottom:2px">My submissions</div><div style="font-size:10px;color:#666">View history</div></div>
-        </div>
-        <div onclick="navigateTo('items')" style="background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:13px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
-          <div style="width:34px;height:34px;border-radius:8px;background:${accentBg};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">✅</div>
-          <div><div style="font-size:11px;font-weight:600;color:#E0E0E0;margin-bottom:2px">Weekly deadlines</div><div style="font-size:10px;color:#666">View &amp; track items</div></div>
-        </div>
-        <div onclick="navigateTo('summary')" style="background:var(--card-bg);border:1px solid var(--card-border);border-top:2px solid ${accentColor};border-radius:10px;padding:13px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
-          <div style="width:34px;height:34px;border-radius:8px;background:${accentBg};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">👥</div>
-          <div><div style="font-size:11px;font-weight:600;color:#E0E0E0;margin-bottom:2px">Team Monday recap</div><div style="font-size:10px;color:#666">${branchLabel} overview</div></div>
-        </div>
-        <div onclick="navigateTo('friday-summary')" style="background:var(--card-bg);border:1px solid var(--card-border);border-top:2px solid ${accentColor};border-radius:10px;padding:13px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">
-          <div style="width:34px;height:34px;border-radius:8px;background:${accentBg};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📊</div>
-          <div><div style="font-size:11px;font-weight:600;color:#E0E0E0;margin-bottom:2px">Friday summary</div><div style="font-size:10px;color:#666">${branchLabel} end-of-week</div></div>
-        </div>
-      </div>
+    const actionCard = (icon, iconBg, title, sub, onclick, topBorder) => {
+      const border = topBorder ? 'border-top:2px solid ' + topBorder + ';' : '';
+      return '<div onclick="' + onclick + '" style="background:var(--card-bg);border:1px solid var(--card-border);' + border + 'border-radius:10px;padding:13px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">'
+        + '<div style="width:34px;height:34px;border-radius:8px;background:' + iconBg + ';display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">' + icon + '</div>'
+        + '<div><div style="font-size:11px;font-weight:600;color:#E0E0E0;margin-bottom:2px">' + title + '</div>'
+        + '<div style="font-size:10px;color:#666">' + sub + '</div></div></div>';
+    };
 
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-header"><div class="card-title">My performance — Week ${getWeekNum(CW)}</div></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;padding-top:4px">
-          <div><div style="font-size:10px;color:#555;margin-bottom:3px">On-time rate</div><div style="font-size:20px;font-weight:700;color:#4a8a30" id="perf-ontime">—%</div><div class="progress-bar" style="margin-top:5px"><div class="progress-fill green" id="perf-bar-ot" style="width:0%"></div></div></div>
-          <div><div style="font-size:10px;color:#555;margin-bottom:3px">Submission streak</div><div style="font-size:20px;font-weight:700;color:${accentColor}" id="perf-streak">—</div><div class="progress-bar" style="margin-top:5px"><div class="progress-fill ${isOC?'oc':isLA?'la':'green'}" id="perf-bar-st" style="width:0%"></div></div></div>
-          <div><div style="font-size:10px;color:#555;margin-bottom:3px">Items done</div><div style="font-size:20px;font-weight:700;color:#185FA5" id="perf-items">—</div><div class="progress-bar" style="margin-top:5px"><div class="progress-fill la" id="perf-bar-it" style="width:0%"></div></div></div>
-        </div>
-      </div>
+    const primaryCard = '<div onclick="navigateTo('checkin-' + getFirstCheckinRole() + '')" style="background:' + primaryBtn + ';border:1px solid ' + primaryBtn + ';border-radius:10px;padding:13px 14px;display:flex;align-items:center;gap:10px;cursor:pointer">'
+      + '<div style="width:34px;height:34px;border-radius:8px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📋</div>'
+      + '<div><div style="font-size:11px;font-weight:600;color:#fff;margin-bottom:2px">Monday check-in</div>'
+      + '<div style="font-size:10px;color:rgba(255,255,255,.6)">' + (submitted ? 'Submitted this week' : 'Submit now') + '</div></div></div>';
 
-      <div class="card warn-card" id="dash-carryover-card">
-        <div class="card-header"><div class="card-title">⚠ Carry-Over Items</div><button class="btn sm" onclick="navigateTo('items')">View all →</button></div>
-        <div id="dash-co-list"><div class="empty">Loading…</div></div>
-      </div>`;
+    ca.innerHTML = dayBanner
+      + '<div style="margin-bottom:18px">'
+      +   '<div style="font-size:20px;font-weight:700;color:#F0F0F0;letter-spacing:-.3px;margin-bottom:2px">' + greet() + ', ' + esc(firstName) + '!</div>'
+      +   '<div style="font-size:12px;color:#888;margin-bottom:8px">' + (ROLES[CD.role]?.label||CD.role) + ' · ' + branchLabel + ' · ' + fmtWeek(CW) + '</div>'
+      +   '<div style="margin-bottom:8px">' + submittedLabel + '</div>'
+      +   '<div style="display:flex;flex-wrap:wrap;gap:5px">' + renderBadgeChips(userBadges) + '</div>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">'
+      +   primaryCard
+      +   actionCard('📅','rgba(217,119,6,.14)','Friday recap','End-of-week review',"navigateTo('friday-recap')","")
+      +   actionCard('📚','rgba(23,95,165,.14)','My submissions','View history',"navigateTo('my-history')","")
+      +   actionCard('✅',accentBg,'Weekly deadlines','View & track items',"navigateTo('items')","")
+      +   actionCard('👥',accentBg,'Team Monday recap',branchLabel+' overview',"navigateTo('summary')",accentColor)
+      +   actionCard('📊',accentBg,'Friday summary',branchLabel+' end-of-week',"navigateTo('friday-summary')",accentColor)
+      + '</div>'
+      + '<div class="card" style="margin-bottom:12px">'
+      +   '<div class="card-header"><div class="card-title">My performance — Week ' + getWeekNum(CW) + '</div></div>'
+      +   '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;padding-top:4px">'
+      +     '<div><div style="font-size:10px;color:#555;margin-bottom:3px">On-time rate</div><div style="font-size:20px;font-weight:700;color:#4a8a30" id="perf-ontime">—</div><div class="progress-bar" style="margin-top:5px"><div class="progress-fill green" id="perf-bar-ot" style="width:0%"></div></div></div>'
+      +     '<div><div style="font-size:10px;color:#555;margin-bottom:3px">Submission streak</div><div style="font-size:20px;font-weight:700;color:' + accentColor + '" id="perf-streak">—</div><div class="progress-bar" style="margin-top:5px"><div class="progress-fill ' + (isOC?'oc':isLA?'la':'green') + '" id="perf-bar-st" style="width:0%"></div></div></div>'
+      +     '<div><div style="font-size:10px;color:#555;margin-bottom:3px">Items done</div><div style="font-size:20px;font-weight:700;color:#185FA5" id="perf-items">—</div><div class="progress-bar" style="margin-top:5px"><div class="progress-fill la" id="perf-bar-it" style="width:0%"></div></div></div>'
+      +   '</div>'
+      + '</div>'
+      + '<div class="card warn-card" id="dash-carryover-card">'
+      +   '<div class="card-header"><div class="card-title">⚠ Carry-Over Items</div><button class="btn sm" onclick="navigateTo('items')">View all →</button></div>'
+      +   '<div id="dash-co-list"><div class="empty">Loading…</div></div>'
+      + '</div>';
 
     loadCarryoverForDash(branch);
     loadMyRecentHistory();
     loadMyPerformance();
 
   } else {
-    // ── MANAGER DASHBOARD ──────────────────────────────
-    ca.innerHTML = `
-      ${dayBanner}
-      <div style="margin-bottom:16px">
-        <div style="font-size:20px;font-weight:700;color:#F0F0F0;letter-spacing:-.3px;margin-bottom:2px">${greet()}, ${esc(firstName)}!</div>
-        <div style="font-size:12px;color:#888;margin-bottom:8px">${ROLES[CD.role]?.label||CD.role} &middot; ${branchLabel} &middot; ${fmtWeek(CW)}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">${renderBadgeChips(userBadges)}</div>
-        <div style="background:${accentBg};border:1px solid rgba(255,255,255,.08);border-left:3px solid ${accentBorder};border-radius:8px;padding:10px 13px;display:flex;align-items:flex-start;gap:9px">
-          <div style="width:26px;height:26px;border-radius:50%;background:${primaryBtn};display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0">👥</div>
-          <div style="font-size:12px;color:#DCDCDC;line-height:1.5">
-            ${pendingCount > 0
-              ? `<strong style="color:#fff">${submittedCount} of ${teamCount}</strong> team members submitted this week — <strong style="color:#FBBF24">${pendingCount} still pending</strong>. ${pendingCount > 0 ? `${teamMembers.filter(t => !subSnap.docs.find(d=>d.data().userId===t.uid && d.data().status==='submitted')).map(t=>t.name.split(' ')[0]).slice(0,2).join(', ')} ${pendingCount>2?'and others ':''} have not submitted.` : ''}`
-              : `<strong style="color:#7DC855">All ${teamCount} team members</strong> have submitted this week. Great week!`}
-          </div>
-        </div>
-      </div>
+    // ── MANAGER DASHBOARD ──
+    const pendingNames = teamMembers
+      .filter(t => !subSnap.docs.find(d => d.data().userId===t.uid && d.data().status==='submitted'))
+      .map(t => t.name.split(' ')[0]).slice(0,3).join(', ');
 
-      <div class="stats-grid" style="margin-bottom:14px">
-        <div class="stat-card ${isOC?'oc-stat':isLA?'la-stat':'ok-stat'}" style="border-top-color:${accentColor}">
-          <div class="stat-num">${submittedCount}/${teamCount}</div><div class="stat-lbl">Team submitted</div></div>
-        <div class="stat-card warn-stat" style="border-top-color:#D97706">
-          <div class="stat-num">${pendingCount}</div><div class="stat-lbl">Pending</div></div>
-        <div class="stat-card" style="border-top-color:#C84B00">
-          <div class="stat-num" id="ds-carryover">—</div><div class="stat-lbl">Carry-overs</div></div>
-        <div class="stat-card" style="border-top-color:#185FA5">
-          <div class="stat-num">W${getWeekNum(CW)}</div><div class="stat-lbl">Work week</div></div>
-      </div>
+    const nudgeMsg = pendingCount > 0
+      ? '<strong style="color:#fff">' + submittedCount + ' of ' + teamCount + '</strong> team members submitted — '
+        + '<strong style="color:#FBBF24">' + pendingCount + ' pending</strong>'
+        + (pendingNames ? ': ' + pendingNames : '') + '.'
+      : '<strong style="color:#7DC855">All ' + teamCount + ' team members</strong> have submitted this week!';
 
-      <div style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:11px;color:#888">Team submission progress — ${branchLabel}</span>
-          <span style="font-size:11px;font-weight:700;color:#E0E0E0">${pct}%</span>
-        </div>
-        <div class="progress-bar" style="height:6px"><div class="progress-fill ${isOC?'oc':isLA?'la':'green'}" style="width:${pct}%"></div></div>
-      </div>
-
-      <div class="cards-row">
-        <div class="card warn-card" id="dash-carryover-card">
-          <div class="card-header"><div class="card-title">⚠ Carry-Over Items</div><button class="btn sm" onclick="navigateTo('items')">View all →</button></div>
-          <div id="dash-co-list"><div class="empty">Loading…</div></div>
-        </div>
-        <div class="card">
-          <div class="card-header"><div class="card-title">👥 Team Check-In Status</div></div>
-          <div id="dash-team-list"><div class="empty">Loading…</div></div>
-        </div>
-      </div>`;
+    ca.innerHTML = dayBanner
+      + '<div style="margin-bottom:16px">'
+      +   '<div style="font-size:20px;font-weight:700;color:#F0F0F0;letter-spacing:-.3px;margin-bottom:2px">' + greet() + ', ' + esc(firstName) + '!</div>'
+      +   '<div style="font-size:12px;color:#888;margin-bottom:8px">' + (ROLES[CD.role]?.label||CD.role) + ' · ' + branchLabel + ' · ' + fmtWeek(CW) + '</div>'
+      +   '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">' + renderBadgeChips(userBadges) + '</div>'
+      +   '<div style="background:' + accentBg + ';border:1px solid rgba(255,255,255,.08);border-left:3px solid ' + accentColor + ';border-radius:8px;padding:10px 13px;display:flex;align-items:flex-start;gap:9px">'
+      +     '<div style="width:26px;height:26px;border-radius:50%;background:' + primaryBtn + ';display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0">👥</div>'
+      +     '<div style="font-size:12px;color:#DCDCDC;line-height:1.5">' + nudgeMsg + '</div>'
+      +   '</div>'
+      + '</div>'
+      + '<div class="stats-grid" style="margin-bottom:14px">'
+      +   '<div class="stat-card ' + (isOC?'oc-stat':isLA?'la-stat':'ok-stat') + '" style="border-top-color:' + accentColor + '"><div class="stat-num">' + submittedCount + '/' + teamCount + '</div><div class="stat-lbl">Submitted</div></div>'
+      +   '<div class="stat-card warn-stat"><div class="stat-num">' + pendingCount + '</div><div class="stat-lbl">Pending</div></div>'
+      +   '<div class="stat-card" style="border-top-color:#C84B00"><div class="stat-num" id="ds-carryover">—</div><div class="stat-lbl">Carry-overs</div></div>'
+      +   '<div class="stat-card" style="border-top-color:#185FA5"><div class="stat-num">W' + getWeekNum(CW) + '</div><div class="stat-lbl">Work week</div></div>'
+      + '</div>'
+      + '<div style="margin-bottom:12px">'
+      +   '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:11px;color:#888">Team progress — ' + branchLabel + '</span><span style="font-size:11px;font-weight:700;color:#E0E0E0">' + pct + '%</span></div>'
+      +   '<div class="progress-bar" style="height:6px"><div class="progress-fill ' + (isOC?'oc':isLA?'la':'green') + '" style="width:' + pct + '%"></div></div>'
+      + '</div>'
+      + '<div class="cards-row">'
+      +   '<div class="card warn-card" id="dash-carryover-card"><div class="card-header"><div class="card-title">⚠ Carry-Over Items</div><button class="btn sm" onclick="navigateTo('items')">View all →</button></div><div id="dash-co-list"><div class="empty">Loading…</div></div></div>'
+      +   '<div class="card"><div class="card-header"><div class="card-title">👥 Team Check-In Status</div></div><div id="dash-team-list"><div class="empty">Loading…</div></div></div>'
+      + '</div>';
 
     loadCarryoverForDash(branch);
     loadTeamStatus(branch, wk);
   }
 }
+
 
 async function loadMyPerformance() {
   try {
