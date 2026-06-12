@@ -618,22 +618,22 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 
 
 
-/* ═══ GREY THEME READABILITY — all text inside dark content area ═══ */
-.content-area:not(.theme-white) {
-  color: #E0E0E0;
-}
-.content-area:not(.theme-white) p,
-.content-area:not(.theme-white) span:not(.badge):not(.badge-chip),
-.content-area:not(.theme-white) div:not(.badge):not(.badge-chip):not([style]) {
-  color: inherit;
-}
+/* ═══ GREY THEME READABILITY — status colors always visible ═══ */
+/* Status indicator colors — always visible regardless of theme */
+.status-open        { color: #60A5FA !important; }  /* Blue */
+.status-in-progress { color: #FBBF24 !important; }  /* Amber */
+.status-completed   { color: #7DC855 !important; }  /* Green */
+.status-overdue     { color: #F87171 !important; }  /* Red */
+.status-carried     { color: #C084FC !important; }  /* Purple */
+.status-draft       { color: #A0A0A0 !important; }  /* Grey */
+
+/* Dark mode: ensure text in content area is readable */
+.content-area:not(.theme-white) { color: #E0E0E0; }
 .content-area:not(.theme-white) h1,
 .content-area:not(.theme-white) h2,
 .content-area:not(.theme-white) h3 { color: #F0F0F0 !important; }
-/* Labels */
-.content-area:not(.theme-white) label { color: #A0A0A0 !important; }
+.content-area:not(.theme-white) label,
 .content-area:not(.theme-white) .fg label { color: #999 !important; }
-/* Form fields */
 .content-area:not(.theme-white) input:not([type=checkbox]):not([type=radio]),
 .content-area:not(.theme-white) select,
 .content-area:not(.theme-white) textarea {
@@ -643,58 +643,37 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 }
 .content-area:not(.theme-white) input::placeholder,
 .content-area:not(.theme-white) textarea::placeholder { color: #555 !important; }
-/* Tables */
 .content-area:not(.theme-white) table { color: #E0E0E0; }
 .content-area:not(.theme-white) th { color: #A0A0A0 !important; background: #1A1A1A !important; border-color: #333 !important; }
 .content-area:not(.theme-white) td { border-color: #2E2E2E !important; color: #D0D0D0; }
-.content-area:not(.theme-white) tr:hover td { background: #262626; }
-/* Section/card text */
-.content-area:not(.theme-white) .card-title { color: #777 !important; }
+.content-area:not(.theme-white) .card-title { color: #777 !important; text-transform:uppercase; letter-spacing:.06em; font-size:10px !important; font-weight:700 !important; }
 .content-area:not(.theme-white) .card-header { border-color: #2E2E2E !important; }
 .content-area:not(.theme-white) .section-title { color: #E0E0E0 !important; }
 .content-area:not(.theme-white) .sub-title { color: #888 !important; }
 .content-area:not(.theme-white) .empty { color: #555 !important; }
-/* Nav text */
-.nav-btn { color: rgba(255,255,255,.52) !important; }
-.nav-btn span { color: inherit !important; }
-/* Stats */
-.content-area:not(.theme-white) .stat-num { color: #F0F0F0 !important; }
-.content-area:not(.theme-white) .stat-lbl { color: #666 !important; }
-/* Progress */
+.content-area:not(.theme-white) .stat-num { color: #F0F0F0 !important; font-size:24px !important; font-weight:700 !important; }
+.content-area:not(.theme-white) .stat-lbl { color: #666 !important; font-size:9px !important; }
 .content-area:not(.theme-white) .progress-bar { background: #2E2E2E !important; }
-/* Item rows */
 .content-area:not(.theme-white) .item-row { border-color: #2E2E2E !important; }
 .content-area:not(.theme-white) .item-title { color: #E0E0E0 !important; }
 .content-area:not(.theme-white) .item-meta { color: #777 !important; }
-.content-area:not(.theme-white) .item-owner { color: #888 !important; }
-/* Settings rows */
 .content-area:not(.theme-white) .settings-row { border-color: #2E2E2E !important; }
 .content-area:not(.theme-white) .sr-name { color: #E0E0E0 !important; }
 .content-area:not(.theme-white) .sr-meta { color: #888 !important; }
-.content-area:not(.theme-white) .sr-actions .btn { background: #2A2A2A !important; border-color: #383838 !important; color: #D0D0D0 !important; }
-/* Info/success/warn boxes */
-.content-area:not(.theme-white) [style*="var(--info-l)"],
-.content-area:not(.theme-white) [style*="var(--success-l)"],
-.content-area:not(.theme-white) [style*="var(--warn-l)"] { color: #E0E0E0 !important; }
-/* Report text */
-.content-area:not(.theme-white) .rep-name { color: #E0E0E0 !important; }
-.content-area:not(.theme-white) .rep-meta { color: #888 !important; }
-/* Accountability table */
-.content-area:not(.theme-white) .tmr-name { color: #E0E0E0 !important; }
-.content-area:not(.theme-white) .tmr-meta { color: #888 !important; }
-/* Buttons in dark mode */
-.content-area:not(.theme-white) .btn:not(.primary):not(.danger) {
-  background: #2A2A2A !important;
-  border-color: #3A3A3A !important;
-  color: #D0D0D0 !important;
+.content-area:not(.theme-white) .btn:not(.primary):not(.danger):not(.warn) {
+  background: #2A2A2A !important; border-color: #3A3A3A !important; color: #D0D0D0 !important;
 }
-.content-area:not(.theme-white) .btn.primary { background: var(--swl-green) !important; color: #fff !important; }
-.content-area:not(.theme-white) .btn.danger { background: var(--danger) !important; color: #fff !important; }
-/* Top bar */
-.top-bar { background: var(--topbar-bg, #242424) !important; border-color: var(--topbar-border, #2E2E2E) !important; }
-.top-bar .tb-title { color: #E8E8E8 !important; }
-.top-bar .tb-week { color: #999 !important; background: #2C2C2C !important; border-color: #3A3A3A !important; }
-
+/* Badge status chips always readable */
+.content-area .badge.success { background:rgba(74,138,48,.2)!important; color:#7DC855!important; border:1px solid rgba(74,138,48,.3)!important; }
+.content-area .badge.warn    { background:rgba(217,119,6,.18)!important; color:#FBBF24!important; border:1px solid rgba(217,119,6,.28)!important; }
+.content-area .badge.danger  { background:rgba(220,38,38,.18)!important; color:#F87171!important; border:1px solid rgba(220,38,38,.28)!important; }
+.content-area .badge.info    { background:rgba(23,95,165,.2)!important;  color:#60A5FA!important; border:1px solid rgba(23,95,165,.28)!important; }
+/* White mode unchanged */
+.content-area.theme-white .dash-greeting{color:#111!important}
+.content-area.theme-white .stat-num{color:#111!important}
+.content-area.theme-white .card-title{color:#999!important}
+.content-area.theme-white .fg label{color:#555!important}
+.content-area.theme-white input,.content-area.theme-white select,.content-area.theme-white textarea{background:#fff!important;border-color:#ddd!important;color:#111!important}
 /* ══ DARK THEME + READABILITY ══ */
 :root{--card-bg:#242424;--card-border:#2E2E2E;--topbar-bg:#242424;--topbar-border:#2E2E2E;--content-bg:#1E1E1E;}
 .content-area{background:var(--content-bg)!important}
@@ -1177,12 +1156,10 @@ function buildSidebar() {
     }
   }
 
-  // Weekly items
+  // Weekly items — visible to managers and admin only
+  if (isManager) {
   html += `<span class="sb-section-label">Planning</span>
-    <button class="nav-btn" onclick="navigateTo('items')">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-      Weekly Items
-    </button>
+    
     <button class="nav-btn" onclick="navigateTo('monday-recap')">
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       Monday Recap
@@ -1216,8 +1193,9 @@ function buildSidebar() {
         Team Overview
       </button>`;
   }
+  } // end manager-only planning
   if (role === 'exec_viewer') {
-    html += `<span class="sb-section-label">Executive</span>
+  html += `<span class="sb-section-label">Executive</span>
       <button class="nav-btn" onclick="navigateTo('exec-dashboard')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         Executive Dashboard
@@ -1561,6 +1539,16 @@ async function renderCheckin(type) {
       </div>`:''}
     </div>
     <div id="checkin-form-body">${buildCheckinForm(type, existingData, useSpanish)}</div>
+    <div style="margin:12px 0;padding:12px;background:rgba(74,138,48,.06);border:1px solid rgba(74,138,48,.12);border-radius:8px">
+      <div style="font-size:10px;font-weight:700;color:#777;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+        <span>📋 My Weekly Items — Update Status</span>
+        <span style="font-size:10px;font-weight:400;color:#999;text-transform:none">Assigned to you this week</span>
+      </div>
+      <div id="inline-weekly-items" style="display:flex;flex-direction:column;gap:6px">
+        <div style="color:#555;font-size:12px;padding:4px;font-style:italic">Loading weekly items…</div>
+      </div>
+      <textarea id="wi-inline-notes" rows="2" placeholder="Weekly items notes — any blockers, progress, or carry-overs?" style="width:100%;margin-top:8px;padding:8px 10px;border-radius:6px;border:1px solid var(--border);font-size:12px;background:var(--surface);color:var(--text);resize:vertical"></textarea>
+    </div>
     <div class="btn-row">
       <button class="btn ${accentClass}" onclick="submitCheckin('${type}','${existingId||''}','submitted')">
         ${isSubmitted?'Update Submission':'Submit Check-In'}
@@ -2345,6 +2333,7 @@ async function renderAccountability() {
         </div>
       </div>`).join('')}
     </div>` : ''}`;
+  setTimeout(loadInlineWeeklyItems, 100);
 }
 
 async function renderItems() {
@@ -3228,6 +3217,8 @@ async function renderAdmin() {
         <button class="btn primary" onclick="showBadgePanel()">Manage Badges</button>
         <button class="btn" onclick="showAwardBadge()">Award Badge</button>
         <button class="btn" onclick="showBadgeHistory()">Badge History</button>
+        <button class="btn" onclick="showCreateBadge()">+ New Badge</button>
+        <button class="btn" style="font-size:11px" id="seed-badges-btn" onclick="seedDefaultBadges()">📚 Load Default Library</button>
       </div>
       <div id="badge-admin-content"></div>
     </div>
@@ -3532,14 +3523,63 @@ function randomSubmitMsg(){return SUBMIT_MESSAGES[Math.floor(Math.random()*SUBMI
 
 // ═══ BADGES ═══
 const BADGES={
-  on_time_5:{label:'Consistency Star',icon:'⭐',cls:'gold',desc:'5 on-time submissions'},
-  on_time_10:{label:'Reliability Champion',icon:'🏆',cls:'gold',desc:'10 on-time submissions'},
-  streak_4:{label:'4-Week Streak',icon:'🔥',cls:'purple',desc:'4 consecutive weeks'},
-  streak_8:{label:'8-Week Streak',icon:'💎',cls:'blue',desc:'8 consecutive weeks'},
-  team_contrib:{label:'Team Contributor',icon:'🤝',cls:'green',desc:'Active participant'},
-  branch_leader:{label:'Branch Leader',icon:'🌟',cls:'gold',desc:'Leadership role'},
-  rising_star:{label:'Rising Star',icon:'🌱',cls:'green',desc:'First submission made'},
-  full_week:{label:'Full Week Champion',icon:'📅',cls:'blue',desc:'Mon + Fri submitted'},
+  // ── CONSISTENCY & RELIABILITY ──
+  on_time_5:     {label:'Consistency Star',        icon:'⭐', cls:'gold',   desc:'5 on-time submissions'},
+  on_time_10:    {label:'Reliability Champion',    icon:'🏆', cls:'gold',   desc:'10 on-time submissions'},
+  on_time_20:    {label:'Dependability Legend',    icon:'💫', cls:'gold',   desc:'20 on-time submissions'},
+  streak_4:      {label:'4-Week Streak',            icon:'🔥', cls:'purple', desc:'4 consecutive weeks on time'},
+  streak_8:      {label:'8-Week Streak',            icon:'💎', cls:'blue',   desc:'8 consecutive weeks on time'},
+  streak_12:     {label:'Quarter Champion',         icon:'🎯', cls:'gold',   desc:'12 consecutive weeks on time'},
+  full_week:     {label:'Full Week Champ',          icon:'📅', cls:'blue',   desc:'Mon + Fri submitted same week'},
+  // ── PERFORMANCE ──
+  top_performer: {label:'Top Performer',           icon:'🥇', cls:'gold',   desc:'Recognized for outstanding performance'},
+  above_beyond:  {label:'Going Above & Beyond',    icon:'🚀', cls:'gold',   desc:'Exceeded expectations'},
+  outstanding:   {label:'Outstanding Performance', icon:'⭐', cls:'gold',   desc:'Outstanding work this period'},
+  excellence:    {label:'Excellence Award',         icon:'🏅', cls:'gold',   desc:'Demonstrated excellence'},
+  mvp:           {label:'MVP of the Week',          icon:'🦁', cls:'gold',   desc:'Most valuable contribution'},
+  // ── TEAMWORK ──
+  team_player:   {label:'Team Player',              icon:'🤝', cls:'green',  desc:'Consistently supports the team'},
+  team_contrib:  {label:'Team Contributor',         icon:'👥', cls:'green',  desc:'Active and positive team member'},
+  team_spirit:   {label:'Team Spirit',              icon:'🎉', cls:'green',  desc:'Boosts morale and team culture'},
+  mentor:        {label:'Mentor',                   icon:'🧑‍🏫', cls:'blue',   desc:'Guides and supports colleagues'},
+  // ── LEADERSHIP ──
+  branch_leader: {label:'Branch Leader',            icon:'🌟', cls:'gold',   desc:'Leadership role recognition'},
+  leadership:    {label:'Leadership',               icon:'👑', cls:'gold',   desc:'Demonstrates leadership qualities'},
+  initiative:    {label:'Takes Initiative',         icon:'⚡', cls:'purple', desc:'Acts without being asked'},
+  decision_maker:{label:'Decision Maker',           icon:'🧠', cls:'blue',   desc:'Makes clear, sound decisions'},
+  // ── CUSTOMER SERVICE ──
+  cust_service:  {label:'Customer Service Excellence', icon:'🌟', cls:'gold', desc:'Exceptional client service'},
+  client_hero:   {label:'Client Hero',              icon:'🦸', cls:'gold',   desc:'Went above and beyond for a client'},
+  relationship:  {label:'Relationship Builder',     icon:'🤲', cls:'green',  desc:'Builds strong client relationships'},
+  // ── SAFETY ──
+  safety_champ:  {label:'Safety Champion',          icon:'🦺', cls:'blue',   desc:'Prioritizes and promotes safety'},
+  safety_star:   {label:'Safety Star',              icon:'⛑️',  cls:'blue',   desc:'Zero safety incidents'},
+  // ── GROWTH ──
+  rising_star:   {label:'Rising Star',              icon:'🌱', cls:'green',  desc:'Showing rapid growth'},
+  fast_learner:  {label:'Fast Learner',             icon:'📚', cls:'green',  desc:'Adapts and learns quickly'},
+  improver:      {label:'Most Improved',            icon:'📈', cls:'green',  desc:'Significant improvement shown'},
+  // ── PROBLEM SOLVING ──
+  problem_solver:{label:'Problem Solver',           icon:'💡', cls:'purple', desc:'Finds creative solutions'},
+  innovator:     {label:'Innovator',                icon:'🔬', cls:'purple', desc:'Brings new ideas to the team'},
+  critical_think:{label:'Critical Thinker',         icon:'🎲', cls:'purple', desc:'Analyzes situations carefully'},
+  // ── DEDICATION ──
+  dedication:    {label:'Dedication Award',         icon:'💪', cls:'gold',   desc:'Consistent dedication to the job'},
+  hard_worker:   {label:'Hard Worker',              icon:'🔨', cls:'green',  desc:'Goes the extra mile every day'},
+  never_give_up: {label:'Never Give Up',            icon:'🏋️',  cls:'purple', desc:'Overcame challenges with resilience'},
+  // ── COMMUNICATION ──
+  communicator:  {label:'Great Communicator',       icon:'💬', cls:'blue',   desc:'Clear, proactive communication'},
+  feedback_king: {label:'Feedback Champion',        icon:'📣', cls:'blue',   desc:'Gives and receives feedback well'},
+  // ── MILESTONES ──
+  first_submit:  {label:'First Submission',         icon:'🎈', cls:'green',  desc:'Completed first submission'},
+  month_1:       {label:'1 Month Strong',           icon:'🗓️',  cls:'green',  desc:'1 month of submissions'},
+  month_3:       {label:'3 Month Veteran',          icon:'📆', cls:'blue',   desc:'3 months of submissions'},
+  month_6:       {label:'6 Month All-Star',         icon:'🌠', cls:'gold',   desc:'6 months of consistent submissions'},
+  year_1:        {label:'1 Year Legend',            icon:'🎖️',  cls:'gold',   desc:'1 full year of participation'},
+  // ── SPECIAL ──
+  zero_missed:   {label:'Perfect Record',           icon:'✅', cls:'gold',   desc:'Zero missed deadlines'},
+  clutch:        {label:'Clutch Player',            icon:'⏰', cls:'purple', desc:'Always delivers under pressure'},
+  positivity:    {label:'Positivity Award',         icon:'😊', cls:'green',  desc:'Brings positive energy'},
+  community:     {label:'Community Champion',       icon:'🌍', cls:'green',  desc:'Gives back to the team community'},
 };
 async function computeBadges(uid,role){
   const badges=[];
@@ -3792,8 +3832,11 @@ async function showBadgePanel() {
     const snap = await db.collection('badges').get();
     const badges = snap.docs.map(d => ({id:d.id,...d.data()}));
     if (!badges.length) {
-      el.innerHTML = '<div style="color:#888;font-size:12px;margin-bottom:12px">No badges created yet.</div>'
-        + '<button class="btn primary" onclick="showCreateBadge()">+ Create First Badge</button>';
+      el.innerHTML = '<div style="color:#A0A0A0;font-size:13px;margin-bottom:12px">No badges in library yet.</div>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+        + '<button class="btn primary" id="seed-badges-btn" onclick="seedDefaultBadges()">📚 Load 45 Default Badges</button>'
+        + '<button class="btn" onclick="showCreateBadge()">+ Create Custom Badge</button>'
+        + '</div>';
       return;
     }
     el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:14px">'
@@ -3803,6 +3846,7 @@ async function showBadgePanel() {
         + '<div style="font-size:10px;color:#777;margin-bottom:8px">'+esc(b.desc||'')+'</div>'
         + '<div style="display:flex;gap:4px;justify-content:center">'
         + '<button class="btn sm" class="award-badge-btn" data-badge-id="'+b.id+'">Award</button>'
+        + '<button class="btn sm" class="edit-badge-btn" data-badge-id="'+b.id+'" data-badge-name="'+esc(b.name)+'" data-badge-icon="'+esc(b.icon||'🏅')+'" data-badge-desc="'+esc(b.description||'')+'">Edit</button>'
         + '<button class="btn sm danger" class="delete-badge-btn" data-badge-id="'+b.id+'" data-badge-name="'+esc(b.name)+'">Delete</button>'
         + '</div></div>'
       ).join('')
@@ -3964,6 +4008,163 @@ async function revokeBadge(awardId, userName, badgeName) {
     toast('Badge removed from '+userName);
     showBadgeHistory();
   } catch(e) { toast('Error: '+e.message,'danger'); }
+}
+
+
+// ══ DEFAULT BADGES LIBRARY ══
+const DEFAULT_BADGE_LIBRARY = [
+    {icon:"⭐",name:"Consistency Star",description:"Submitted on time for 4+ consecutive weeks",category:"performance",active:true},
+    {icon:"🏆",name:"Reliability Champion",description:"10+ on-time submissions",category:"performance",active:true},
+    {icon:"🔥",name:"4-Week Streak",description:"4 consecutive weeks of on-time submissions",category:"performance",active:true},
+    {icon:"💎",name:"8-Week Streak",description:"8 consecutive weeks of on-time submissions",category:"performance",active:true},
+    {icon:"📅",name:"Full Week Champ",description:"Monday check-in and Friday recap both submitted same week",category:"performance",active:true},
+    {icon:"🎯",name:"Deadline Crusher",description:"Completed all items on time for a full month",category:"performance",active:true},
+    {icon:"📈",name:"Above Target",description:"Exceeded performance expectations this quarter",category:"performance",active:true},
+    {icon:"⚡",name:"Fast Starter",description:"First to submit every week for a full month",category:"performance",active:true},
+    {icon:"✅",name:"Zero Miss Month",description:"Zero missed deadlines in a calendar month",category:"performance",active:true},
+    {icon:"🌅",name:"Early Bird",description:"Consistently submits check-ins before 9am",category:"performance",active:true},
+    {icon:"🤝",name:"Team Player",description:"Consistently contributes to team goals",category:"teamwork",active:true},
+    {icon:"🫂",name:"Team Builder",description:"Recognized for building team morale and cohesion",category:"teamwork",active:true},
+    {icon:"🌉",name:"Bridge Builder",description:"Helps connect OC and LA teams effectively",category:"teamwork",active:true},
+    {icon:"🤲",name:"Team Supporter",description:"Goes out of way to help teammates succeed",category:"teamwork",active:true},
+    {icon:"👥",name:"Collaboration Expert",description:"Outstanding cross-team collaboration",category:"teamwork",active:true},
+    {icon:"🌟",name:"Branch Leader",description:"Demonstrates leadership at the branch level",category:"leadership",active:true},
+    {icon:"👑",name:"Leadership Excellence",description:"Consistently leads by example",category:"leadership",active:true},
+    {icon:"🧭",name:"Direction Setter",description:"Helps team navigate challenges effectively",category:"leadership",active:true},
+    {icon:"📣",name:"Voice of the Team",description:"Raises important issues and advocates for the team",category:"leadership",active:true},
+    {icon:"🚀",name:"Initiative Taker",description:"Takes charge without being asked",category:"leadership",active:true},
+    {icon:"🦺",name:"Safety Champion",description:"Zero safety incidents, promotes safe practices",category:"safety",active:true},
+    {icon:"🔍",name:"Quality Guard",description:"Consistently delivers high-quality work",category:"safety",active:true},
+    {icon:"📋",name:"Protocol Pro",description:"Follows all procedures and documents everything correctly",category:"safety",active:true},
+    {icon:"🛡",name:"Zero Incident",description:"No safety incidents reported all quarter",category:"safety",active:true},
+    {icon:"🧹",name:"Clean Record",description:"No compliance issues or warnings",category:"safety",active:true},
+    {icon:"🏅",name:"Customer Service Excellence",description:"Outstanding client satisfaction feedback",category:"service",active:true},
+    {icon:"💬",name:"Client Communicator",description:"Exceptional client communication skills",category:"service",active:true},
+    {icon:"🌿",name:"Green Thumb Award",description:"Clients specifically request their service",category:"service",active:true},
+    {icon:"🤩",name:"Client Favorite",description:"Received positive client shoutout",category:"service",active:true},
+    {icon:"📞",name:"Always Available",description:"Responsive to client needs consistently",category:"service",active:true},
+    {icon:"🌱",name:"Rising Star",description:"First submission — welcome to the team",category:"recognition",active:true},
+    {icon:"🎖",name:"Outstanding Performance",description:"Exceptional performance recognized by management",category:"recognition",active:true},
+    {icon:"💡",name:"Problem Solver",description:"Finds creative solutions to challenges",category:"recognition",active:true},
+    {icon:"🧠",name:"Strategic Thinker",description:"Demonstrates strategic thinking in their role",category:"recognition",active:true},
+    {icon:"🏗",name:"Above and Beyond",description:"Goes above and beyond consistently",category:"recognition",active:true},
+    {icon:"📚",name:"Knowledge Sharer",description:"Actively shares knowledge with the team",category:"recognition",active:true},
+    {icon:"🎓",name:"Skill Builder",description:"Completed training or added new skills",category:"recognition",active:true},
+    {icon:"💪",name:"Resilient",description:"Maintains performance through tough conditions",category:"recognition",active:true},
+    {icon:"🌈",name:"Positive Impact",description:"Creates a positive environment for the team",category:"recognition",active:true},
+    {icon:"🎉",name:"Milestone Achiever",description:"Reached a significant career milestone",category:"recognition",active:true},
+    {icon:"🏆",name:"Perfect Submission Streak",description:"Never missed a submission all quarter",category:"special",active:true},
+    {icon:"🌊",name:"Overcame Adversity",description:"Maintained performance through significant challenges",category:"special",active:true},
+    {icon:"🦁",name:"Courageous Leader",description:"Demonstrated courage in a difficult situation",category:"special",active:true},
+    {icon:"🌺",name:"Culture Champion",description:"Embodies SouthWest Landscape values",category:"special",active:true},
+    {icon:"🎯",name:"Sharpshooter",description:"Precision and accuracy in all tasks",category:"special",active:true},
+  ];
+
+async function seedDefaultBadges() {
+  const btn = document.getElementById('seed-badges-btn');
+  if (btn) { btn.disabled=true; btn.textContent='Loading...'; }
+  try {
+    // Check how many already exist
+    const existing = await db.collection('badges').get();
+    if (existing.docs.length >= 10) {
+      toast('Badge library already has '+existing.docs.length+' badges. No changes made.','warn');
+      if(btn){btn.disabled=false;btn.textContent='Load Default Badges';}
+      return;
+    }
+    const batch = db.batch();
+    DEFAULT_BADGE_LIBRARY.forEach(badge => {
+      const ref = db.collection('badges').doc();
+      batch.set(ref, {...badge, createdBy:'system', createdByName:'Default Library', createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    });
+    await batch.commit();
+    toast('✓ 45 default badges loaded into library');
+    showBadgePanel();
+  } catch(e) { toast('Error: '+e.message,'danger'); if(btn){btn.disabled=false;btn.textContent='Load Default Badges';} }
+}
+
+
+async function showEditBadge(badgeId, badgeName, badgeIcon, badgeDesc) {
+  const el = document.getElementById('badge-admin-content');
+  if (!el) return;
+  el.innerHTML = '<div style="background:#1E1E1E;border:1px solid #333;border-radius:8px;padding:16px;max-width:480px">'
+    + '<div style="font-size:13px;font-weight:700;color:#E0E0E0;margin-bottom:12px">Edit Badge</div>'
+    + '<div class="fg" style="margin-bottom:10px"><label>Badge Name</label><input type="text" id="eb-name" value="'+esc(badgeName)+'"></div>'
+    + '<div class="fg" style="margin-bottom:10px"><label>Icon / Emoji</label><input type="text" id="eb-icon" value="'+esc(badgeIcon)+'" style="max-width:80px"></div>'
+    + '<div class="fg" style="margin-bottom:14px"><label>Description</label><textarea id="eb-desc" rows="2">'+esc(badgeDesc)+'</textarea></div>'
+    + '<div style="display:flex;gap:8px"><button class="btn primary" id="save-edit-badge-btn">Save Changes</button><button class="btn" onclick="showBadgePanel()">Cancel</button></div>'
+    + '</div>';
+  document.getElementById('save-edit-badge-btn').addEventListener('click', async function() {
+    var name = document.getElementById('eb-name')?.value?.trim();
+    var icon = document.getElementById('eb-icon')?.value?.trim();
+    var desc = document.getElementById('eb-desc')?.value?.trim();
+    if (!name) { toast('Badge name is required','warn'); return; }
+    try {
+      await db.collection('badges').doc(badgeId).update({ name, icon, description:desc, updatedBy:CU.uid, updatedAt:firebase.firestore.FieldValue.serverTimestamp() });
+      toast('✓ Badge updated: '+name);
+      showBadgePanel();
+    } catch(e) { toast('Error: '+e.message,'danger'); }
+  });
+}
+
+
+// Load weekly items inline in the check-in form
+async function loadInlineWeeklyItems() {
+  const el = document.getElementById('inline-weekly-items');
+  if (!el) return;
+  const wk = weekKey(CW);
+  try {
+    let q = db.collection('weekly_items').where('weekStart','==',wk).where('owner','==',CU.uid);
+    const snap = await q.get();
+    if (snap.empty) {
+      el.innerHTML = '<div style="color:#555;font-size:12px;padding:8px;font-style:italic">No weekly items assigned to you this week.</div>';
+      return;
+    }
+    const statusColors = {
+      pending:'#60A5FA', in_progress:'#FBBF24',
+      completed_on_time:'#7DC855', completed_late:'#7DC855',
+      not_completed:'#C084FC', overdue:'#F87171'
+    };
+    const statusLabels = {
+      pending:'Open', in_progress:'In Progress',
+      completed_on_time:'Completed', completed_late:'Done Late',
+      not_completed:'Carried Over', overdue:'Overdue'
+    };
+    el.innerHTML = snap.docs.map(d => {
+      const item = d.data();
+      const color = statusColors[item.status] || '#888';
+      const lbl   = statusLabels[item.status] || item.status;
+      return '<div style="background:#1E1E1E;border:1px solid #2E2E2E;border-radius:6px;padding:10px 12px;display:flex;align-items:center;gap:10px">'
+        + '<div style="flex:1"><div style="font-size:12px;font-weight:600;color:#E0E0E0">' + esc(item.title) + '</div>'
+        + '<div style="font-size:10px;color:#777;margin-top:2px">Due: ' + (item.deadline||'—') + ' · Priority: ' + (item.priority||'medium') + '</div></div>'
+        + '<select data-item-id="' + d.id + '" style="padding:4px 8px;border-radius:5px;background:#2A2A2A;border:1px solid #3A3A3A;color:' + color + ';font-size:11px;font-weight:600;cursor:pointer" onchange="updateInlineItemStatus(this)">'
+        + ['pending','in_progress','completed_on_time','completed_late','not_completed'].map(s =>
+            '<option value="' + s + '"' + (item.status===s?' selected':'') + '>' + (statusLabels[s]||s) + '</option>'
+          ).join('')
+        + '</select></div>';
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div style="color:#555;font-size:12px;padding:8px">Could not load weekly items.</div>';
+  }
+}
+
+async function updateInlineItemStatus(sel) {
+  const itemId = sel.dataset.itemId;
+  const newStatus = sel.value;
+  if (!itemId) return;
+  const statusColors = {
+    pending:'#60A5FA', in_progress:'#FBBF24',
+    completed_on_time:'#7DC855', completed_late:'#7DC855',
+    not_completed:'#C084FC', overdue:'#F87171'
+  };
+  sel.style.color = statusColors[newStatus] || '#888';
+  try {
+    await db.collection('weekly_items').doc(itemId).update({
+      status: newStatus,
+      lastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: CU.uid
+    });
+    toast('Item status updated');
+  } catch(e) { toast('Could not update: '+e.message,'danger'); }
 }
 
 </script>
