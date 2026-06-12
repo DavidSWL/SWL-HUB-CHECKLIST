@@ -2545,6 +2545,9 @@ function openFridayModal(id, title) {
       </div>
     </div>`;
   document.body.appendChild(modal);
+  // Attach click handlers safely (no inline onclick quote issues)
+  document.getElementById('apply-role-btn').addEventListener('click', function() { applyRoleChange(uid, userName); });
+  document.getElementById('cancel-role-btn').addEventListener('click', function() { var m=document.getElementById('change-role-modal'); if(m) m.remove(); });
 }
 
 function toggleCarryoverFields() {
@@ -3746,10 +3749,14 @@ function showChangeRole(uid, currentRole, userName) {
     + '<select id="cr-new-branch" style="width:100%;padding:8px 10px;background:#1E1E1E;border:1px solid #383838;border-radius:6px;color:#E0E0E0;font-size:13px">'
     + '<option value="OC">OC — Orange County</option><option value="LA">LA — Los Angeles</option><option value="ALL">ALL — Both Branches</option>'
     + '</select></div>'
-    + '<div style="display:flex;gap:8px"><button class="btn primary" onclick="applyRoleChange(''+uid+'',''+esc(userName)+'')">Save Change</button>'
-    + '<button class="btn" onclick="document.getElementById('change-role-modal').remove()">Cancel</button></div>'
+    + '<div style="display:flex;gap:8px"><button class="btn primary" id="apply-role-btn">Save Change</button>'
+    + '<button class="btn" id="cancel-role-btn">Cancel</button></div>'
     + '</div>';
   document.body.appendChild(modal);
+  var applyBtn = document.getElementById('apply-role-btn');
+  var cancelBtn = document.getElementById('cancel-role-btn');
+  if(applyBtn) applyBtn.addEventListener('click', function() { applyRoleChange(uid, userName); });
+  if(cancelBtn) cancelBtn.addEventListener('click', function() { var m=document.getElementById('change-role-modal'); if(m) m.remove(); });
 }
 
 async function applyRoleChange(uid, userName) {
@@ -3794,8 +3801,8 @@ async function showBadgePanel() {
         + '<div style="font-size:12px;font-weight:600;color:#E0E0E0;margin-bottom:2px">'+esc(b.name)+'</div>'
         + '<div style="font-size:10px;color:#777;margin-bottom:8px">'+esc(b.desc||'')+'</div>'
         + '<div style="display:flex;gap:4px;justify-content:center">'
-        + '<button class="btn sm" onclick="showAwardBadge(''+b.id+'')">Award</button>'
-        + '<button class="btn sm danger" onclick="deleteBadge(''+b.id+'',''+esc(b.name)+'')">Delete</button>'
+        + '<button class="btn sm" class="award-badge-btn" data-badge-id="'+b.id+'">Award</button>'
+        + '<button class="btn sm danger" class="delete-badge-btn" data-badge-id="'+b.id+'" data-badge-name="'+esc(b.name)+'">Delete</button>'
         + '</div></div>'
       ).join('')
       + '</div><button class="btn primary" onclick="showCreateBadge()">+ Create Badge</button>';
@@ -3893,10 +3900,13 @@ async function showBadgeHistory() {
           +'<div style="flex:1"><div style="font-size:12px;font-weight:600;color:#E0E0E0">'+esc(b.userName)+'</div>'
           +'<div style="font-size:11px;color:#777">'+esc(b.badgeName)+' · Awarded by '+esc(b.awardedByName)+(b.note?' · '+esc(b.note):'')+'</div></div>'
           +'<div style="font-size:10px;color:#555">'+ts+'</div>'
-          +'<button class="btn sm danger" onclick="revokeBadge(\''+d.id+'\',\''+b.userName+'\',\''+b.badgeName+'\')">Remove</button>'
+          +'<button class="btn sm danger" class="revoke-badge-btn" data-award-id="'+d.id+'" data-user-name="'+b.userName+'" data-badge-name="'+b.badgeName+'">Remove</button>'
           +'</div>';
       }).join('')
     + '</div>';
+    el.querySelectorAll('.revoke-badge-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() { revokeBadge(this.dataset.awardId, this.dataset.userName, this.dataset.badgeName); });
+    });
 }
 
 // ═══ EXEC VIEWER DASHBOARD ═══
