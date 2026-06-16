@@ -4185,8 +4185,15 @@ async function loadInlineWeeklyItems() {
       const canRequestExt = !isDone && item.status !== 'not_completed' && !hasPendingExt;
       const safeTitle = esc(item.title).replace(/'/g,"\'");
       const extBtn = canRequestExt
-        ? '<button onclick="openExtensionModal('' + d.id + '','' + safeTitle + '','' + (item.deadline||'') + '')" style="padding:3px 9px;font-size:10px;font-weight:600;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.25);border-radius:5px;cursor:pointer">' + (isPastDue?'⚠ Request Extension':'📅 Extend') + '</button>' : '';
-      const borderColor = isCanceled?'rgba(148,163,184,.25)':isPastDue?'rgba(248,113,113,.35)':hasPendingExt?'rgba(251,191,36,.3)':'#2E2E2E';
+const deadline = item.deadline || '';
+
+return `
+<button
+  onclick="openExtensionModal('${d.id}','${safeTitle}','${deadline}')"
+  style="padding:3px 9px;font-size:10px;font-weight:600;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.25);border-radius:5px;cursor:pointer">
+  ${isPastDue ? '⚠ Request Extension' : '📅 Extend'}
+</button>
+`;      const borderColor = isCanceled?'rgba(148,163,184,.25)':isPastDue?'rgba(248,113,113,.35)':hasPendingExt?'rgba(251,191,36,.3)':'#2E2E2E';
       return '<div style="background:#1E1E1E;border:1px solid ' + borderColor + ';border-radius:6px;padding:10px 12px;margin-bottom:6px' + (isCanceled?';opacity:.7':'') + '">'
         + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
         + '<div style="flex:1;min-width:0">'
