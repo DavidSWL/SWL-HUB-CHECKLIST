@@ -4205,7 +4205,7 @@ return `
         + '</select>' + extBtn + '</div></div>'
         + '<div style="margin-top:7px">'
         + '<textarea data-note-id="' + d.id + '" rows="2" placeholder="' + (isCanceled?'Add cancelation details…':'Progress note or update…') + '" style="width:100%;padding:6px 9px;border-radius:5px;border:1px solid #333;background:#252525;color:#CCC;font-size:11px;font-family:inherit;resize:vertical">' + esc(item.latestNote||'') + '</textarea>'
-        + '<button onclick="saveItemNote('' + d.id + '')" style="margin-top:3px;padding:3px 10px;font-size:10px;font-weight:600;background:#2A2A2A;color:#888;border:1px solid #383838;border-radius:5px;cursor:pointer">Save Note</button>'
+        + `<button onclick="saveItemNote('${d.id}')" style="margin-top:3px;padding:3px 10px;font-size:10px;font-weight:600;background:#2A2A2A;color:#888;border:1px solid #383838;border-radius:5px;cursor:pointer">Save Note</button>`
         + (item.latestNoteBy ? '<span style="font-size:10px;color:#555;margin-left:8px">Last update by ' + esc(item.latestNoteBy) + '</span>' : '')
         + '</div>'
         + (hasPendingExt?'<div class="ext-pending-banner">🔄 Extension pending approval &mdash; Proposed: <strong>'+(extInfo.proposedDeadline||'—')+'</strong></div>':'')
