@@ -626,6 +626,9 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .status-overdue     { color: #F87171 !important; }  /* Red */
 .status-carried     { color: #C084FC !important; }  /* Purple */
 .status-draft       { color: #A0A0A0 !important; }  /* Grey */
+.status-canceled    { color: #94A3B8 !important; }
+.ext-req-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:rgba(251,191,36,.15);color:#FBBF24;border:1px solid rgba(251,191,36,.3)}
+.ext-pending-banner{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.2);border-radius:6px;padding:6px 10px;font-size:11px;color:#FBBF24;margin-top:4px}
 
 /* Dark mode: ensure text in content area is readable */
 .content-area:not(.theme-white) { color: #E0E0E0; }
@@ -2243,8 +2246,13 @@ async function renderAccountability() {
   });
 
   const people = Object.values(stats).sort((a,b)=>b.missed-a.missed);
-  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]);
+  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');
   const carryovers = items.filter(i=>i.status==='not_completed');
+
+  let extQ = db.collection('extension_requests').where('status','==','pending');
+  if (branch) extQ = extQ.where('branch','==',branch);
+  const extSnap = await extQ.get();
+  const pendingExtensions = extSnap.docs.map(d=>({id:d.id,...d.data()}));
 
   const statusIcon = (p) => {
     const rate = p.total ? p.onTime/p.total : 1;
@@ -2260,11 +2268,38 @@ async function renderAccountability() {
         {n:overdue.length, l:'Overdue (past deadline)', c:'var(--danger)'},
         {n:carryovers.length, l:'Carry-over items', c:'var(--warn)'},
         {n:items.filter(i=>i.needsAssistance).length, l:'Needs mgmt assistance', c:'var(--critical)'},
+        {n:items.filter(i=>i.status==='canceled_by_client').length, l:'Canceled by client', c:'var(--text3)'},
       ].map(s=>`<div class="stat-card" style="border-bottom:3px solid ${s.c}">
         <div class="stat-num" style="color:${s.c}">${s.n}</div>
         <div class="stat-lbl">${s.l}</div>
       </div>`).join('')}
     </div>
+
+    ${pendingExtensions.length ? `<div class="card" style="margin-bottom:16px;border-top:3px solid #FBBF24">
+      <div class="card-header">
+        <div class="card-title">🔄 Pending Extension Requests — Awaiting Your Approval</div>
+        <span class="badge warn">${pendingExtensions.length} pending</span>
+      </div>
+      ${pendingExtensions.map(er => `<div style="padding:12px 0;border-bottom:1px solid var(--card-border)">
+        <div style="display:flex;align-items:flex-start;gap:12px">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:#E0E0E0;margin-bottom:3px">${esc(er.itemTitle)}</div>
+            <div style="font-size:11px;color:#777;margin-bottom:6px">
+              Requested by <strong style="color:#D0D0D0">${esc(er.requestedByName)}</strong>
+              &nbsp;&middot;&nbsp; Original: <span style="color:#F87171;font-weight:600">${er.originalDeadline||'—'}</span>
+              &nbsp;&rarr;&nbsp; Proposed: <span style="color:#7DC855;font-weight:600">${er.proposedDeadline||'—'}</span>
+            </div>
+            <div style="font-size:12px;color:#CCC;background:#2A2A2A;border-radius:5px;padding:7px 10px;border-left:3px solid #FBBF24">&ldquo;${esc(er.reason)}&rdquo;</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;padding-top:2px">
+            <button class="btn sm" style="background:rgba(125,200,85,.15);color:#7DC855;border-color:rgba(125,200,85,.3)"
+              onclick="approveExtension('${er.id}','${er.itemId}','${er.proposedDeadline}','${esc(er.requestedByName)}','${(er.reason||'').replace(/'/g,String.fromCharCode(39))}','${er.originalDeadline||''}')">&#10003; Approve</button>
+            <button class="btn sm" style="background:rgba(248,113,113,.1);color:#F87171;border-color:rgba(248,113,113,.25)"
+              onclick="denyExtension('${er.id}','${er.itemId}','${esc(er.requestedByName)}')">&#10005; Deny</button>
+          </div>
+        </div>
+      </div>`).join('')}
+    </div>` : ''}
 
     <div class="card" style="margin-bottom:16px">
       <div class="card-header">
@@ -2385,18 +2420,23 @@ async function renderItems() {
 
 function renderItemCard(it) {
   const isMgr = ROLES[CD.role]?.isManager || CD.role==='admin';
-  const statusColors = { pending:'warn', completed_on_time:'success', completed_late:'info', not_completed:'danger' };
-  const statusLabels = { pending:'Pending', completed_on_time:'✓ On Time', completed_late:'⚠ Late', not_completed:'✗ Not Complete' };
-  const statusBadge = `<span class="badge ${statusColors[it.status||'pending']}">${statusLabels[it.status||'pending']}</span>`;
+  const statusColors = { pending:'warn', in_progress:'info', completed_on_time:'success', completed_late:'info', not_completed:'danger', canceled_by_client:'neutral' };
+  const statusLabels = { pending:'Pending', in_progress:'In Progress', completed_on_time:'✓ On Time', completed_late:'⚠ Late', not_completed:'✗ Not Complete', canceled_by_client:'🚫 Canceled by Client' };
+  const statusBadge = `<span class="badge ${statusColors[it.status||'pending']}">${statusLabels[it.status||it.status]||it.status}</span>`;
 
-  // Employees can only add Friday review notes — managers set the actual status
-  const actionBtns = isMgr
+  // Employees update their own items; managers update any item
+  const isOwner = it.owner === CU.uid || it.ownerName === CD.name;
+  const allStatuses = ['pending','in_progress','completed_on_time','completed_late','not_completed','canceled_by_client'];
+  const actionBtns = isOwner && !isMgr
+    ? `<select class="btn sm" style="cursor:pointer;background:#2A2A2A;border-color:#3A3A3A;color:#E0E0E0" onchange="updateItemStatusWithLog('${it.id}',this.value)">
+        ${allStatuses.map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]||s}</option>`).join('')}
+       </select>
+       <button class="btn sm" onclick="openEmployeeUpdateModal('${it.id}','${esc(it.title)}','${it.deadline||''}','${it.status||'pending'}')" style="background:rgba(96,165,250,.12);color:#60A5FA;border-color:rgba(96,165,250,.25)">📝 Update</button>`
+    : isMgr
     ? `<select class="btn sm" style="cursor:pointer" onchange="updateItemStatusWithLog('${it.id}',this.value)">
-        ${['pending','completed_on_time','completed_late','not_completed'].map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]}</option>`).join('')}
+        ${allStatuses.map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]||s}</option>`).join('')}
        </select>
        <button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}')">Update</button>`
-    : isFriday()
-    ? `<button class="btn sm" onclick="openFridayModal('${it.id}','${esc(it.title)}')">Submit My Notes</button>`
     : `${statusBadge}`;
 
   // Show deadline — employees cannot edit it after creation
@@ -4112,41 +4152,65 @@ async function loadInlineWeeklyItems() {
   const el = document.getElementById('inline-weekly-items');
   if (!el) return;
   const wk = weekKey(CW);
+  el.innerHTML = '<div style="color:#555;font-size:12px;padding:8px;font-style:italic">Loading&#8230;</div>';
   try {
-    let q = db.collection('weekly_items').where('weekStart','==',wk).where('owner','==',CU.uid);
-    const snap = await q.get();
-    if (snap.empty) {
+    const [snapByUid, snapByName] = await Promise.all([
+      db.collection('weekly_items').where('weekStart','==',wk).where('owner','==',CU.uid).get(),
+      db.collection('weekly_items').where('weekStart','==',wk).where('ownerName','==',CD.name).get()
+    ]);
+    const seen = new Set();
+    const allDocs = [...snapByUid.docs, ...snapByName.docs].filter(d => {
+      if (seen.has(d.id)) return false; seen.add(d.id); return true;
+    });
+    if (!allDocs.length) {
       el.innerHTML = '<div style="color:#555;font-size:12px;padding:8px;font-style:italic">No weekly items assigned to you this week.</div>';
       return;
     }
-    const statusColors = {
-      pending:'#60A5FA', in_progress:'#FBBF24',
-      completed_on_time:'#7DC855', completed_late:'#7DC855',
-      not_completed:'#C084FC', overdue:'#F87171'
-    };
-    const statusLabels = {
-      pending:'Open', in_progress:'In Progress',
-      completed_on_time:'Completed', completed_late:'Done Late',
-      not_completed:'Carried Over', overdue:'Overdue'
-    };
-    el.innerHTML = snap.docs.map(d => {
+    const extSnap = await db.collection('extension_requests')
+      .where('requestedBy','==',CU.uid).where('weekStart','==',wk).get();
+    const pendingExtMap = {};
+    extSnap.docs.forEach(d => { pendingExtMap[d.data().itemId] = {id:d.id,...d.data()}; });
+    const statusColors = { pending:'#60A5FA', in_progress:'#FBBF24', completed_on_time:'#7DC855', completed_late:'#7DC855', not_completed:'#C084FC', canceled_by_client:'#94A3B8' };
+    const statusLabels = { pending:'Open', in_progress:'In Progress', completed_on_time:'Completed', completed_late:'Done Late', not_completed:'Carried Over', canceled_by_client:'Canceled by Client' };
+    const today = new Date().toISOString().split('T')[0];
+    el.innerHTML = allDocs.map(d => {
       const item = d.data();
       const color = statusColors[item.status] || '#888';
-      const lbl   = statusLabels[item.status] || item.status;
-      return '<div style="background:#1E1E1E;border:1px solid #2E2E2E;border-radius:6px;padding:10px 12px;display:flex;align-items:center;gap:10px">'
-        + '<div style="flex:1"><div style="font-size:12px;font-weight:600;color:#E0E0E0">' + esc(item.title) + '</div>'
-        + '<div style="font-size:10px;color:#777;margin-top:2px">Due: ' + (item.deadline||'—') + ' · Priority: ' + (item.priority||'medium') + '</div></div>'
-        + '<select data-item-id="' + d.id + '" style="padding:4px 8px;border-radius:5px;background:#2A2A2A;border:1px solid #3A3A3A;color:' + color + ';font-size:11px;font-weight:600;cursor:pointer" onchange="updateInlineItemStatus(this)">'
-        + ['pending','in_progress','completed_on_time','completed_late','not_completed'].map(s =>
-            '<option value="' + s + '"' + (item.status===s?' selected':'') + '>' + (statusLabels[s]||s) + '</option>'
-          ).join('')
-        + '</select></div>';
+      const isPastDue = item.deadline && item.deadline < today && item.status === 'pending';
+      const isCanceled = item.status === 'canceled_by_client';
+      const isDone = ['completed_on_time','completed_late','canceled_by_client'].includes(item.status);
+      const extInfo = pendingExtMap[d.id];
+      const hasPendingExt = extInfo?.status === 'pending';
+      const wasDenied = extInfo?.status === 'denied';
+      const canRequestExt = !isDone && item.status !== 'not_completed' && !hasPendingExt;
+      const safeTitle = esc(item.title).replace(/'/g,"\'");
+      const extBtn = canRequestExt
+        ? '<button onclick="openExtensionModal('' + d.id + '','' + safeTitle + '','' + (item.deadline||'') + '')" style="padding:3px 9px;font-size:10px;font-weight:600;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.25);border-radius:5px;cursor:pointer">' + (isPastDue?'⚠ Request Extension':'📅 Extend') + '</button>' : '';
+      const borderColor = isCanceled?'rgba(148,163,184,.25)':isPastDue?'rgba(248,113,113,.35)':hasPendingExt?'rgba(251,191,36,.3)':'#2E2E2E';
+      return '<div style="background:#1E1E1E;border:1px solid ' + borderColor + ';border-radius:6px;padding:10px 12px;margin-bottom:6px' + (isCanceled?';opacity:.7':'') + '">'
+        + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+        + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:12px;font-weight:600;color:' + (isCanceled?'#94A3B8':'#E0E0E0') + ';' + (isCanceled?'text-decoration:line-through':'') + '">' + esc(item.title) + '</div>'
+        + '<div style="font-size:10px;color:' + (isPastDue?'#F87171':'#777') + ';margin-top:1px">Due: <strong style="color:' + (isCanceled?'#94A3B8':isPastDue?'#F87171':'#AAA') + '">' + (item.deadline||'—') + '</strong>' + (isPastDue&&!isCanceled?' · <span style="color:#F87171;font-weight:700">PAST DUE</span>':'') + (item.extensionHistory?.length?' · <span style="color:#FBBF24">Extended '+item.extensionHistory.length+'x</span>':'') + '</div></div>'
+        + '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">'
+        + '<select data-item-id="' + d.id + '" style="padding:4px 7px;border-radius:5px;background:#2A2A2A;border:1px solid #3A3A3A;color:' + color + ';font-size:11px;font-weight:600;cursor:pointer" onchange="updateInlineItemStatus(this)">'
+        + ['pending','in_progress','completed_on_time','completed_late','not_completed','canceled_by_client'].map(s=>'<option value="'+s+'"'+(item.status===s?' selected':'')+'>'+(statusLabels[s]||s)+'</option>').join('')
+        + '</select>' + extBtn + '</div></div>'
+        + '<div style="margin-top:7px">'
+        + '<textarea data-note-id="' + d.id + '" rows="2" placeholder="' + (isCanceled?'Add cancelation details…':'Progress note or update…') + '" style="width:100%;padding:6px 9px;border-radius:5px;border:1px solid #333;background:#252525;color:#CCC;font-size:11px;font-family:inherit;resize:vertical">' + esc(item.latestNote||'') + '</textarea>'
+        + '<button onclick="saveItemNote('' + d.id + '')" style="margin-top:3px;padding:3px 10px;font-size:10px;font-weight:600;background:#2A2A2A;color:#888;border:1px solid #383838;border-radius:5px;cursor:pointer">Save Note</button>'
+        + (item.latestNoteBy ? '<span style="font-size:10px;color:#555;margin-left:8px">Last update by ' + esc(item.latestNoteBy) + '</span>' : '')
+        + '</div>'
+        + (hasPendingExt?'<div class="ext-pending-banner">🔄 Extension pending approval &mdash; Proposed: <strong>'+(extInfo.proposedDeadline||'—')+'</strong></div>':'')
+        + (wasDenied?'<div style="background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.2);border-radius:6px;padding:6px 10px;font-size:11px;color:#F87171;margin-top:4px">✕ Extension denied'+(extInfo.deniedReason?' &mdash; Manager: &ldquo;'+esc(extInfo.deniedReason)+'&rdquo;':'')+'</div>':'')
+        + (item.managerUpdate?.note?'<div style="background:rgba(23,95,165,.1);border:1px solid rgba(23,95,165,.2);border-radius:6px;padding:6px 10px;font-size:11px;color:#60A5FA;margin-top:4px">&#128101; Manager: &ldquo;'+esc(item.managerUpdate.note)+'&rdquo;</div>':'')
+        + '</div>';
     }).join('');
   } catch(e) {
-    el.innerHTML = '<div style="color:#555;font-size:12px;padding:8px">Could not load weekly items.</div>';
+    el.innerHTML = '<div style="color:#F87171;font-size:12px;padding:8px">Error: ' + e.message + '</div>';
+    console.error(e);
   }
 }
-
 async function updateInlineItemStatus(sel) {
   const itemId = sel.dataset.itemId;
   const newStatus = sel.value;
@@ -4165,6 +4229,135 @@ async function updateInlineItemStatus(sel) {
     });
     toast('Item status updated');
   } catch(e) { toast('Could not update: '+e.message,'danger'); }
+}
+
+// ══ EMPLOYEE ITEM UPDATES ══
+async function saveItemNote(itemId) {
+  const ta = document.querySelector('[data-note-id="' + itemId + '"]');
+  if (!ta) return;
+  try {
+    await db.collection('weekly_items').doc(itemId).update({ latestNote:ta.value.trim(), latestNoteBy:CD.name, latestNoteAt:firebase.firestore.FieldValue.serverTimestamp(), updatedAt:firebase.firestore.FieldValue.serverTimestamp() });
+    toast('✓ Note saved');
+  } catch(e) { toast('Error: '+e.message,'err'); }
+}
+
+function openEmployeeUpdateModal(itemId, itemTitle, currentDeadline, currentStatus) {
+  const ex = document.getElementById('emp-update-modal'); if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'emp-update-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  const opts = [{v:'pending',l:'Open'},{v:'in_progress',l:'In Progress'},{v:'completed_on_time',l:'✓ Completed On Time'},{v:'completed_late',l:'⚠ Completed Late'},{v:'not_completed',l:'✗ Not Completed'},{v:'canceled_by_client',l:'🚫 Canceled by Client'}];
+  modal.innerHTML = '<div style="background:#1E1E1E;border:1px solid #333;border-radius:12px;padding:24px;width:480px;max-height:90vh;overflow-y:auto">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><div style="font-size:14px;font-weight:700;color:#F0F0F0">Update My Item</div><button id="eu-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">&#10005;</button></div>'
+    +'<div style="font-size:12px;padding:8px 11px;background:#2A2A2A;border-radius:6px;margin-bottom:14px;color:#D0D0D0;font-weight:500;border-left:3px solid #60A5FA">'+itemTitle+'</div>'
+    +'<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Status</label>'
+    +'<select id="eu-status" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:13px">'+opts.map(o=>'<option value="'+o.v+'"'+(currentStatus===o.v?' selected':'')+'>'+o.l+'</option>').join('')+'</select></div>'
+    +'<div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Progress note / update</label>'
+    +'<textarea id="eu-note" rows="3" placeholder="What did you accomplish? Any blockers? If canceled — what did client say?" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:12px;font-family:inherit;resize:vertical"></textarea></div>'
+    +'<div style="background:rgba(96,165,250,.07);border:1px solid rgba(96,165,250,.15);border-radius:6px;padding:8px 11px;margin-bottom:14px;font-size:11px;color:#60A5FA;line-height:1.5">&#128712; To change your deadline, use the <strong>Extend Deadline</strong> button — manager must approve.</div>'
+    +'<div style="display:flex;gap:8px"><button id="eu-save" style="flex:1;padding:10px;background:#60A5FA;color:#000;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Save Update</button><button id="eu-cancel" style="padding:10px 16px;background:transparent;color:#888;border:1px solid #383838;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button></div></div>';
+  document.body.appendChild(modal);
+  document.getElementById('eu-close').addEventListener('click',function(){modal.remove();});
+  document.getElementById('eu-cancel').addEventListener('click',function(){modal.remove();});
+  document.getElementById('eu-save').addEventListener('click',function(){saveEmployeeUpdate(itemId);});
+}
+
+async function saveEmployeeUpdate(itemId) {
+  const status = document.getElementById('eu-status')?.value;
+  const note   = document.getElementById('eu-note')?.value?.trim();
+  const btn    = document.getElementById('eu-save');
+  if (btn) { btn.textContent='Saving…'; btn.disabled=true; }
+  try {
+    await db.collection('weekly_items').doc(itemId).update({
+      status, latestNote:note, latestNoteBy:CD.name,
+      latestNoteAt:firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
+      lastStatusBy:CD.name, lastStatusRole:CD.role,
+      changeLog:firebase.firestore.FieldValue.arrayUnion({by:CD.name,role:CD.role,to:status,note:note||'',ts:new Date().toLocaleString()})
+    });
+    const modal = document.getElementById('emp-update-modal'); if (modal) modal.remove();
+    toast('✓ Item updated');
+    if (document.getElementById('inline-weekly-items')) loadInlineWeeklyItems();
+    if (document.getElementById('items-list')) renderItems();
+  } catch(e) {
+    toast('Error: '+e.message,'err');
+    if (btn) { btn.textContent='Save Update'; btn.disabled=false; }
+  }
+}
+
+// ══ EXTENSION REQUEST SYSTEM ══
+function openExtensionModal(itemId, itemTitle, currentDeadline) {
+  const ex = document.getElementById('ext-req-modal'); if (ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'ext-req-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML = '<div style="background:#1E1E1E;border:1px solid #333;border-radius:12px;padding:24px;width:480px;max-height:90vh;overflow-y:auto">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><div style="font-size:14px;font-weight:700;color:#F0F0F0">Request Deadline Extension</div><button id="ext-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">&#10005;</button></div>'
+    +'<div style="font-size:12px;padding:8px 11px;background:#2A2A2A;border-radius:6px;margin-bottom:12px;color:#D0D0D0;font-weight:500;border-left:3px solid #FBBF24">'+itemTitle+'</div>'
+    +'<div style="font-size:11px;color:#777;margin-bottom:14px">Current deadline: <strong style="color:#F87171">'+(currentDeadline||'—')+'</strong></div>'
+    +'<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Why do you need more time? <span style="color:#F87171">*</span></label>'
+    +'<textarea id="ext-reason" rows="3" placeholder="Be specific — what happened, what is blocking you?" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:12px;font-family:inherit;resize:vertical"></textarea></div>'
+    +'<div style="margin-bottom:16px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Proposed new deadline <span style="color:#F87171">*</span></label>'
+    +'<input type="date" id="ext-new-deadline" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:13px"></div>'
+    +'<div style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.18);border-radius:6px;padding:9px 11px;margin-bottom:16px;font-size:11px;color:#FBBF24;line-height:1.5">&#9888; <strong>Manager must approve.</strong> Original deadline is always recorded for accountability.</div>'
+    +'<div style="display:flex;gap:8px"><button id="ext-submit-btn" style="flex:1;padding:10px;background:#FBBF24;color:#000;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Submit Extension Request</button><button id="ext-cancel-btn" style="padding:10px 16px;background:transparent;color:#888;border:1px solid #383838;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button></div></div>';
+  document.body.appendChild(modal);
+  document.getElementById('ext-close-btn').addEventListener('click',function(){modal.remove();});
+  document.getElementById('ext-cancel-btn').addEventListener('click',function(){modal.remove();});
+  document.getElementById('ext-submit-btn').addEventListener('click',function(){saveExtensionRequest(itemId,itemTitle,currentDeadline);});
+}
+
+async function saveExtensionRequest(itemId, itemTitle, currentDeadline) {
+  const reason = document.getElementById('ext-reason')?.value?.trim();
+  const proposedDeadline = document.getElementById('ext-new-deadline')?.value;
+  if (!reason) { toast('Please explain why you need an extension','warn'); return; }
+  if (!proposedDeadline) { toast('Please select a proposed new deadline','warn'); return; }
+  if (proposedDeadline <= (currentDeadline||'')) { toast('New deadline must be after current deadline','warn'); return; }
+  const btn = document.getElementById('ext-submit-btn');
+  if (btn) { btn.textContent='Submitting…'; btn.disabled=true; }
+  try {
+    const itemSnap = await db.collection('weekly_items').doc(itemId).get();
+    const item = itemSnap.data();
+    if (!item.originalDeadline) {
+      await db.collection('weekly_items').doc(itemId).update({originalDeadline:item.deadline||currentDeadline});
+    }
+    await db.collection('extension_requests').add({
+      itemId, itemTitle,
+      originalDeadline:item.originalDeadline||item.deadline||currentDeadline,
+      proposedDeadline, reason,
+      requestedBy:CU.uid, requestedByName:CD.name, requestedByRole:CD.role,
+      branch:item.branch||CD.branch, weekStart:item.weekStart||weekKey(CW),
+      status:'pending', createdAt:firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('weekly_items').doc(itemId).update({hasPendingExtension:true,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    const modal = document.getElementById('ext-req-modal'); if (modal) modal.remove();
+    toast('✓ Extension request submitted — manager will review it');
+    loadInlineWeeklyItems();
+  } catch(e) {
+    toast('Error: '+e.message,'err');
+    const b2 = document.getElementById('ext-submit-btn');
+    if (b2) { b2.textContent='Submit Extension Request'; b2.disabled=false; }
+  }
+}
+
+async function approveExtension(requestId, itemId, proposedDeadline, requestedByName, reason, originalDeadline) {
+  try {
+    const logEntry = {type:'extension_approved',by:CD.name,byRole:CD.role,requestedBy:requestedByName,reason,originalDeadline,newDeadline:proposedDeadline,approvedAt:new Date().toISOString()};
+    await db.collection('extension_requests').doc(requestId).update({status:'approved',approvedBy:CU.uid,approvedByName:CD.name,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    await db.collection('weekly_items').doc(itemId).update({deadline:proposedDeadline,hasPendingExtension:false,extensionHistory:firebase.firestore.FieldValue.arrayUnion(logEntry),updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    toast('✓ Extension approved — deadline updated to '+proposedDeadline);
+    renderAccountability();
+  } catch(e) { toast('Error: '+e.message,'err'); }
+}
+
+async function denyExtension(requestId, itemId, requestedByName) {
+  const reason = prompt('Reason for denying (shown to employee):') || '';
+  try {
+    await db.collection('extension_requests').doc(requestId).update({status:'denied',deniedBy:CU.uid,deniedByName:CD.name,deniedReason:reason,deniedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    await db.collection('weekly_items').doc(itemId).update({hasPendingExtension:false,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    toast('Extension denied for '+requestedByName);
+    renderAccountability();
+  } catch(e) { toast('Error: '+e.message,'err'); }
 }
 
 </script>
