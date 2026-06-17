@@ -1349,6 +1349,7 @@ async function renderDashboard() {
     });
     loadCarryoverForDash(branch);
     loadMyRecentHistory();
+    loadAppreciationsForDash();
 
   } else {
     var pendingNames = teamMembers
@@ -1559,6 +1560,7 @@ async function renderCheckin(type) {
       <button class="btn" onclick="submitCheckin('${type}','${existingId||''}','draft')">Save Draft</button>
       <button class="btn" onclick="navigateTo('dashboard')">Cancel</button>
     </div>`;
+  setTimeout(loadInlineWeeklyItems, 150);
 }
 
 function togglePass() {
@@ -3301,6 +3303,38 @@ async function renderAdmin() {
         </div>
         <div id="restore-preview" style="display:none;margin-top:12px"></div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;border-top:3px solid #C084FC">
+      <div class="card-header">
+        <div class="card-title">&#128140; Send Appreciation</div>
+        <span class="badge" style="background:rgba(192,132,252,.15);color:#C084FC;border-color:rgba(192,132,252,.3)">Admin only</span>
+      </div>
+      <p style="font-size:12px;color:#A0A0A0;margin-bottom:14px;line-height:1.6">Send a private appreciation to any team member. Only they can see it on their dashboard.</p>
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap" id="app-tone-btns">
+        ${['&#128079; Great work','&#127775; Outstanding','&#128170; Keep it up','&#128591; Thank you','&#128293; On fire'].map(t =>
+          `<button class="tone-btn" onclick="selectAppTone(this,'`+t+`')" style="padding:5px 12px;font-size:11px;border-radius:20px;border:1px solid #383838;background:#1E1E1E;color:#A0A0A0;cursor:pointer">`+t+`</button>`
+        ).join('')}
+      </div>
+      <div class="g2" style="margin-bottom:12px">
+        <div class="fg"><label>Send to</label>
+          <select id="app-to-user">
+            ${snap.docs.filter(d=>d.data().active&&d.data().role!=='admin').map(d => {
+              const u=d.data();
+              return `<option value="${d.id}">${esc(u.name)} (${u.branch})</option>`;
+            }).join('')}
+          </select>
+        </div>
+        <div class="fg"><label>Tone</label>
+          <input type="text" id="app-tone" placeholder="Select a tone above or type your own">
+        </div>
+      </div>
+      <div class="fg" style="margin-bottom:14px">
+        <label>Message <span class="req">*</span></label>
+        <textarea id="app-message" rows="3" placeholder="Write your appreciation&#8230; only this person will see it."></textarea>
+      </div>
+      <button class="btn primary" style="background:#7C3AED;border-color:#7C3AED" onclick="sendAppreciation()">&#128156; Send Appreciation</button>
+      <div id="app-result" style="margin-top:10px;display:none"></div>
     </div>`;
 }
 
@@ -3622,27 +3656,31 @@ const BADGES={
   community:     {label:'Community Champion',       icon:'🌍', cls:'green',  desc:'Gives back to the team community'},
 };
 async function computeBadges(uid,role){
+  // Only admin-awarded badges displayed — no auto-earned
   const badges=[];
-  if(['branch_manager','admin'].includes(role))badges.push('branch_leader');
   try{
-    const snap=await db.collection('weekly_submissions').where('userId','==',uid).get();
-    const subs=snap.docs.map(d=>d.data()).filter(s=>s.status==='submitted');
-    if(subs.length>=1)badges.push('rising_star');
-    if(subs.length>=2)badges.push('team_contrib');
-    if(subs.length>=5)badges.push('on_time_5');
-    if(subs.length>=10)badges.push('on_time_10');
-    const wk={};subs.forEach(s=>{if(!wk[s.weekStart])wk[s.weekStart]=new Set();wk[s.weekStart].add(s.formType||'');});
-    if(Object.values(wk).filter(t=>[...t].some(x=>x!=='friday-recap')&&t.has('friday-recap')).length>=1)badges.push('full_week');
-    const weeks=[...new Set(subs.map(s=>s.weekStart))].sort();
-    let streak=1,max=1;
-    for(let i=1;i<weeks.length;i++){const d=(new Date(weeks[i])-new Date(weeks[i-1]))/(7*24*3600*1000);if(Math.round(d)===1){streak++;max=Math.max(max,streak);}else streak=1;}
-    if(max>=4)badges.push('streak_4');if(max>=8)badges.push('streak_8');
+    const aSnap=await db.collection('user_badges').where('userId','==',uid).get();
+    aSnap.docs.forEach(d=>{
+      const b=d.data();
+      badges.push('__awarded__:' + (b.badgeIcon||'🏅') + '|' + (b.badgeName||'Badge'));
+    });
   }catch(e){}
-  return[...new Set(badges)];
+  return badges;
 }
 function renderBadgeChips(ids){
   if(!ids?.length)return'<span style="font-size:12px;color:var(--text3);font-style:italic">Keep submitting to earn badges!</span>';
-  return ids.map(id=>{const b=BADGES[id];return b?`<span class="badge-chip ${b.cls}" title="${b.desc}">${b.icon} ${b.label}</span>`:''}).join('');
+  return ids.map(id=>{
+    // Admin-awarded badges encoded as '__awarded__:icon|name'
+    if(typeof id==='string' && id.startsWith('__awarded__:')){
+      const parts=id.slice(12).split('|');
+      const icon=parts[0]||'🏅';
+      const name=parts.slice(1).join('|')||'Badge';
+      return'<span class="badge-chip gold" title="Awarded by manager">'+icon+' '+esc(name)+'</span>';
+    }
+    // Auto-earned badges mapped to BADGES constant
+    const b=BADGES[id];
+    return b?'<span class="badge-chip '+b.cls+'" title="'+b.desc+'">'+b.icon+' '+b.label+'</span>':'';
+  }).join('');
 }
 
 // ═══ SCENE — time of day + canvas trees ═══
@@ -3930,22 +3968,101 @@ async function deleteBadge(id, name) {
 async function showAwardBadge(preselectedBadgeId) {
   const el = document.getElementById('badge-admin-content');
   if (!el) return;
-  // Load badges and users
-  const [badgeSnap, userSnap] = await Promise.all([
+  el.innerHTML = '<div style="color:#555;font-size:12px;padding:8px">Loading suggestions…</div>';
+
+  const [badgeSnap, userSnap, subSnap, itemSnap] = await Promise.all([
     db.collection('badges').get(),
-    db.collection('users').where('active','==',true).get()
+    db.collection('users').where('active','==',true).get(),
+    db.collection('weekly_submissions').get(),
+    db.collection('weekly_items').get()
   ]);
+
   const badges = badgeSnap.docs.map(d=>({id:d.id,...d.data()}));
-  const users  = userSnap.docs.map(d=>({id:d.id,...d.data()}));
-  el.innerHTML = '<div style="background:#1E1E1E;border:1px solid #333;border-radius:8px;padding:16px;max-width:480px">'
+  const users  = userSnap.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.role!=='admin');
+  const subs   = subSnap.docs.map(d=>d.data());
+  const items  = itemSnap.docs.map(d=>d.data());
+
+  const stats = {};
+  users.forEach(u => {
+    const userSubs  = subs.filter(s=>s.userId===u.id && s.status==='submitted');
+    const userItems = items.filter(i=>i.owner===u.id || i.ownerName===u.name);
+    const weeks = [...new Set(userSubs.map(s=>s.weekStart))].sort();
+    let streak=0, cur=0;
+    for(let i=1;i<weeks.length;i++){
+      const diff=Math.round((new Date(weeks[i])-new Date(weeks[i-1]))/(7*24*3600*1000));
+      cur=diff===1?cur+1:0; streak=Math.max(streak,cur);
+    }
+    if(weeks.length>0) streak=Math.max(streak,1);
+    const onTime  = userItems.filter(i=>i.status==='completed_on_time').length;
+    const missed  = userItems.filter(i=>i.status==='not_completed').length;
+    const overdue = userItems.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]).length;
+    const total   = userItems.length;
+    stats[u.id] = {name:u.name,branch:u.branch,subCount:userSubs.length,streak,onTime,missed,overdue,total,rate:total?Math.round(onTime/total*100):null};
+  });
+
+  const suggestions = [];
+  const seen = new Set();
+  const addSug = (uid, badge, reason, suggestedBadge) => {
+    if (!seen.has(uid) && stats[uid]) { seen.add(uid); suggestions.push({uid,name:stats[uid].name,branch:stats[uid].branch,badge,reason,suggestedBadge}); }
+  };
+
+  const topStreak = Object.entries(stats).sort((a,b)=>b[1].streak-a[1].streak)[0];
+  if (topStreak && topStreak[1].streak>=3)
+    addSug(topStreak[0],'🔥',topStreak[1].streak+'-week submission streak','4-Week Streak');
+
+  const perfect = Object.entries(stats).filter(([,s])=>s.rate===100&&s.total>=3).sort((a,b)=>b[1].total-a[1].total);
+  if (perfect.length)
+    addSug(perfect[0][0],'✅',perfect[0][1].onTime+'/'+perfect[0][1].total+' items completed on time (100%)','Zero Miss Month');
+
+  const clean = Object.entries(stats).filter(([,s])=>s.total>=2&&s.missed===0&&s.overdue===0&&s.rate!==null);
+  if (clean.length)
+    addSug(clean[0][0],'💎','Zero missed or overdue items across '+clean[0][1].total+' tasks','Reliability Champion');
+
+  const topSub = Object.entries(stats).sort((a,b)=>b[1].subCount-a[1].subCount)[0];
+  if (topSub && topSub[1].subCount>=5)
+    addSug(topSub[0],'⭐',topSub[1].subCount+' total check-ins submitted','Consistency Star');
+
+  const suggestHtml = suggestions.length
+    ? '<div style="margin-bottom:16px">'
+      + '<div style="font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">&#128161; Suggested based on data &#8212; you decide who to award</div>'
+      + suggestions.map(s=>
+          '<div style="background:#1A1A1A;border:1px solid #2E2E2E;border-left:3px solid #FBBF24;border-radius:6px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:12px">'
+          + '<div style="font-size:22px;flex-shrink:0">'+s.badge+'</div>'
+          + '<div style="flex:1">'
+          + '<div style="font-size:12px;font-weight:700;color:#E0E0E0">'+esc(s.name)+' <span style="font-size:10px;color:#777;font-weight:400">&middot; '+s.branch+'</span></div>'
+          + '<div style="font-size:11px;color:#AAA;margin-top:2px">'+esc(s.reason)+'</div>'
+          + '<div style="font-size:10px;color:#FBBF24;margin-top:3px">Suggested: '+esc(s.suggestedBadge)+'</div>'
+          + '</div>'
+          + '<button class="award-suggest-btn" data-uid="'+s.uid+'" style="padding:5px 12px;font-size:11px;font-weight:600;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.25);border-radius:6px;cursor:pointer;white-space:nowrap;flex-shrink:0">Award &#8594;</button>'
+          + '</div>'
+        ).join('')
+      + '</div>'
+    : '';
+
+  el.innerHTML = suggestHtml
+    + '<div style="background:#1E1E1E;border:1px solid #333;border-radius:8px;padding:16px">'
     + '<div style="font-size:13px;font-weight:700;color:#E0E0E0;margin-bottom:12px">Award Badge</div>'
-    + '<div class="fg" style="margin-bottom:10px"><label>Select employee</label><select id="aw-user">'
+    + '<div class="fg" style="margin-bottom:10px"><label>Employee</label><select id="aw-user">'
     + users.map(u=>'<option value="'+u.id+'">'+esc(u.name)+' ('+u.branch+')</option>').join('')+'</select></div>'
-    + '<div class="fg" style="margin-bottom:10px"><label>Select badge</label><select id="aw-badge">'
+    + '<div class="fg" style="margin-bottom:10px"><label>Badge</label><select id="aw-badge">'
     + badges.map(b=>'<option value="'+b.id+'"'+(b.id===preselectedBadgeId?' selected':'')+'>'+b.icon+' '+esc(b.name)+'</option>').join('')+'</select></div>'
     + '<div class="fg" style="margin-bottom:14px"><label>Note (optional)</label><textarea id="aw-note" rows="2" placeholder="Reason for awarding…"></textarea></div>'
     + '<div style="display:flex;gap:8px"><button class="btn primary" onclick="awardBadgeNow()">Award Badge</button><button class="btn" onclick="showBadgePanel()">Cancel</button></div>'
     + '</div>';
+
+  el.querySelectorAll('.award-suggest-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { prefillAward(this.dataset.uid); });
+  });
+}
+
+function prefillAward(uid) {
+  const sel = document.getElementById('aw-user');
+  if (!sel) return;
+  for (let i=0; i<sel.options.length; i++) {
+    if (sel.options[i].value === uid) { sel.selectedIndex=i; break; }
+  }
+  sel.scrollIntoView({behavior:'smooth',block:'nearest'});
+  toast('Employee selected — pick a badge and award');
 }
 
 async function awardBadgeNow() {
@@ -4185,15 +4302,8 @@ async function loadInlineWeeklyItems() {
       const canRequestExt = !isDone && item.status !== 'not_completed' && !hasPendingExt;
       const safeTitle = esc(item.title).replace(/'/g,"\'");
       const extBtn = canRequestExt
-const deadline = item.deadline || '';
-
-return `
-<button
-  onclick="openExtensionModal('${d.id}','${safeTitle}','${deadline}')"
-  style="padding:3px 9px;font-size:10px;font-weight:600;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.25);border-radius:5px;cursor:pointer">
-  ${isPastDue ? '⚠ Request Extension' : '📅 Extend'}
-</button>
-`;      const borderColor = isCanceled?'rgba(148,163,184,.25)':isPastDue?'rgba(248,113,113,.35)':hasPendingExt?'rgba(251,191,36,.3)':'#2E2E2E';
+        ? '<button onclick="openExtensionModal(\'' + d.id + '\',\'' + safeTitle + '\',\'' + (item.deadline||'') + '\')" style="padding:3px 9px;font-size:10px;font-weight:600;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.25);border-radius:5px;cursor:pointer">' + (isPastDue?'\u26a0 Request Extension':'\ud83d\udcc5 Extend') + '</button>' : '';
+      const borderColor = isCanceled?'rgba(148,163,184,.25)':isPastDue?'rgba(248,113,113,.35)':hasPendingExt?'rgba(251,191,36,.3)':'#2E2E2E';
       return '<div style="background:#1E1E1E;border:1px solid ' + borderColor + ';border-radius:6px;padding:10px 12px;margin-bottom:6px' + (isCanceled?';opacity:.7':'') + '">'
         + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
         + '<div style="flex:1;min-width:0">'
@@ -4205,7 +4315,7 @@ return `
         + '</select>' + extBtn + '</div></div>'
         + '<div style="margin-top:7px">'
         + '<textarea data-note-id="' + d.id + '" rows="2" placeholder="' + (isCanceled?'Add cancelation details…':'Progress note or update…') + '" style="width:100%;padding:6px 9px;border-radius:5px;border:1px solid #333;background:#252525;color:#CCC;font-size:11px;font-family:inherit;resize:vertical">' + esc(item.latestNote||'') + '</textarea>'
-        + `<button onclick="saveItemNote('${d.id}')" style="margin-top:3px;padding:3px 10px;font-size:10px;font-weight:600;background:#2A2A2A;color:#888;border:1px solid #383838;border-radius:5px;cursor:pointer">Save Note</button>`
+        + '<button onclick="saveItemNote(\'' + d.id + '\')" style="margin-top:3px;padding:3px 10px;font-size:10px;font-weight:600;background:#2A2A2A;color:#888;border:1px solid #383838;border-radius:5px;cursor:pointer">Save Note</button>'
         + (item.latestNoteBy ? '<span style="font-size:10px;color:#555;margin-left:8px">Last update by ' + esc(item.latestNoteBy) + '</span>' : '')
         + '</div>'
         + (hasPendingExt?'<div class="ext-pending-banner">🔄 Extension pending approval &mdash; Proposed: <strong>'+(extInfo.proposedDeadline||'—')+'</strong></div>':'')
@@ -4365,6 +4475,115 @@ async function denyExtension(requestId, itemId, requestedByName) {
     toast('Extension denied for '+requestedByName);
     renderAccountability();
   } catch(e) { toast('Error: '+e.message,'err'); }
+}
+
+// ══ APPRECIATION SYSTEM ══
+
+function selectAppTone(btn, tone) {
+  document.querySelectorAll('#app-tone-btns .tone-btn').forEach(b => {
+    b.style.background='#1E1E1E'; b.style.color='#A0A0A0'; b.style.borderColor='#383838';
+  });
+  btn.style.background='rgba(192,132,252,.15)';
+  btn.style.color='#C084FC';
+  btn.style.borderColor='rgba(192,132,252,.4)';
+  const inp = document.getElementById('app-tone');
+  if (inp) inp.value = tone;
+}
+
+async function sendAppreciation() {
+  const toUserId = document.getElementById('app-to-user')?.value;
+  const tone     = document.getElementById('app-tone')?.value?.trim();
+  const message  = document.getElementById('app-message')?.value?.trim();
+  const result   = document.getElementById('app-result');
+  if (!toUserId) { toast('Select a recipient','warn'); return; }
+  if (!message)  { toast('Please write a message','warn'); return; }
+  const btn = document.querySelector('[onclick="sendAppreciation()"]');
+  if (btn) { btn.textContent='Sending…'; btn.disabled=true; }
+  try {
+    const userSnap = await db.collection('users').doc(toUserId).get();
+    const toName   = userSnap.data()?.name || 'Team member';
+    await db.collection('appreciations').add({
+      toUserId, toName,
+      fromUserId: CU.uid, fromName: CD.name,
+      tone: tone||'', message,
+      read: false,
+      sentAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    if (result) {
+      result.style.display='block';
+      result.innerHTML='<div style="background:rgba(192,132,252,.1);border:1px solid rgba(192,132,252,.25);border-radius:6px;padding:10px 14px;font-size:13px;color:#C084FC">'
+        +'❤️ Sent to <strong>'+esc(toName)+'</strong> — they will see it on their dashboard.</div>';
+    }
+    const msgEl=document.getElementById('app-message'); if(msgEl) msgEl.value='';
+    const toneEl=document.getElementById('app-tone'); if(toneEl) toneEl.value='';
+    document.querySelectorAll('#app-tone-btns .tone-btn').forEach(b=>{
+      b.style.background='#1E1E1E'; b.style.color='#A0A0A0'; b.style.borderColor='#383838';
+    });
+    toast('❤️ Appreciation sent to '+toName);
+  } catch(e) {
+    toast('Error: '+e.message,'err');
+  } finally {
+    if (btn) { btn.innerHTML='&#128156; Send Appreciation'; btn.disabled=false; }
+  }
+}
+
+async function loadAppreciationsForDash() {
+  try {
+    const snap = await db.collection('appreciations')
+      .where('toUserId','==',CU.uid).get();
+    if (snap.empty) return;
+    const ca = document.getElementById('content-area');
+    if (!ca) return;
+
+    const allDocs = snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>{ // newest first
+        const ta = a.sentAt?.toMillis?.() || 0;
+        const tb = b.sentAt?.toMillis?.() || 0;
+        return tb - ta;
+      });
+    const unreadDocs = allDocs.filter(a=>!a.read);
+
+    const cards = allDocs.map(a => {
+      const ts = a.sentAt?.toDate?.()?.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})||'';
+      const toneIcon = a.tone ? a.tone.split(' ')[0] : '❤️';
+      const isNew = !a.read;
+      return '<div style="background:rgba(192,132,252,' + (isNew?'.1':'.05') + ');border:1px solid rgba(192,132,252,' + (isNew?'.35':'.15') + ');border-radius:10px;padding:14px 16px;margin-bottom:10px;position:relative">'
+        + (isNew ? '<div style="position:absolute;top:12px;right:12px;background:#C084FC;color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.04em;text-transform:uppercase">NEW</div>' : '')
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+        + '<span style="font-size:20px">' + toneIcon + '</span>'
+        + '<div><div style="font-size:12px;font-weight:700;color:#C084FC">From ' + esc(a.fromName) + '</div>'
+        + '<div style="font-size:10px;color:#777">' + ts + '</div></div>'
+        + '</div>'
+        + (a.tone ? '<div style="font-size:10px;color:#C084FC;margin-bottom:6px;font-weight:600">' + esc(a.tone) + '</div>' : '')
+        + '<div style="font-size:13px;color:#E0E0E0;line-height:1.6">' + esc(a.message) + '</div>'
+        + '</div>';
+    }).join('');
+
+    const headerText = unreadDocs.length
+      ? '&#128140; Appreciations <span style="background:#C084FC;color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">' + unreadDocs.length + ' NEW</span>'
+      : '&#128140; Appreciations (' + allDocs.length + ')';
+
+    const wrapper = document.createElement('div');
+    wrapper.id = 'appreciation-banner';
+    wrapper.innerHTML = '<div style="margin-bottom:16px">'
+      + '<div style="font-size:11px;font-weight:700;color:#C084FC;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">' + headerText + '</div>'
+      + cards
+      + '</div>';
+    ca.insertBefore(wrapper, ca.firstChild);
+
+    // Mark unread as seen after 3 seconds (they stay visible — just removes NEW badge next visit)
+    if (unreadDocs.length) {
+      setTimeout(async function() {
+        try {
+          const batch = db.batch();
+          unreadDocs.forEach(a => {
+            batch.update(db.collection('appreciations').doc(a.id), {read: true});
+          });
+          await batch.commit();
+        } catch(e) { /* silent — not critical */ }
+      }, 3000);
+    }
+  } catch(e) { console.warn('loadAppreciationsForDash:', e.message); }
 }
 
 </script>
