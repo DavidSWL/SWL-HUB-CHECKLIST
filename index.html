@@ -1225,6 +1225,10 @@ function buildSidebar() {
       <button class="nav-btn" onclick="navigateTo('admin')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M12 14c-6 0-8 3-8 4v1h16v-1c0-1-2-4-8-4z"/></svg>
         Admin Panel
+     </button>
+      <button class="nav-btn" onclick="navigateTo('item-report')">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17v-2m3 2v-4m3 4v-6M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        Item Report
       </button>`;
   }
 
@@ -1281,14 +1285,120 @@ function renderScreen(screen) {
     'summary':        { title:'Monday Meeting Summary',    fn: renderSummary },
     'friday-summary': { title:'Friday Team Summary',         fn: renderFridaySummary },
     'team':         { title:'Team Overview',       fn: renderTeam },
-    'admin':        { title:'Admin Panel',         fn: renderAdmin },
-    'exec-dashboard': { title:'Executive Dashboard',  fn: renderExecDashboard },
-  };
+'admin':        { title:'Admin Panel',         fn: renderAdmin },
+'item-report':  { title:'Employee Item Report', fn: renderItemReport },
+    'exec-dashboard': { title:'Executive Dashboard',  fn: renderExecDashboard },  };
   const s = screens[screen];
   if (!s) return;
   if (tb) tb.textContent = s.title;
   ca.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3)">Loading…</div>';
   s.fn();
+}
+
+// ══════════════════════════════════════════════════
+// EMPLOYEE ITEM REPORT
+async function renderItemReport() {
+  if (!['admin','branch_manager','operations_manager'].includes(CD.role)) {
+    ca.innerHTML = '<div class="empty">Access denied.</div>'; return;
+  }
+  ca.innerHTML = '<div class="empty">Loading report…</div>';
+
+  const [userSnap, itemSnap] = await Promise.all([
+    db.collection('users').get(),
+    db.collection('weekly_items').get()
+  ]);
+  const users = userSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const allItems = itemSnap.docs.map(d=>({id:d.id,...d.data()}));
+  const today = new Date().toISOString().split('T')[0];
+
+  function renderReport(uid, weekFilter) {
+    const user = users.find(u=>u.id===uid);
+    if (!user) return '<div class="empty">Select an employee above.</div>';
+    let items = allItems.filter(i => i.owner===uid || i.ownerName===user.name);
+    items = [...new Map(items.map(i=>[i.id,i])).values()];
+    if (weekFilter) items = items.filter(i=>i.weekStart===weekFilter);
+    if (!items.length) return '<div class="empty">No items found for this employee.</div>';
+
+    const groups = {
+      overdue:           { label:'🔴 Overdue (past deadline, not done)', color:'var(--danger)', items:[] },
+      not_completed:     { label:'🟠 Not Completed / Carry-over',        color:'#F97316',       items:[] },
+      pending:           { label:'🟡 Pending (no update yet)',            color:'var(--warn)',   items:[] },
+      in_progress:       { label:'🔵 In Progress',                        color:'#60A5FA',       items:[] },
+      completed_late:    { label:'⚠ Completed Late',                     color:'#FBBF24',       items:[] },
+      completed_on_time: { label:'✅ Completed On Time',                  color:'var(--success)',items:[] },
+      canceled_by_client:{ label:'🚫 Canceled by Client',                color:'var(--text3)',  items:[] },
+    };
+
+    items.forEach(i => {
+      const isOverdue = (i.status==='pending'||i.status==='in_progress') && i.deadline && i.deadline < today;
+      if (isOverdue) groups.overdue.items.push(i);
+      else if (groups[i.status||'pending']) groups[i.status||'pending'].items.push(i);
+      else groups.pending.items.push(i);
+    });
+
+    const total = items.length;
+    const onTime = items.filter(i=>i.status==='completed_on_time').length;
+    const rate = total ? Math.round(onTime/total*100) : 0;
+    const rateColor = rate>=80?'var(--success)':rate>=50?'var(--warn)':'var(--danger)';
+
+    let html = `<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+      <div class="stat-card" style="border-bottom:3px solid var(--text3)"><div class="stat-num">${total}</div><div class="stat-lbl">Total Items</div></div>
+      <div class="stat-card" style="border-bottom:3px solid var(--success)"><div class="stat-num" style="color:var(--success)">${onTime}</div><div class="stat-lbl">On Time</div></div>
+      <div class="stat-card" style="border-bottom:3px solid var(--danger)"><div class="stat-num" style="color:var(--danger)">${groups.overdue.items.length}</div><div class="stat-lbl">Overdue</div></div>
+      <div class="stat-card" style="border-bottom:3px solid #F97316"><div class="stat-num" style="color:#F97316">${groups.not_completed.items.length}</div><div class="stat-lbl">Not Completed</div></div>
+      <div class="stat-card" style="border-bottom:3px solid var(--warn)"><div class="stat-num" style="color:var(--warn)">${groups.pending.items.length}</div><div class="stat-lbl">No Update</div></div>
+      <div class="stat-card" style="border-bottom:3px solid ${rateColor}"><div class="stat-num" style="color:${rateColor}">${rate}%</div><div class="stat-lbl">Completion Rate</div></div>
+    </div>`;
+
+    Object.values(groups).forEach(g => {
+      if (!g.items.length) return;
+      html += `<div class="card" style="margin-bottom:12px;border-top:3px solid ${g.color}">
+        <div class="card-header"><div class="card-title">${g.label}</div><span class="badge">${g.items.length}</span></div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr>${['Item','Week','Deadline','Last Note'].map(h=>`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3)">${h}</th>`).join('')}</tr></thead>
+          <tbody>${g.items.sort((a,b)=>(a.deadline||'').localeCompare(b.deadline||'')).map(i=>`<tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:7px 8px;font-weight:600;max-width:280px">${esc(i.title||'—')}</td>
+            <td style="padding:7px 8px;color:var(--text3);font-size:11px">${i.weekStart||'—'}</td>
+            <td style="padding:7px 8px;color:${i.deadline&&i.deadline<today&&i.status==='pending'?'var(--danger)':'var(--text2)'}">${fmtDate(i.deadline)||'—'}</td>
+            <td style="padding:7px 8px;color:var(--text3);font-size:11px;max-width:300px">${esc(i.employeeNote||i.note||'No note left')}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    });
+    return html;
+  }
+
+  const weeks = [...new Set(allItems.map(i=>i.weekStart).filter(Boolean))].sort().reverse();
+
+  ca.innerHTML = `<div class="card" style="margin-bottom:16px">
+    <div class="card-header"><div class="card-title">🔍 Filter</div></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;padding:4px 0">
+      <div>
+        <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">EMPLOYEE</label>
+        <select id="ir-user" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text1);padding:6px 10px;font-size:13px">
+          <option value="">— Select Employee —</option>
+          ${users.map(u=>`<option value="${u.id}">${esc(u.name)} (${u.branch||'—'})</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">WEEK</label>
+        <select id="ir-week" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text1);padding:6px 10px;font-size:13px">
+          <option value="">All Weeks</option>
+          ${weeks.map(w=>`<option value="${w}">${w}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <button class="btn primary" onclick="document.getElementById('ir-results').innerHTML=window._irRender()">Run Report</button>
+      </div>
+    </div>
+  </div>
+  <div id="ir-results"><div class="empty">Select an employee and click Run Report.</div></div>`;
+
+  window._irRender = () => {
+    const uid = document.getElementById('ir-user').value;
+    const wk  = document.getElementById('ir-week').value;
+    return renderReport(uid, wk||null);
+  };
 }
 
 // ══════════════════════════════════════════════════
@@ -2235,9 +2345,6 @@ async function renderAccountability() {
   const itemSnap = await itemQ.get();
   const items = itemSnap.docs.map(d=>({id:d.id,...d.data()}));
 
-  // Build per-person stats
-  const stats = {};
-  // Build per-person stats — group by UID first, fall back to normalized name
   const stats = {};
   items.forEach(i => {
     const key = i.owner || (i.ownerName||'Unknown').trim().toLowerCase();
