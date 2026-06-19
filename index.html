@@ -1298,7 +1298,7 @@ function renderScreen(screen) {
 // ══════════════════════════════════════════════════
 // EMPLOYEE ITEM REPORT
 async function renderItemReport() {
-  if (!['admin','branch_manager','operations_manager'].includes(CD.role)) {
+  const ca = document.getElementById('content-area');  if (!['admin','branch_manager','operations_manager'].includes(CD.role)) {
     ca.innerHTML = '<div class="empty">Access denied.</div>'; return;
   }
   ca.innerHTML = '<div class="empty">Loading report…</div>';
@@ -1307,8 +1307,10 @@ async function renderItemReport() {
     db.collection('users').get(),
     db.collection('weekly_items').get()
   ]);
-  const users = userSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+const users = userSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   const allItems = itemSnap.docs.map(d=>({id:d.id,...d.data()}));
+  window._irUsers = users;
+  window._irAllItems = allItems;
   const today = new Date().toISOString().split('T')[0];
 
   function renderReport(uid, weekFilter) {
@@ -1388,8 +1390,8 @@ async function renderItemReport() {
         </select>
       </div>
       <div style="display:flex;align-items:flex-end">
-        <button class="btn primary" onclick="document.getElementById('ir-results').innerHTML=window._irRender()">Run Report</button>
-      </div>
+<button class="btn primary" onclick="document.getElementById('ir-results').innerHTML=window._irRender()">Run Report</button>
+        <button class="btn" style="background:rgba(124,58,237,.15);color:#C084FC;border-color:rgba(124,58,237,.3)" onclick="runAIAnalysis()">✨ AI Analyze</button>      </div>
     </div>
   </div>
   <div id="ir-results"><div class="empty">Select an employee and click Run Report.</div></div>`;
@@ -1402,7 +1404,100 @@ async function renderItemReport() {
 }
 
 // ══════════════════════════════════════════════════
-// DASHBOARD
+// AI EMPLOYEE ANALYZER
+async function runAIAnalysis() {
+  const uid = document.getElementById('ir-user')?.value;
+  const wk  = document.getElementById('ir-week')?.value;
+  if (!uid) { toast('Select an employee first','warn'); return; }
+
+  const resultsEl = document.getElementById('ir-results');
+  resultsEl.innerHTML = '<div style="background:#1A1A1A;border:1px solid rgba(124,58,237,.25);border-left:3px solid #7C3AED;border-radius:8px;padding:16px;margin-top:12px"><div style="font-size:12px;color:#C084FC;margin-bottom:8px;font-weight:600">✨ AI is analyzing this employee\'s data…</div><div style="font-size:11px;color:#555">This usually takes 10–15 seconds</div></div>';
+
+  // Collect item data already loaded
+  const allItems = window._irAllItems || [];
+  const users    = window._irUsers    || [];
+  const user     = users.find(u=>u.id===uid);
+  if (!user) { toast('Employee data not found','err'); return; }
+
+  let items = allItems.filter(i => i.owner===uid || i.ownerName===user.name);
+  items = [...new Map(items.map(i=>[i.id,i])).values()];
+  if (wk) items = items.filter(i=>i.weekStart===wk);
+
+  const today = new Date().toISOString().split('T')[0];
+  const total     = items.length;
+  const onTime    = items.filter(i=>i.status==='completed_on_time').length;
+  const overdue   = items.filter(i=>(i.status==='pending'||i.status==='in_progress')&&i.deadline&&i.deadline<today).length;
+  const notDone   = items.filter(i=>i.status==='not_completed').length;
+  const pending   = items.filter(i=>i.status==='pending'&&!(i.deadline&&i.deadline<today)).length;
+  const rate      = total ? Math.round(onTime/total*100) : 0;
+
+  const itemSummary = items.map(i => {
+    const isOverdue = (i.status==='pending'||i.status==='in_progress')&&i.deadline&&i.deadline<today;
+    return `- "${i.title}" | Status: ${isOverdue?'OVERDUE':i.status} | Deadline: ${i.deadline||'none'} | Note: ${i.latestNote||i.employeeNote||'none'} | Week: ${i.weekStart||'?'}`;
+  }).join('\n');
+
+  const prompt = `You are analyzing weekly item performance for a landscape operations employee at SouthWest Landscape Inc.
+
+Employee: ${user.name} (${user.branch} branch, ${user.role||'team member'})
+Time range: ${wk ? 'Week of '+wk : 'All available weeks'}
+
+Item Stats:
+- Total items: ${total}
+- Completed on time: ${onTime}
+- Overdue (past deadline, not done): ${overdue}
+- Not completed / carry-over: ${notDone}
+- Pending (no update yet): ${pending}
+- Completion rate: ${rate}%
+
+Item Details:
+${itemSummary || 'No items found.'}
+
+Write a concise management analysis with these 4 sections:
+1. **Performance Summary** — Overall picture in 2-3 sentences
+2. **Concerns** — Specific issues to flag (missing notes, overdue patterns, carry-overs)
+3. **Positives** — What they are doing well
+4. **Recommendations** — 2-3 concrete actions for the manager
+
+Keep it direct and actionable. Write as if briefing a branch manager.`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await response.json();
+    const text = data.content?.map(c=>c.text||'').join('') || 'No response received.';
+
+    // Convert markdown bold to HTML
+    const html = text
+      .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#E0E0E0">$1</strong>')
+      .replace(/\n\n/g, '</p><p style="margin-top:10px">')
+      .replace(/\n/g, '<br>');
+
+    resultsEl.innerHTML = '<div style="background:#1A1A1A;border:1px solid rgba(124,58,237,.25);border-left:3px solid #7C3AED;border-radius:8px;padding:18px;margin-top:12px">'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid rgba(124,58,237,.2)">'
+      + '<span style="font-size:18px">✨</span>'
+      + '<div><div style="font-size:13px;font-weight:700;color:#C084FC">AI Analysis — '+esc(user.name)+'</div>'
+      + '<div style="font-size:10px;color:#555;margin-top:1px">Generated by Claude · Based on '+total+' items</div></div>'
+      + '<span style="margin-left:auto;background:rgba(124,58,237,.12);color:#C084FC;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid rgba(124,58,237,.25)">AI GENERATED</span>'
+      + '</div>'
+      + '<div style="font-size:13px;color:#D0D0D0;line-height:1.8"><p>'+html+'</p></div>'
+      + '<div style="margin-top:14px;padding-top:10px;border-top:1px solid rgba(124,58,237,.15);font-size:11px;color:#555">Based on Firestore item data — deadline, status, notes, and history</div>'
+      + '</div>'
+      + (window._irLastReport || '');
+
+  } catch(e) {
+    resultsEl.innerHTML = '<div style="color:#F87171;font-size:13px;padding:12px;background:rgba(248,113,113,.08);border-radius:6px">AI analysis failed: '+esc(e.message)+'</div>';
+  }
+}
+
+// ══════════════════════════════════════════════════
+// DASHBOARD// DASHBOARD
 // ══════════════════════════════════════════════════
 async function renderDashboard() {
   applySidebarTheme();
@@ -2349,8 +2444,15 @@ async function renderAccountability() {
   items.forEach(i => {
     const key = i.owner || (i.ownerName||'Unknown').trim().toLowerCase();
     const displayName = i.ownerName || 'Unknown';
-    if (!stats[key]) stats[key] = { name:displayName, branch:i.branch||'—', total:0, onTime:0, late:0, missed:0, pending:0, carryover:0 };
-  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');
+if (!stats[key]) stats[key] = { name:displayName, branch:i.branch||'—', total:0, onTime:0, late:0, missed:0, pending:0, carryover:0 };
+    stats[key].total++;
+    if (i.status==='completed_on_time') stats[key].onTime++;
+    else if (i.status==='completed_late') stats[key].late++;
+    else if (i.status==='not_completed') { stats[key].missed++; stats[key].carryover++; }
+    else stats[key].pending++;
+  });
+  const people = Object.values(stats).sort((a,b)=>b.missed-a.missed);
+  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');
   const carryovers = items.filter(i=>i.status==='not_completed');
 
   let extQ = db.collection('extension_requests').where('status','==','pending');
