@@ -1225,10 +1225,6 @@ function buildSidebar() {
       <button class="nav-btn" onclick="navigateTo('admin')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M12 14c-6 0-8 3-8 4v1h16v-1c0-1-2-4-8-4z"/></svg>
         Admin Panel
-     </button>
-      <button class="nav-btn" onclick="navigateTo('item-report')">
-        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17v-2m3 2v-4m3 4v-6M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-        Item Report
       </button>`;
   }
 
@@ -1285,9 +1281,9 @@ function renderScreen(screen) {
     'summary':        { title:'Monday Meeting Summary',    fn: renderSummary },
     'friday-summary': { title:'Friday Team Summary',         fn: renderFridaySummary },
     'team':         { title:'Team Overview',       fn: renderTeam },
-'admin':        { title:'Admin Panel',         fn: renderAdmin },
-'item-report':  { title:'Employee Item Report', fn: renderItemReport },
-    'exec-dashboard': { title:'Executive Dashboard',  fn: renderExecDashboard },  };
+    'admin':        { title:'Admin Panel',         fn: renderAdmin },
+    'exec-dashboard': { title:'Executive Dashboard',  fn: renderExecDashboard },
+  };
   const s = screens[screen];
   if (!s) return;
   if (tb) tb.textContent = s.title;
@@ -1296,208 +1292,7 @@ function renderScreen(screen) {
 }
 
 // ══════════════════════════════════════════════════
-// EMPLOYEE ITEM REPORT
-async function renderItemReport() {
-  const ca = document.getElementById('content-area');  if (!['admin','branch_manager','operations_manager'].includes(CD.role)) {
-    ca.innerHTML = '<div class="empty">Access denied.</div>'; return;
-  }
-  ca.innerHTML = '<div class="empty">Loading report…</div>';
-
-  const [userSnap, itemSnap] = await Promise.all([
-    db.collection('users').get(),
-    db.collection('weekly_items').get()
-  ]);
-const users = userSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const allItems = itemSnap.docs.map(d=>({id:d.id,...d.data()}));
-  window._irUsers = users;
-  window._irAllItems = allItems;
-  const today = new Date().toISOString().split('T')[0];
-
-  function renderReport(uid, weekFilter) {
-    const user = users.find(u=>u.id===uid);
-    if (!user) return '<div class="empty">Select an employee above.</div>';
-    let items = allItems.filter(i => i.owner===uid || i.ownerName===user.name);
-    items = [...new Map(items.map(i=>[i.id,i])).values()];
-    if (weekFilter) items = items.filter(i=>i.weekStart===weekFilter);
-    if (!items.length) return '<div class="empty">No items found for this employee.</div>';
-
-    const groups = {
-      overdue:           { label:'🔴 Overdue (past deadline, not done)', color:'var(--danger)', items:[] },
-      not_completed:     { label:'🟠 Not Completed / Carry-over',        color:'#F97316',       items:[] },
-      pending:           { label:'🟡 Pending (no update yet)',            color:'var(--warn)',   items:[] },
-      in_progress:       { label:'🔵 In Progress',                        color:'#60A5FA',       items:[] },
-      completed_late:    { label:'⚠ Completed Late',                     color:'#FBBF24',       items:[] },
-      completed_on_time: { label:'✅ Completed On Time',                  color:'var(--success)',items:[] },
-      canceled_by_client:{ label:'🚫 Canceled by Client',                color:'var(--text3)',  items:[] },
-    };
-
-    items.forEach(i => {
-      const isOverdue = (i.status==='pending'||i.status==='in_progress') && i.deadline && i.deadline < today;
-      if (isOverdue) groups.overdue.items.push(i);
-      else if (groups[i.status||'pending']) groups[i.status||'pending'].items.push(i);
-      else groups.pending.items.push(i);
-    });
-
-    const total = items.length;
-    const onTime = items.filter(i=>i.status==='completed_on_time').length;
-    const rate = total ? Math.round(onTime/total*100) : 0;
-    const rateColor = rate>=80?'var(--success)':rate>=50?'var(--warn)':'var(--danger)';
-
-    let html = `<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
-      <div class="stat-card" style="border-bottom:3px solid var(--text3)"><div class="stat-num">${total}</div><div class="stat-lbl">Total Items</div></div>
-      <div class="stat-card" style="border-bottom:3px solid var(--success)"><div class="stat-num" style="color:var(--success)">${onTime}</div><div class="stat-lbl">On Time</div></div>
-      <div class="stat-card" style="border-bottom:3px solid var(--danger)"><div class="stat-num" style="color:var(--danger)">${groups.overdue.items.length}</div><div class="stat-lbl">Overdue</div></div>
-      <div class="stat-card" style="border-bottom:3px solid #F97316"><div class="stat-num" style="color:#F97316">${groups.not_completed.items.length}</div><div class="stat-lbl">Not Completed</div></div>
-      <div class="stat-card" style="border-bottom:3px solid var(--warn)"><div class="stat-num" style="color:var(--warn)">${groups.pending.items.length}</div><div class="stat-lbl">No Update</div></div>
-      <div class="stat-card" style="border-bottom:3px solid ${rateColor}"><div class="stat-num" style="color:${rateColor}">${rate}%</div><div class="stat-lbl">Completion Rate</div></div>
-    </div>`;
-
-    Object.values(groups).forEach(g => {
-      if (!g.items.length) return;
-      html += `<div class="card" style="margin-bottom:12px;border-top:3px solid ${g.color}">
-        <div class="card-header"><div class="card-title">${g.label}</div><span class="badge">${g.items.length}</span></div>
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead><tr>${['Item','Week','Deadline','Last Note'].map(h=>`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3)">${h}</th>`).join('')}</tr></thead>
-          <tbody>${g.items.sort((a,b)=>(a.deadline||'').localeCompare(b.deadline||'')).map(i=>`<tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:7px 8px;font-weight:600;max-width:280px">${esc(i.title||'—')}</td>
-            <td style="padding:7px 8px;color:var(--text3);font-size:11px">${i.weekStart||'—'}</td>
-            <td style="padding:7px 8px;color:${i.deadline&&i.deadline<today&&i.status==='pending'?'var(--danger)':'var(--text2)'}">${fmtDate(i.deadline)||'—'}</td>
-            <td style="padding:7px 8px;color:var(--text3);font-size:11px;max-width:300px">${esc(i.employeeNote||i.note||'No note left')}</td>
-          </tr>`).join('')}</tbody>
-        </table>
-      </div>`;
-    });
-    return html;
-  }
-
-  const weeks = [...new Set(allItems.map(i=>i.weekStart).filter(Boolean))].sort().reverse();
-
-  ca.innerHTML = `<div class="card" style="margin-bottom:16px">
-    <div class="card-header"><div class="card-title">🔍 Filter</div></div>
-    <div style="display:flex;gap:12px;flex-wrap:wrap;padding:4px 0">
-      <div>
-        <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">EMPLOYEE</label>
-        <select id="ir-user" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text1);padding:6px 10px;font-size:13px">
-          <option value="">— Select Employee —</option>
-          ${users.map(u=>`<option value="${u.id}">${esc(u.name)} (${u.branch||'—'})</option>`).join('')}
-        </select>
-      </div>
-      <div>
-        <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">WEEK</label>
-        <select id="ir-week" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text1);padding:6px 10px;font-size:13px">
-          <option value="">All Weeks</option>
-          ${weeks.map(w=>`<option value="${w}">${w}</option>`).join('')}
-        </select>
-      </div>
-      <div style="display:flex;align-items:flex-end">
-<button class="btn primary" onclick="document.getElementById('ir-results').innerHTML=window._irRender()">Run Report</button>
-        <button class="btn" style="background:rgba(124,58,237,.15);color:#C084FC;border-color:rgba(124,58,237,.3)" onclick="runAIAnalysis()">✨ AI Analyze</button>      </div>
-    </div>
-  </div>
-  <div id="ir-results"><div class="empty">Select an employee and click Run Report.</div></div>`;
-
-  window._irRender = () => {
-    const uid = document.getElementById('ir-user').value;
-    const wk  = document.getElementById('ir-week').value;
-    return renderReport(uid, wk||null);
-  };
-}
-
-// ══════════════════════════════════════════════════
-// AI EMPLOYEE ANALYZER
-async function runAIAnalysis() {
-  const uid = document.getElementById('ir-user')?.value;
-  const wk  = document.getElementById('ir-week')?.value;
-  if (!uid) { toast('Select an employee first','warn'); return; }
-
-  const resultsEl = document.getElementById('ir-results');
-  resultsEl.innerHTML = '<div style="background:#1A1A1A;border:1px solid rgba(124,58,237,.25);border-left:3px solid #7C3AED;border-radius:8px;padding:16px;margin-top:12px"><div style="font-size:12px;color:#C084FC;margin-bottom:8px;font-weight:600">✨ AI is analyzing this employee\'s data…</div><div style="font-size:11px;color:#555">This usually takes 10–15 seconds</div></div>';
-
-  // Collect item data already loaded
-  const allItems = window._irAllItems || [];
-  const users    = window._irUsers    || [];
-  const user     = users.find(u=>u.id===uid);
-  if (!user) { toast('Employee data not found','err'); return; }
-
-  let items = allItems.filter(i => i.owner===uid || i.ownerName===user.name);
-  items = [...new Map(items.map(i=>[i.id,i])).values()];
-  if (wk) items = items.filter(i=>i.weekStart===wk);
-
-  const today = new Date().toISOString().split('T')[0];
-  const total     = items.length;
-  const onTime    = items.filter(i=>i.status==='completed_on_time').length;
-  const overdue   = items.filter(i=>(i.status==='pending'||i.status==='in_progress')&&i.deadline&&i.deadline<today).length;
-  const notDone   = items.filter(i=>i.status==='not_completed').length;
-  const pending   = items.filter(i=>i.status==='pending'&&!(i.deadline&&i.deadline<today)).length;
-  const rate      = total ? Math.round(onTime/total*100) : 0;
-
-  const itemSummary = items.map(i => {
-    const isOverdue = (i.status==='pending'||i.status==='in_progress')&&i.deadline&&i.deadline<today;
-    return `- "${i.title}" | Status: ${isOverdue?'OVERDUE':i.status} | Deadline: ${i.deadline||'none'} | Note: ${i.latestNote||i.employeeNote||'none'} | Week: ${i.weekStart||'?'}`;
-  }).join('\n');
-
-  const prompt = `You are analyzing weekly item performance for a landscape operations employee at SouthWest Landscape Inc.
-
-Employee: ${user.name} (${user.branch} branch, ${user.role||'team member'})
-Time range: ${wk ? 'Week of '+wk : 'All available weeks'}
-
-Item Stats:
-- Total items: ${total}
-- Completed on time: ${onTime}
-- Overdue (past deadline, not done): ${overdue}
-- Not completed / carry-over: ${notDone}
-- Pending (no update yet): ${pending}
-- Completion rate: ${rate}%
-
-Item Details:
-${itemSummary || 'No items found.'}
-
-Write a concise management analysis with these 4 sections:
-1. **Performance Summary** — Overall picture in 2-3 sentences
-2. **Concerns** — Specific issues to flag (missing notes, overdue patterns, carry-overs)
-3. **Positives** — What they are doing well
-4. **Recommendations** — 2-3 concrete actions for the manager
-
-Keep it direct and actionable. Write as if briefing a branch manager.`;
-
-  try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
-    const data = await response.json();
-    const text = data.content?.map(c=>c.text||'').join('') || 'No response received.';
-
-    // Convert markdown bold to HTML
-    const html = text
-      .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#E0E0E0">$1</strong>')
-      .replace(/\n\n/g, '</p><p style="margin-top:10px">')
-      .replace(/\n/g, '<br>');
-
-    resultsEl.innerHTML = '<div style="background:#1A1A1A;border:1px solid rgba(124,58,237,.25);border-left:3px solid #7C3AED;border-radius:8px;padding:18px;margin-top:12px">'
-      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid rgba(124,58,237,.2)">'
-      + '<span style="font-size:18px">✨</span>'
-      + '<div><div style="font-size:13px;font-weight:700;color:#C084FC">AI Analysis — '+esc(user.name)+'</div>'
-      + '<div style="font-size:10px;color:#555;margin-top:1px">Generated by Claude · Based on '+total+' items</div></div>'
-      + '<span style="margin-left:auto;background:rgba(124,58,237,.12);color:#C084FC;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid rgba(124,58,237,.25)">AI GENERATED</span>'
-      + '</div>'
-      + '<div style="font-size:13px;color:#D0D0D0;line-height:1.8"><p>'+html+'</p></div>'
-      + '<div style="margin-top:14px;padding-top:10px;border-top:1px solid rgba(124,58,237,.15);font-size:11px;color:#555">Based on Firestore item data — deadline, status, notes, and history</div>'
-      + '</div>'
-      + (window._irLastReport || '');
-
-  } catch(e) {
-    resultsEl.innerHTML = '<div style="color:#F87171;font-size:13px;padding:12px;background:rgba(248,113,113,.08);border-radius:6px">AI analysis failed: '+esc(e.message)+'</div>';
-  }
-}
-
-// ══════════════════════════════════════════════════
-// DASHBOARD// DASHBOARD
+// DASHBOARD
 // ══════════════════════════════════════════════════
 async function renderDashboard() {
   applySidebarTheme();
@@ -2440,19 +2235,20 @@ async function renderAccountability() {
   const itemSnap = await itemQ.get();
   const items = itemSnap.docs.map(d=>({id:d.id,...d.data()}));
 
+  // Build per-person stats
   const stats = {};
   items.forEach(i => {
-    const key = i.owner || (i.ownerName||'Unknown').trim().toLowerCase();
-    const displayName = i.ownerName || 'Unknown';
-if (!stats[key]) stats[key] = { name:displayName, branch:i.branch||'—', total:0, onTime:0, late:0, missed:0, pending:0, carryover:0 };
+    const key = i.ownerName || 'Unknown';
+    if (!stats[key]) stats[key] = { name:key, branch:i.branch||'—', total:0, onTime:0, late:0, missed:0, pending:0, carryover:0 };
     stats[key].total++;
     if (i.status==='completed_on_time') stats[key].onTime++;
     else if (i.status==='completed_late') stats[key].late++;
     else if (i.status==='not_completed') { stats[key].missed++; stats[key].carryover++; }
     else stats[key].pending++;
   });
+
   const people = Object.values(stats).sort((a,b)=>b.missed-a.missed);
-  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');
+  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');
   const carryovers = items.filter(i=>i.status==='not_completed');
 
   let extQ = db.collection('extension_requests').where('status','==','pending');
