@@ -2237,17 +2237,12 @@ async function renderAccountability() {
 
   // Build per-person stats
   const stats = {};
+  // Build per-person stats — group by UID first, fall back to normalized name
+  const stats = {};
   items.forEach(i => {
-    const key = i.ownerName || 'Unknown';
-    if (!stats[key]) stats[key] = { name:key, branch:i.branch||'—', total:0, onTime:0, late:0, missed:0, pending:0, carryover:0 };
-    stats[key].total++;
-    if (i.status==='completed_on_time') stats[key].onTime++;
-    else if (i.status==='completed_late') stats[key].late++;
-    else if (i.status==='not_completed') { stats[key].missed++; stats[key].carryover++; }
-    else stats[key].pending++;
-  });
-
-  const people = Object.values(stats).sort((a,b)=>b.missed-a.missed);
+    const key = i.owner || (i.ownerName||'Unknown').trim().toLowerCase();
+    const displayName = i.ownerName || 'Unknown';
+    if (!stats[key]) stats[key] = { name:displayName, branch:i.branch||'—', total:0, onTime:0, late:0, missed:0, pending:0, carryover:0 };
   const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');
   const carryovers = items.filter(i=>i.status==='not_completed');
 
