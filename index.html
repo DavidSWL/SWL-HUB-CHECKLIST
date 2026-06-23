@@ -2222,155 +2222,1010 @@ async function renderMyHistory() {
 }
 
 // Accountability Tracker — admin/manager only
+// ══════════════════════════════════════════════════
+// Cache for score breakdown tooltips — populated by buildUserScores
+let swl_scores_cache = {};
+
+function showScoreBreakdown(event, uid) {
+  event.stopPropagation();
+  document.querySelectorAll('.swl-score-popup').forEach(el => el.remove());
+  const p = swl_scores_cache[uid];
+  if (!p) return;
+  const c = p.components || {};
+  const gradeColors = {A:'#4CAF50',B:'#4CAF50',C:'#FBBF24',D:'#FB923C',F:'#EF4444'};
+  const gc = gradeColors[p.grade] || '#888';
+  const rows = [
+    ['Completion Quality (A)',     c.A,  50, 'Earned '+(c.earnedA||0)+'pts of '+(c.maxA||0)+'pts possible. Overdue items increase max, lowering the ratio without discounting completed work.'],
+    ['On-Time Performance (B)',    c.B,  25, p.onTime+' on-time out of '+((p.onTime||0)+(p.late||0))+' completed items.'],
+    ['Submission Consistency (C)', c.C,  15, (p.streak||0)+'-week check-in streak. Earns 3pts (1wk), 6pts (2wk), 10pts (4wk), or 15pts (8wk).'],
+    ['Trend Impact (D)',           c.D,  10, p.insufficientHistory ? 'Trend requires 30+ days of history and 4+ items each period.' : (p.trend==='improving'?'Score improving vs prior period.':p.trend==='declining'?'Score declining vs prior period.':'Stable vs prior period.')],
+  ];
+  const barRow = (label, val, max, tip) => {
+    const pct = max > 0 ? Math.round(Math.max(0,val)/max*100) : 0;
+    const col = pct >= 80 ? '#4CAF50' : pct >= 60 ? '#FBBF24' : '#EF4444';
+    return '<div style="margin-bottom:10px">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:3px">' +
+      '<span style="font-size:11px;color:#CCC">'+label+'</span>' +
+      '<span style="font-size:11px;font-weight:700;color:'+col+'">'+Math.max(0,val)+' / '+max+'</span>' +
+      '</div>' +
+      '<div style="height:5px;background:#333;border-radius:3px;overflow:hidden;margin-bottom:3px">' +
+      '<div style="height:100%;width:'+pct+'%;background:'+col+';border-radius:3px"></div></div>' +
+      '<div style="font-size:10px;color:#666;line-height:1.4">'+tip+'</div></div>';
+  };
+  const popup = document.createElement('div');
+  popup.className = 'swl-score-popup';
+  popup.style.cssText = 'position:fixed;z-index:9999;background:#1A1A1A;border:1px solid #333;border-radius:10px;padding:16px;width:290px;box-shadow:0 8px 32px rgba(0,0,0,.6);font-family:inherit';
+  popup.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+    '<div><div style="font-size:13px;font-weight:700;color:#E0E0E0">'+esc(p.name)+'</div>' +
+    '<div style="font-size:10px;color:#777;margin-top:1px">Score Breakdown</div></div>' +
+    '<div style="text-align:right"><div style="font-size:24px;font-weight:700;color:'+gc+'">'+(p.score===null?'\u2014':p.score)+'</div>' +
+    '<div style="font-size:10px;font-weight:700;color:'+gc+'">'+(p.grade||'\u2014')+' \u2014 '+(p.gradeLabel||'')+'</div></div></div>' +
+    '<div style="border-top:1px solid #2E2E2E;padding-top:12px;margin-bottom:12px">' +
+    rows.map(r => barRow(r[0],r[1],r[2],r[3])).join('') +
+    '</div>' +
+    '<div style="border-top:1px solid #2E2E2E;padding-top:10px;display:flex;justify-content:space-between;align-items:center">' +
+    '<div style="font-size:10px;color:#666">Vol. modifier: \xd7'+(p.volMod||1.0)+' ('+( p.scoredItems||0)+' scored items)</div>' +
+    '<button onclick="this.closest(\'.swl-score-popup\').remove()" style="background:none;border:none;color:#666;cursor:pointer;font-size:16px;padding:0 4px">\u2715</button>' +
+    '</div>';
+  const btn = event.target.closest('button');
+  const rect = btn ? btn.getBoundingClientRect() : {left:100,bottom:100};
+  const left = Math.min(rect.left, window.innerWidth - 310);
+  popup.style.left = left + 'px';
+  popup.style.top = (rect.bottom + 8 + window.scrollY) + 'px';
+  document.body.appendChild(popup);
+  setTimeout(() => {
+    document.addEventListener('click', function _close(e) {
+      if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('click', _close); }
+    });
+  }, 50);
+}
+
+// SHARED SCORING ENGINE — Phase 1
+// All accountability views read from this engine.
+// ══════════════════════════════════════════════════
+
+function swlDaysBetween(dateStrA, dateStrB) {
+  // Returns days between two YYYY-MM-DD or ISO strings. Positive = B is after A.
+  const a = new Date(dateStrA); const b = new Date(dateStrB);
+  return Math.round((b - a) / 86400000);
+}
+
+function swlLatenessPoints(item) {
+  // Returns points earned for a completed item based on how late it was.
+  // Priority: resolvedAt > lastStatusAt > updatedAt > unknown
+  if (item.status === 'completed_on_time') return 10;
+  if (item.status !== 'completed_late') return 0;
+  const resolved = item.resolvedAt || item.lastStatusAt || (item.updatedAt && item.updatedAt.toDate ? item.updatedAt.toDate().toISOString() : null);
+  if (!resolved || !item.deadline) return 5; // unknown — middle tier
+  const daysLate = swlDaysBetween(item.deadline, resolved);
+  if (daysLate <= 3)  return 7;
+  if (daysLate <= 7)  return 5;
+  if (daysLate <= 14) return 3;
+  return 1; // 15+ days late
+}
+
+function swlPriorityMultiplier(priority) {
+  const map = { critical: 2.0, high: 1.5, medium: 1.0, low: 0.75 };
+  return map[priority] || 1.0;
+}
+
+function swlOverduePenalty(item) {
+  // LEGACY — no longer used in Component A scoring (denominator model replaced this).
+  // Kept for potential future display use. Do not call from buildUserScores.
+  if (item.status !== 'pending') return 0;
+  const today = new Date().toISOString().split('T')[0];
+  if (!item.deadline || item.deadline >= today) return 0;
+  const daysOverdue = swlDaysBetween(item.deadline, today);
+  const mult = swlPriorityMultiplier(item.priority);
+  if (daysOverdue <= 7)  return 3 * mult;
+  if (daysOverdue <= 30) return 6 * mult;
+  return 10 * mult;
+}
+
+function swlVolumeModifier(scoredItemCount) {
+  if (scoredItemCount <= 3)  return 0.80;
+  if (scoredItemCount <= 7)  return 0.90;
+  if (scoredItemCount <= 15) return 0.97;
+  return 1.00;
+}
+
+function swlSubmissionStreak(submittedWeekStarts) {
+  // submittedWeekStarts: array of YYYY-MM-DD strings for submitted check-ins
+  const weeks = [...new Set(submittedWeekStarts)].sort();
+  if (weeks.length === 0) return 0;
+  let streak = 1, cur = 1;
+  for (let i = 1; i < weeks.length; i++) {
+    const diff = Math.round((new Date(weeks[i]) - new Date(weeks[i-1])) / (7*86400000));
+    cur = diff === 1 ? cur + 1 : 1;
+    streak = Math.max(streak, cur);
+  }
+  // Check if streak is current (last week must be recent)
+  const lastWeek = new Date(weeks[weeks.length-1]);
+  const now = new Date();
+  const weeksSinceLast = Math.round((now - lastWeek) / (7*86400000));
+  if (weeksSinceLast > 1) return 0; // streak broken — not current
+  return streak;
+}
+
+function swlStreakScore(streak) {
+  if (streak >= 8) return 15;
+  if (streak >= 4) return 10;
+  if (streak >= 2) return 6;
+  if (streak >= 1) return 3;
+  return 0;
+}
+
+function swlGrade(score) {
+  if (score >= 90) return 'A';
+  if (score >= 75) return 'B';
+  if (score >= 60) return 'C';
+  if (score >= 45) return 'D';
+  return 'F';
+}
+
+function swlGradeLabel(grade) {
+  const map = { A:'Excellent', B:'On Track', C:'Developing', D:'At Risk', F:'Needs Immediate Attention' };
+  return map[grade] || grade;
+}
+
+function swlRiskLevel(score) {
+  if (score >= 75) return 'low';
+  if (score >= 60) return 'medium';
+  if (score >= 45) return 'high';
+  return 'critical';
+}
+
+function swlRiskLabel(risk) {
+  const map = { low:'Low Risk', medium:'Medium Risk', high:'High Risk', critical:'Critical Risk' };
+  return map[risk] || risk;
+}
+
+function swlHealthRate(onTime, late, missed) {
+  // Resolution Rate: % of decided items that were actually resolved (on time or late)
+  // Excludes overdue-pending (not yet decided) and future-pending
+  const resolved = onTime + late;
+  const total = resolved + missed;
+  return total > 0 ? Math.round(resolved / total * 100) : null;
+}
+
+function swlHealthLabel(rate) {
+  if (rate === null) return 'No Resolved Items';
+  if (rate >= 90) return 'Excellent';
+  if (rate >= 75) return 'Good';
+  if (rate >= 60) return 'Fair';
+  if (rate >= 40) return 'Poor';
+  return 'Critical';
+}
+
+function swlHealthColor(rate) {
+  if (rate === null) return 'var(--text3)';
+  if (rate >= 90) return 'var(--success)';
+  if (rate >= 75) return '#4ADE80';
+  if (rate >= 60) return '#FBBF24';
+  if (rate >= 40) return 'var(--warn)';
+  return 'var(--danger)';
+}
+
+function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, daysSinceFirstItem) {
+  // Returns a detailed score object for one user
+  const today = new Date().toISOString().split('T')[0];
+
+  // Separate items into scored vs future-pending (excluded)
+  const scoredItems = userItems.filter(i => {
+    if (i.status === 'canceled_by_client') return false;
+    if (i.status === 'pending' && i.deadline && i.deadline > today) return false; // future, excluded
+    return true;
+  });
+
+  // No-activity case: employee has no scoreable items at all
+  const noActivity = scoredItems.length === 0;
+
+  // Component A — Item Completion Quality (DENOMINATOR MODEL)
+  // Completed work earns full points. Overdue items are NOT subtracted from earned —
+  // instead they increase the denominator (max possible), lowering the ratio.
+  // Older overdue items increase max more than recent ones, reflecting chronic neglect.
+  let earnedA = 0, maxA = 0;
+  scoredItems.forEach(i => {
+    const mult = swlPriorityMultiplier(i.priority);
+    if (i.status === 'completed_on_time' || i.status === 'completed_late') {
+      const pts = swlLatenessPoints(i);
+      earnedA += pts * mult;   // on-time work retains full earned value
+      maxA    += 10 * mult;
+    } else if (i.status === 'not_completed') {
+      // missed: 0 earned, full max — same as before
+      maxA += 10 * mult;
+    } else if (i.status === 'pending') {
+      // overdue: 0 earned, but max grows larger the longer it sits
+      const today = new Date().toISOString().split('T')[0];
+      const daysOver = i.deadline ? swlDaysBetween(i.deadline, today) : 0;
+      const ageFactor = daysOver <= 7 ? 1.00 : daysOver <= 30 ? 1.25 : 1.50;
+      maxA += 10 * mult * ageFactor; // older overdue = heavier weight against ratio
+    }
+  });
+  const rawA = maxA > 0 ? (earnedA / maxA) * 50 : 0;
+
+  // Component B — On-Time Rate (completed items only)
+  const completed = scoredItems.filter(i => i.status === 'completed_on_time' || i.status === 'completed_late');
+  const onTime = scoredItems.filter(i => i.status === 'completed_on_time').length;
+  const rawB = completed.length > 0 ? (onTime / completed.length) * 25 : 0;
+
+  // Component C — Submission Consistency
+  const streak = swlSubmissionStreak(submittedWeekStarts);
+  const rawC = swlStreakScore(streak);
+
+  // Component D — Trend (only if 30+ days of history AND 4+ scored items in each period)
+  // newHireProtection: < 30 days → D = 0, but does NOT affect label
+  // trendInsufficient: < 4 scored items in current or prior period → D = 0
+  let rawD = 0;
+  const newHireProtection = daysSinceFirstItem < 30;
+  const trendInsufficient = scoredItems.length < 4 || !priorItems || priorItems.length < 4;
+  const insufficientHistory = newHireProtection || trendInsufficient; // controls D only
+  if (!insufficientHistory) {
+    const priorScored = priorItems.filter(i => i.status !== 'canceled_by_client' && !(i.status === 'pending' && i.deadline && i.deadline > today));
+    const priorOnTime = priorScored.filter(i => i.status === 'completed_on_time').length;
+    const priorRate = priorScored.length > 0 ? priorOnTime / priorScored.length : 0;
+    const currentRate = completed.length > 0 ? onTime / completed.length : 0;
+    const delta = (currentRate - priorRate) * 100;
+    if (delta >= 10)      rawD = 10;
+    else if (delta >= 5)  rawD = 5;
+    else if (delta >= -4) rawD = 0;
+    else if (delta >= -9) rawD = -5;
+    else                  rawD = -10;
+  }
+
+  // Volume Confidence Modifier
+  const volMod = swlVolumeModifier(scoredItems.length);
+
+  // Final score — no-activity employees get null score (not 0)
+  const rawTotal = noActivity ? null : Math.max(0, Math.min(100, rawA + rawB + rawC + rawD));
+  const finalScore = noActivity ? null : Math.round(rawTotal * volMod);
+  const grade = noActivity ? null : swlGrade(finalScore);
+
+  // Show "insufficient data" label only when fewer than 4 scored items (not for new-hire trend protection)
+  const showInsufficientLabel = !noActivity && scoredItems.length < 4;
+
+  // Counts for display and AI
+  const missed = scoredItems.filter(i => i.status === 'not_completed').length;
+  const late = scoredItems.filter(i => i.status === 'completed_late').length;
+  const overdue = scoredItems.filter(i => i.status === 'pending' && i.deadline && i.deadline < today).length;
+  const futurePending = userItems.filter(i => i.status === 'pending' && i.deadline && i.deadline > today).length;
+  const completionRate = scoredItems.length > 0 ? Math.round((onTime + late) / scoredItems.length * 100) : 0;
+  const onTimeRate = completed.length > 0 ? Math.round(onTime / completed.length * 100) : 0;
+  const healthRate = swlHealthRate(onTime, late, missed);
+  const healthLabel = noActivity ? 'No Activity' : swlHealthLabel(healthRate);
+  const healthColor = swlHealthColor(healthRate);
+
+  return {
+    score: finalScore,
+    noActivity,
+    showInsufficientLabel,
+    grade, gradeLabel: noActivity ? 'No Activity' : swlGradeLabel(grade),
+    risk: noActivity ? 'none' : swlRiskLevel(finalScore),
+    riskLabel: noActivity ? 'No Data' : swlRiskLabel(swlRiskLevel(finalScore)),
+    trend: noActivity ? 'none' : (rawD > 0 ? 'improving' : rawD < 0 ? 'declining' : 'stable'),
+    trendDelta: rawD,
+    insufficientHistory,
+    newHireProtection,
+    components: {
+      A: Math.round(rawA),
+      B: Math.round(rawB),
+      C: rawC,
+      D: rawD,
+      earnedA: Math.round(earnedA),
+      maxA: Math.round(maxA),
+      ratioA: maxA > 0 ? Math.round(earnedA / maxA * 100) : 0
+    },
+    volMod,
+    scoredItems: scoredItems.length,
+    onTime, late, missed, overdue, futurePending,
+    completionRate, onTimeRate,
+    healthRate, healthLabel, healthColor,
+    streak,
+    overdueItems: scoredItems.filter(i => i.status === 'pending' && i.deadline && i.deadline < today)
+      .map(i => ({ title: i.title, priority: i.priority, daysOverdue: swlDaysBetween(i.deadline, today) })),
+    missedItems: scoredItems.filter(i => i.status === 'not_completed')
+      .map(i => ({ title: i.title, priority: i.priority })),
+    allScoredItems: scoredItems
+  };
+}
+
+async function buildUserScores(branchFilter, dateRange) {
+  // Master scoring function — loads all data once, scores every active user.
+  // branchFilter: 'OC' | 'LA' | null (null = all)
+  // dateRange: 'all' | '12w' | '4w' | '1w'
+  const today = new Date().toISOString().split('T')[0];
+
+  // Resolve dateFrom cutoff — items with weekStart < dateFrom are excluded from scoring
+  function getDateFrom(range) {
+    if (!range || range === 'all') return null;
+    if (range === '12w') return new Date(Date.now() - 84*86400000).toISOString().split('T')[0];
+    if (range === '4w')  return new Date(Date.now() - 28*86400000).toISOString().split('T')[0];
+    if (range === '1w') {
+      // Current week Monday
+      const d = new Date(); const day = d.getDay();
+      const diff = d.getDate() - (day===0 ? 6 : day-1);
+      return new Date(d.setDate(diff)).toISOString().split('T')[0];
+    }
+    return null;
+  }
+  const dateFrom = getDateFrom(dateRange);
+
+  // Trend prior window: always the equal-length window ending at dateFrom (or 4-8 weeks ago)
+  const rangeMs    = dateRange === '12w' ? 84*86400000 : dateRange === '1w' ? 7*86400000 : 28*86400000;
+  const priorFrom  = new Date(Date.now() - rangeMs*2).toISOString().split('T')[0];
+  const priorTo    = dateFrom || new Date(Date.now() - rangeMs).toISOString().split('T')[0];
+
+  const [userSnap, itemSnap, subSnap] = await Promise.all([
+    db.collection('users').where('active','==',true).get(),
+    db.collection('weekly_items').get(),
+    db.collection('weekly_submissions').where('status','==','submitted').get()
+  ]);
+
+  console.log('[SWL] buildUserScores Firestore reads complete'
+    + ' — users:', userSnap.size
+    + ', items:', itemSnap.size
+    + ', submissions:', subSnap.size);
+
+  const users = userSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .filter(u => u.role !== 'exec_viewer' && (!branchFilter || u.branch === branchFilter || u.branch === 'ALL'));
+
+  const allItems = itemSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const allSubs = subSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Build ownerName → uid map from users collection for legacy items
+  const nameToUid = {};
+  userSnap.docs.forEach(d => {
+    const u = d.data();
+    if (u.name) nameToUid[u.name.trim().toLowerCase()] = d.id;
+  });
+
+  function itemsForUser(uid, userName) {
+    return allItems.filter(i => {
+      // Date range filter: exclude items outside selected window
+      if (dateFrom && i.weekStart && i.weekStart < dateFrom) return false;
+      if (i.owner === uid) return true;
+      // Legacy fallback: match on normalized name
+      if (!i.owner && i.ownerName) {
+        return i.ownerName.trim().toLowerCase() === (userName||'').trim().toLowerCase()
+          || nameToUid[i.ownerName.trim().toLowerCase()] === uid;
+      }
+      return false;
+    });
+  }
+
+  const scores = [];
+  users.forEach(u => {
+    const userItems = itemsForUser(u.id, u.name);
+    const userSubs = allSubs.filter(s => {
+      // Also filter submissions to the date range
+      if (dateFrom && s.weekStart && s.weekStart < dateFrom) return false;
+      return s.userId === u.id;
+    });
+    const weekStarts = userSubs.map(s => s.weekStart).filter(Boolean);
+
+    // Prior period: the equal-length window immediately before the current range
+    const priorItems = allItems.filter(i => {
+      if (!i.weekStart) return false;
+      if (i.weekStart < priorFrom || i.weekStart >= priorTo) return false;
+      if (i.owner === u.id) return true;
+      if (!i.owner && i.ownerName) {
+        return i.ownerName.trim().toLowerCase() === (u.name||'').trim().toLowerCase()
+          || nameToUid[i.ownerName.trim().toLowerCase()] === u.id;
+      }
+      return false;
+    });
+    const priorSubs = allSubs.filter(s =>
+      s.userId === u.id && s.weekStart && s.weekStart >= priorFrom && s.weekStart < priorTo
+    );
+
+    // Days since first item (for new hire protection)
+    const allDates = userItems.map(i => i.createdAt?.toDate ? i.createdAt.toDate().toISOString() : i.weekStart).filter(Boolean).sort();
+    const daysSinceFirst = allDates.length > 0 ? swlDaysBetween(allDates[0], today) : 0;
+
+    const scoreObj = swlScoreOneUser(userItems, weekStarts, priorItems, priorSubs.map(s=>s.weekStart), daysSinceFirst);
+    scores.push({
+      uid: u.id,
+      name: u.name,
+      role: u.role,
+      branch: u.branch,
+      email: u.email,
+      ...scoreObj
+    });
+  });
+
+  // Sort by score descending — no-activity employees go to bottom
+  scores.sort((a,b) => {
+    if (a.noActivity && !b.noActivity) return 1;
+    if (!a.noActivity && b.noActivity) return -1;
+    return (b.score||0) - (a.score||0);
+  });
+
+  // Populate global cache for score breakdown tooltips
+  swl_scores_cache = {};
+  scores.forEach(s => { swl_scores_cache[s.uid] = s; });
+
+  // Compute aggregate scores — exclude no-activity employees
+  function branchAvg(branch) {
+    const members = scores.filter(s => !s.noActivity && (s.branch === branch || branch === 'ALL'));
+    if (!members.length) return null;
+    return Math.round(members.reduce((sum,s) => sum + (s.score||0), 0) / members.length);
+  }
+
+  return {
+    users: scores,
+    branchScores: {
+      OC: branchAvg('OC'),
+      LA: branchAvg('LA'),
+      ALL: branchAvg('ALL')
+    },
+    companyScore: branchAvg('ALL'),
+    topPerformers:     scores.filter(s=>!s.insufficientHistory&&!s.noActivity).slice(0, 3),
+    mostImproved:      [...scores].filter(s=>s.trendDelta>0&&!s.insufficientHistory&&!s.noActivity).sort((a,b)=>b.trendDelta-a.trendDelta).slice(0,3),
+    needsCoaching:     scores.filter(s=>!s.noActivity&&(s.grade==='D'||s.grade==='F')),
+    increasingRisk:    scores.filter(s=>!s.noActivity&&s.trend==='declining'&&s.trendDelta<=-5),
+    excessiveOverdue:  scores.filter(s=>!s.noActivity&&s.overdue>=3).sort((a,b)=>b.overdue-a.overdue),
+    nameToUid
+  };
+}
+
+async function runDataIntegrityReport() {
+  const out = document.getElementById('data-integrity-out');
+  if (!out) return;
+  out.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:12px">Running analysis…</div>';
+
+  const [userSnap, itemSnap] = await Promise.all([
+    db.collection('users').get(),
+    db.collection('weekly_items').get()
+  ]);
+
+  const users = userSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const items = itemSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const today = new Date().toISOString().split('T')[0];
+
+  // Build uid→user and name→uid maps
+  const uidMap = {};
+  const nameToUidMap = {};
+  users.forEach(u => {
+    uidMap[u.id] = u;
+    if (u.name) nameToUidMap[u.name.trim().toLowerCase()] = u.id;
+  });
+
+  // Group items by resolved uid
+  const uidGroups = {}; // uid → {canonical, nameVariants: {name: count}, items: []}
+  const unresolvable = [];
+
+  items.forEach(i => {
+    let uid = i.owner || null;
+    let resolvedVia = uid ? 'owner_uid' : null;
+    if (!uid && i.ownerName) {
+      uid = nameToUidMap[i.ownerName.trim().toLowerCase()] || null;
+      if (uid) resolvedVia = 'name_lookup';
+    }
+    if (!uid) { unresolvable.push(i); return; }
+    if (!uidGroups[uid]) {
+      uidGroups[uid] = { uid, user: uidMap[uid], nameVariants: {}, items: [], resolvedCount: 0, legacyCount: 0 };
+    }
+    const variant = (i.ownerName || '').trim();
+    uidGroups[uid].nameVariants[variant] = (uidGroups[uid].nameVariants[variant] || 0) + 1;
+    uidGroups[uid].items.push(i);
+    if (resolvedVia === 'owner_uid') uidGroups[uid].resolvedCount++;
+    else uidGroups[uid].legacyCount++;
+  });
+
+  // Find groups with name variants (data integrity issues)
+  const dirtyGroups = Object.values(uidGroups).filter(g => Object.keys(g.nameVariants).length > 1);
+  const cleanGroups = Object.values(uidGroups).filter(g => Object.keys(g.nameVariants).length <= 1);
+
+  // Estimate score impact for dirty groups
+  function quickRate(itms) {
+    const scored = itms.filter(i => i.status !== 'canceled_by_client' && !(i.status==='pending'&&i.deadline&&i.deadline>today));
+    const ot = scored.filter(i => i.status==='completed_on_time').length;
+    return scored.length > 0 ? Math.round(ot/scored.length*100) : 0;
+  }
+
+  const runTimestamp = new Date().toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+  const autoResolvable = Object.values(uidGroups).reduce((s,g)=>s+g.legacyCount,0);
+  const cleanUid = Object.values(uidGroups).reduce((s,g)=>s+g.resolvedCount,0);
+  const cDirty  = dirtyGroups.length > 0    ? '#FBBF24' : 'var(--success)';
+  const cAuto   = autoResolvable > 0         ? '#FBBF24' : 'var(--success)';
+  const cManual = unresolvable.length > 0    ? '#F87171' : 'var(--success)';
+  let html = '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px">'
+    + '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Data Quality Summary</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">'
+    + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">Last Run:</span>' + runTimestamp + '</div>'
+    + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">Total Records Scanned:</span><strong style="color:#E0E0E0">' + items.length + '</strong></div>'
+    + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">Duplicate Variants Found:</span><strong style="color:' + cDirty + '">' + dirtyGroups.length + '</strong></div>'
+    + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">Auto-Resolvable by UID:</span><strong style="color:' + cAuto + '">' + autoResolvable + '</strong></div>'
+    + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">Manual Review Required:</span><strong style="color:' + cManual + '">' + unresolvable.length + '</strong></div>'
+    + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">UID-Resolved (clean):</span><strong style="color:var(--success)">' + cleanUid + '</strong></div>'
+    + '</div>'
+    + (dirtyGroups.length === 0 && unresolvable.length === 0 ? '<div style="font-size:11px;color:var(--success);font-weight:600">✓ All records resolve cleanly to unique UIDs.</div>' : '')
+    + '</div>';
+
+  if (dirtyGroups.length === 0 && unresolvable.length === 0) {
+    html += '<div style="background:rgba(125,200,85,.1);border:1px solid rgba(125,200,85,.3);border-radius:8px;padding:12px 14px;color:var(--success);font-size:12px;font-weight:600">✓ No data integrity issues found. All items resolve to unique UIDs.</div>';
+  } else {
+    html += '<div style="font-size:11px;font-weight:700;color:#FBBF24;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">⚠ ' + dirtyGroups.length + ' employee' + (dirtyGroups.length!==1?'s':'')+' with name variants detected</div>';
+
+    dirtyGroups.forEach(g => {
+      const canonical = g.user ? g.user.name : Object.keys(g.nameVariants)[0];
+      const variants = Object.entries(g.nameVariants).sort((a,b)=>b[1]-a[1]);
+      const canonicalVariant = variants[0];
+      const otherVariants = variants.slice(1);
+      const totalItems = g.items.length;
+      const oldRate = quickRate(g.items.filter(i => {
+        // what the current system shows for just the canonical name
+        return (i.ownerName||'').trim() === canonical;
+      }));
+      const mergedRate = quickRate(g.items);
+
+      html += '<div style="background:var(--surface2);border:1px solid var(--border);border-left:3px solid #FBBF24;border-radius:8px;padding:12px 14px;margin-bottom:10px">';
+      html += '<div style="font-size:13px;font-weight:700;color:#E0E0E0;margin-bottom:6px">' + esc(canonical) + (g.user&&!g.user.active?' <span class="badge danger">Inactive</span>':'') + '</div>';
+      html += '<div style="font-size:11px;color:#777;margin-bottom:8px">UID: ' + (g.uid||'—') + ' · Branch: ' + (g.user?.branch||'—') + '</div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">';
+      variants.forEach((v,idx) => {
+        const isCanon = idx === 0;
+        html += '<div style="background:' + (isCanon?'rgba(125,200,85,.08)':'rgba(248,113,113,.08)') + ';border:1px solid ' + (isCanon?'rgba(125,200,85,.25)':'rgba(248,113,113,.2)') + ';border-radius:5px;padding:6px 8px">';
+        html += '<div style="font-size:10px;font-weight:700;color:' + (isCanon?'var(--success)':'#F87171') + ';margin-bottom:2px">' + (isCanon?'✓ Canonical':'⚠ Variant') + '</div>';
+        html += '<div style="font-size:12px;color:#E0E0E0">&ldquo;' + esc(v[0] || '(blank)') + '&rdquo;</div>';
+        html += '<div style="font-size:11px;color:#777;margin-top:2px">' + v[1] + ' item' + (v[1]!==1?'s':'') + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+      html += '<div style="display:flex;gap:12px;font-size:11px">';
+      html += '<span>Total items: <strong style="color:#E0E0E0">' + totalItems + '</strong></span>';
+      html += '<span>Current rate (split): <strong style="color:#F87171">' + oldRate + '%</strong></span>';
+      html += '<span>After merge: <strong style="color:var(--success)">' + mergedRate + '%</strong></span>';
+      html += '</div>';
+      html += '</div>';
+    });
+  }
+
+  if (unresolvable.length > 0) {
+    html += '<div style="background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.2);border-radius:8px;padding:12px 14px;margin-top:12px">';
+    html += '<div style="font-size:11px;font-weight:700;color:#F87171;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">✗ ' + unresolvable.length + ' items cannot be auto-resolved — require manual assignment</div>';
+    unresolvable.forEach(i => {
+      html += '<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px;color:#CCC">';
+      html += esc(i.title||'Untitled') + ' <span style="color:#777">— assigned to: &ldquo;' + esc(i.ownerName||'(blank)') + '&rdquo; · ' + (i.weekStart||'—') + '</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '<div style="padding-top:14px;border-top:1px solid var(--border)">';
+
+  if (dirtyGroups.length > 0) {
+    html += '<div style="font-size:12px;color:#AAA;line-height:1.6;margin-bottom:12px">The scoring engine resolves all items to UID automatically — name variants are already handled correctly in calculations. The cleanup button below corrects the <code>ownerName</code> field on legacy Firestore records so all future queries are consistent.</div>';
+    html += '<button class="btn" style="background:rgba(248,113,113,.12);color:#F87171;border-color:rgba(248,113,113,.3)" onclick="runDataCleanup()">\u26a0 Run Cleanup \u2014 Fix ownerName on Legacy Records</button>';
+    html += '<span style="font-size:11px;color:#777;margin-left:10px">Safe to run \u2014 only corrects the name field, no status or score data is changed.</span>';
+  }
+  html += '</div>';
+
+  out.innerHTML = html;
+}
+
+async function runDataCleanup() {
+  if (!confirm('This will correct ownerName on legacy items where the UID is known. Continue?')) return;
+  const [userSnap, itemSnap] = await Promise.all([
+    db.collection('users').get(),
+    db.collection('weekly_items').get()
+  ]);
+  const uidToName = {};
+  userSnap.docs.forEach(d => { if (d.data().name) uidToName[d.id] = d.data().name; });
+
+  let fixed = 0, skipped = 0;
+  const batch = db.batch();
+  itemSnap.docs.forEach(d => {
+    const i = d.data();
+    if (i.owner && uidToName[i.owner] && i.ownerName !== uidToName[i.owner]) {
+      batch.update(d.ref, { ownerName: uidToName[i.owner] });
+      fixed++;
+    } else { skipped++; }
+  });
+  await batch.commit();
+  toast('✓ Cleanup complete — ' + fixed + ' records corrected, ' + skipped + ' already correct');
+  runDataIntegrityReport();
+}
+
+function showEmployeeDrilldown(uid) {
+  const p = swl_scores_cache[uid];
+  if (!p) return;
+  const existing = document.getElementById('swl-drilldown-modal');
+  if (existing) existing.remove();
+
+  function gc(grade) { return {A:'var(--success)',B:'var(--success)',C:'#FBBF24',D:'var(--warn)',F:'var(--danger)'}[grade]||'var(--text3)'; }
+  function rc(risk)  { return {low:'var(--success)',medium:'#FBBF24',high:'var(--warn)',critical:'var(--danger)'}[risk]||'var(--text3)'; }
+
+  const missedHtml = (p.missedItems||[]).length
+    ? (p.missedItems||[]).map(i=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">'
+        + '<span style="font-size:9px;font-weight:700;text-transform:uppercase;color:'+( i.priority==='critical'?'var(--danger)':i.priority==='high'?'var(--warn)':'var(--text3)')+';width:48px">'+esc(i.priority||'med')+'</span>'
+        + '<span style="font-size:12px;color:var(--text)">'+esc(i.title)+'</span>'
+        + '</div>').join('')
+    : '<div style="font-size:11px;color:var(--text3);padding:6px 0">None</div>';
+
+  const overdueHtml = (p.overdueItems||[]).length
+    ? (p.overdueItems||[]).map(i=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">'
+        + '<span style="font-size:9px;font-weight:700;text-transform:uppercase;color:'+(i.daysOverdue>30?'var(--danger)':i.daysOverdue>7?'var(--warn)':'#FBBF24')+';width:48px">'+esc(i.priority||'med')+'</span>'
+        + '<span style="font-size:12px;color:var(--text);flex:1">'+esc(i.title)+'</span>'
+        + '<span style="font-size:11px;font-weight:700;color:var(--danger)">'+i.daysOverdue+'d</span>'
+        + '</div>').join('')
+    : '<div style="font-size:11px;color:var(--text3);padding:6px 0">None</div>';
+
+  const c = p.components || {};
+
+  const modal = document.createElement('div');
+  modal.id = 'swl-drilldown-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:800;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);width:100%;max-width:640px;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">'
+    // Header
+    + '<div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between">'
+    + '<div>'
+    + '<div style="font-size:16px;font-weight:700;color:var(--text)">'+esc(p.name)+'</div>'
+    + '<div style="font-size:11px;color:var(--text3);margin-top:2px">'+esc(p.role||'')+' &middot; <span class="badge '+(p.branch||'').toLowerCase()+'">'+( p.branch||'')+'</span></div>'
+    + '</div>'
+    + '<button onclick="document.getElementById(\'swl-drilldown-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:0 4px">\u2715</button>'
+    + '</div>'
+
+    // Score summary row
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-bottom:1px solid var(--border)">'
+    + [
+        {l:'Acct Score',    v: p.score===null?'\u2014':p.score, sub: p.gradeLabel, c: gc(p.grade)},
+        {l:'Acct Health',   v: p.healthRate===null?'\u2014':p.healthRate+'%', sub: p.healthLabel, c: p.healthColor},
+        {l:'On-Time Rate',  v: p.onTimeRate+'%', sub: p.onTime+' of '+(p.onTime+p.late)+' completed', c: p.onTimeRate>=80?'var(--success)':p.onTimeRate>=50?'#FBBF24':'var(--danger)'},
+        {l:'Risk Level',    v: p.riskLabel, sub: p.trend+' trend', c: rc(p.risk)}
+      ].map(x=>'<div style="padding:14px 18px;border-right:1px solid var(--border)">'
+        + '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:4px">'+x.l+'</div>'
+        + '<div style="font-size:18px;font-weight:700;color:'+x.c+'">'+x.v+'</div>'
+        + '<div style="font-size:10px;color:var(--text3);margin-top:2px">'+x.sub+'</div>'
+        + '</div>').join('')
+    + '</div>'
+
+    // Score component breakdown
+    + '<div style="padding:16px 24px;border-bottom:1px solid var(--border)">'
+    + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:10px">Score Breakdown</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+    + [
+        {l:'A \u2014 Completion Quality',     v:c.A, max:50, note: (c.earnedA||0)+'pts earned of '+(c.maxA||0)+'pts possible'},
+        {l:'B \u2014 On-Time Performance',    v:c.B, max:25, note: p.onTime+' on-time / '+(p.onTime+p.late)+' completed'},
+        {l:'C \u2014 Submission Consistency', v:c.C, max:15, note: (p.streak||0)+'-week check-in streak'},
+        {l:'D \u2014 Trend Impact',           v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':'vs prior period'}
+      ].map(x=>{
+        const pct = x.max>0?Math.round(Math.max(0,x.v)/x.max*100):0;
+        const col = pct>=80?'var(--success)':pct>=60?'#FBBF24':'var(--danger)';
+        return '<div><div style="display:flex;justify-content:space-between;margin-bottom:3px">'
+          + '<span style="font-size:11px;color:var(--text2)">'+x.l+'</span>'
+          + '<span style="font-size:11px;font-weight:700;color:'+col+'">'+Math.max(0,x.v)+'/'+x.max+'</span>'
+          + '</div>'
+          + '<div style="height:5px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:2px">'
+          + '<div style="height:100%;width:'+pct+'%;background:'+col+';border-radius:3px"></div></div>'
+          + '<div style="font-size:10px;color:var(--text3)">'+x.note+'</div></div>';
+      }).join('')
+    + '</div>'
+    + '<div style="margin-top:10px;font-size:10px;color:var(--text3)">Volume modifier: \u00d7'+(p.volMod||1.0)+' &middot; '+( p.scoredItems||0)+' scored items'
+    + (p.newHireProtection?' &middot; <span style="color:var(--info)">New hire \u2014 trend score not applied</span>':'')+'</div>'
+    + '</div>'
+
+    // Item counts + overdue/missed detail
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid var(--border)">'
+    + '<div style="padding:16px 24px;border-right:1px solid var(--border)">'
+    + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:8px">Item Summary</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'
+    + [
+        {l:'On Time',   v:p.onTime,        c:'var(--success)'},
+        {l:'Late',      v:p.late,           c:'var(--warn)'},
+        {l:'Missed',    v:p.missed,         c:'var(--danger)'},
+        {l:'Overdue',   v:p.overdue,        c:'#F87171'},
+        {l:'Future',    v:p.futurePending,  c:'var(--text3)'},
+        {l:'Streak',    v:p.streak+'wk',    c:'var(--info)'}
+      ].map(x=>'<div style="background:var(--surface2);border-radius:6px;padding:7px 10px">'
+        + '<div style="font-size:15px;font-weight:700;color:'+x.c+'">'+x.v+'</div>'
+        + '<div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">'+x.l+'</div>'
+        + '</div>').join('')
+    + '</div></div>'
+
+    + '<div style="padding:16px 24px">'
+    + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:8px">Overdue Items</div>'
+    + overdueHtml
+    + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin:12px 0 8px">Missed Items</div>'
+    + missedHtml
+    + '</div>'
+    + '</div>'
+
+    // Footer
+    + '<div style="padding:14px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">'
+    + '<button class="btn" onclick="document.getElementById(\'swl-drilldown-modal\').remove()">Close</button>'
+    + '</div>'
+    + '</div>';
+
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+}
+
 async function renderAccountability() {
   const ca = document.getElementById('content-area');
   if (!ROLES[CD.role]?.isManager && CD.role !== 'admin') {
     ca.innerHTML='<div class="empty">Manager or Admin access required</div>'; return;
   }
   ca.innerHTML = '<div class="empty">Loading accountability data…</div>';
+  console.log('[SWL] renderAccountability start — origin:', location.origin);
 
-  const branch = getUserBranch();
-  let itemQ = db.collection('weekly_items');
-  if (branch) itemQ = itemQ.where('branch','==',branch);
-  const itemSnap = await itemQ.get();
-  const items = itemSnap.docs.map(d=>({id:d.id,...d.data()}));
+  // Timeout guard: Firestore hangs indefinitely on file:// origin (service worker blocked).
+  // After 8s with no response, show a clear diagnostic instead of a permanent spinner.
+  const hangTimer = setTimeout(() => {
+    const el = document.getElementById('content-area');
+    if (el && el.innerHTML.includes('Loading accountability')) {
+      el.innerHTML = '<div class="card" style="border-top:3px solid var(--warn);max-width:580px;margin:20px auto">'
+        + '<div class="card-header"><div class="card-title">⚠ Accountability Tracker Could Not Load</div></div>'
+        + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">'
+        + 'Firestore did not respond within 8 seconds. This is almost always caused by opening '
+        + 'the file directly from your computer (<code>file://</code>), which blocks Firebase network requests '
+        + 'via the browser’s service worker security policy.</p>'
+        + '<p style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">Fix:</p>'
+        + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:12px">'
+        + 'Upload the file to GitHub and open it at '
+        + '<strong>davidswl.github.io/SWL-HUB-CHECKLIST/</strong>. '
+        + 'The Accountability Tracker works correctly on the live site.</p>'
+        + '<div style="font-size:11px;color:var(--text3);background:var(--surface2);border-radius:6px;padding:9px 12px">'
+        + 'Current origin: <code>' + location.origin + '</code></div>'
+        + '</div>';
+    }
+  }, 8000);
 
-  // Build per-person stats
-  const stats = {};
-  items.forEach(i => {
-    const key = i.ownerName || 'Unknown';
-    if (!stats[key]) stats[key] = { name:key, branch:i.branch||'—', total:0, onTime:0, late:0, missed:0, pending:0, carryover:0 };
-    stats[key].total++;
-    if (i.status==='completed_on_time') stats[key].onTime++;
-    else if (i.status==='completed_late') stats[key].late++;
-    else if (i.status==='not_completed') { stats[key].missed++; stats[key].carryover++; }
-    else stats[key].pending++;
-  });
+  try {
+    // Read persisted filter state
+    const branch    = getUserBranch();
+    const today     = new Date().toISOString().split('T')[0];
+    const rangeKey  = window._accRange  || 'all';
+    const branchKey = window._accBranch || branch || 'all';
 
-  const people = Object.values(stats).sort((a,b)=>b.missed-a.missed);
-  const overdue = items.filter(i=>i.status==='pending'&&i.deadline&&i.deadline<new Date().toISOString().split('T')[0]&&i.status!=='canceled_by_client');
-  const carryovers = items.filter(i=>i.status==='not_completed');
+    console.log('[SWL] buildUserScores start — branch:', branch||'ALL', 'range:', rangeKey);
 
-  let extQ = db.collection('extension_requests').where('status','==','pending');
-  if (branch) extQ = extQ.where('branch','==',branch);
-  const extSnap = await extQ.get();
-  const pendingExtensions = extSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const [scoreData, extSnap] = await Promise.all([
+      buildUserScores(branch, rangeKey),
+      (branch
+        ? db.collection('extension_requests').where('status','==','pending').where('branch','==',branch).get()
+        : db.collection('extension_requests').where('status','==','pending').get())
+    ]);
 
-  const statusIcon = (p) => {
-    const rate = p.total ? p.onTime/p.total : 1;
-    if (rate >= 0.8) return {icon:'🟢', label:'On Track', cls:'success'};
-    if (rate >= 0.5) return {icon:'🟡', label:'At Risk', cls:'warn'};
-    return {icon:'🔴', label:'Needs Attention', cls:'danger'};
-  };
+    clearTimeout(hangTimer);
+    console.log('[SWL] Firestore loaded — users scored:', scoreData.users.length,
+      '| active:', scoreData.users.filter(u=>!u.noActivity).length,
+      '| no-activity:', scoreData.users.filter(u=>u.noActivity).length);
 
-  ca.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
-      ${[
-        {n:items.filter(i=>i.status==='completed_on_time').length, l:'Completed on time', c:'var(--success)'},
-        {n:overdue.length, l:'Overdue (past deadline)', c:'var(--danger)'},
-        {n:carryovers.length, l:'Carry-over items', c:'var(--warn)'},
-        {n:items.filter(i=>i.needsAssistance).length, l:'Needs mgmt assistance', c:'var(--critical)'},
-        {n:items.filter(i=>i.status==='canceled_by_client').length, l:'Canceled by client', c:'var(--text3)'},
-      ].map(s=>`<div class="stat-card" style="border-bottom:3px solid ${s.c}">
-        <div class="stat-num" style="color:${s.c}">${s.n}</div>
-        <div class="stat-lbl">${s.l}</div>
-      </div>`).join('')}
-    </div>
+    const pendingExtensions = extSnap.docs.map(d=>({id:d.id,...d.data()}));
 
-    ${pendingExtensions.length ? `<div class="card" style="margin-bottom:16px;border-top:3px solid #FBBF24">
-      <div class="card-header">
-        <div class="card-title">🔄 Pending Extension Requests — Awaiting Your Approval</div>
-        <span class="badge warn">${pendingExtensions.length} pending</span>
-      </div>
-      ${pendingExtensions.map(er => `<div style="padding:12px 0;border-bottom:1px solid var(--card-border)">
-        <div style="display:flex;align-items:flex-start;gap:12px">
-          <div style="flex:1">
-            <div style="font-size:13px;font-weight:600;color:#E0E0E0;margin-bottom:3px">${esc(er.itemTitle)}</div>
-            <div style="font-size:11px;color:#777;margin-bottom:6px">
-              Requested by <strong style="color:#D0D0D0">${esc(er.requestedByName)}</strong>
-              &nbsp;&middot;&nbsp; Original: <span style="color:#F87171;font-weight:600">${er.originalDeadline||'—'}</span>
-              &nbsp;&rarr;&nbsp; Proposed: <span style="color:#7DC855;font-weight:600">${er.proposedDeadline||'—'}</span>
-            </div>
-            <div style="font-size:12px;color:#CCC;background:#2A2A2A;border-radius:5px;padding:7px 10px;border-left:3px solid #FBBF24">&ldquo;${esc(er.reason)}&rdquo;</div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;padding-top:2px">
-            <button class="btn sm" style="background:rgba(125,200,85,.15);color:#7DC855;border-color:rgba(125,200,85,.3)"
-              onclick="approveExtension('${er.id}','${er.itemId}','${er.proposedDeadline}','${esc(er.requestedByName)}','${(er.reason||'').replace(/'/g,String.fromCharCode(39))}','${er.originalDeadline||''}')">&#10003; Approve</button>
-            <button class="btn sm" style="background:rgba(248,113,113,.1);color:#F87171;border-color:rgba(248,113,113,.25)"
-              onclick="denyExtension('${er.id}','${er.itemId}','${esc(er.requestedByName)}')">&#10005; Deny</button>
-          </div>
-        </div>
-      </div>`).join('')}
-    </div>` : ''}
+  // Branch filter (admin/ALL users can filter by branch)
+  let people = scoreData.users;
+  if (branchKey !== 'all') people = people.filter(p => p.branch === branchKey || p.branch === 'ALL');
 
-    <div class="card" style="margin-bottom:16px">
-      <div class="card-header">
-        <div class="card-title">📊 Completion Tracker — By Person</div>
-        <div style="font-size:11px;color:var(--text3)">🟢 On Track ≥80% · 🟡 At Risk ≥50% · 🔴 Needs Attention</div>
-      </div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr>
-          ${['Person','Branch','Total','✓ On Time','⚠ Late','✗ Missed','Carry-over','Rate','Status'].map(h=>`<th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">${h}</th>`).join('')}
-        </tr></thead>
-        <tbody>${people.map(p=>{
-          const rate = p.total ? Math.round(p.onTime/p.total*100) : 0;
-          const st = statusIcon(p);
-          return `<tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:7px 8px;font-weight:600">${esc(p.name)}</td>
-            <td style="padding:7px 8px"><span class="badge ${(p.branch||'').toLowerCase()}">${p.branch}</span></td>
-            <td style="padding:7px 8px">${p.total}</td>
-            <td style="padding:7px 8px;color:var(--success)">${p.onTime}</td>
-            <td style="padding:7px 8px;color:var(--warn)">${p.late}</td>
-            <td style="padding:7px 8px;color:${p.missed>0?'var(--danger)':'var(--text3)'};font-weight:${p.missed>0?'700':'400'}">${p.missed}</td>
-            <td style="padding:7px 8px">${p.carryover}</td>
-            <td style="padding:7px 8px">
-              <div style="display:flex;align-items:center;gap:6px">
-                <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
-                  <div style="height:100%;width:${rate}%;background:${rate>=80?'var(--success)':rate>=50?'var(--warn)':'var(--danger)'};border-radius:3px"></div>
-                </div>
-                <span style="font-size:11px;font-weight:600;min-width:32px">${rate}%</span>
-              </div>
-            </td>
-            <td style="padding:7px 8px"><span class="badge ${st.cls}">${st.icon} ${st.label}</span></td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table>
-    </div>
+  // Partition employees
+  const active   = people.filter(p => !p.noActivity);
+  const inactive = people.filter(p => p.noActivity);
 
-    ${overdue.length ? `<div class="card" style="margin-bottom:16px;border-top:3px solid var(--danger)">
-      <div class="card-header"><div class="card-title">🔴 Overdue Items (Past Deadline)</div><span class="badge danger">${overdue.length} items</span></div>
-      ${overdue.map(i=>`<div class="item-row">
-        <span class="priority-dot ${i.priority||'medium'}"></span>
-        <div class="item-content">
-          <div class="item-title">${esc(i.title)}</div>
-          <div class="item-meta">${esc(i.ownerName)} · Was due ${fmtDate(i.deadline)} · ${i.branch}</div>
-          ${i.managerUpdate?`<div style="font-size:11px;color:var(--info)">${esc(i.managerUpdate.note)}</div>`:''}
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-          <span class="badge danger">Overdue</span>
-          ${ROLES[CD.role]?.isManager||CD.role==='admin'?`<button class="btn sm" onclick="openManagerCarryoverModal('${i.id}','${esc(i.title)}')">Update</button>`:''}
-        </div>
-      </div>`).join('')}
-    </div>` : ''}
+  // Aggregate stat cards (active employees only)
+  const totalOnTime  = active.reduce((s,p)=>s+p.onTime,0);
+  const totalOverdue = active.reduce((s,p)=>s+p.overdue,0);
+  const totalMissed  = active.reduce((s,p)=>s+p.missed,0);
+  const totalNeedsAssist = active.flatMap(p=>p.allScoredItems||[]).filter(i=>i.needsAssistance).length;
+  const totalCanceled    = active.flatMap(p=>p.allScoredItems||[]).filter(i=>i.status==='canceled_by_client').length;
 
-    ${carryovers.length ? `<div class="card" style="border-top:3px solid var(--warn)">
-      <div class="card-header"><div class="card-title">⚠ All Carry-Over Items</div><span class="badge warn">${carryovers.length} items</span></div>
-      ${carryovers.map(i=>`<div class="item-row">
-        <span class="priority-dot ${i.priority||'medium'}"></span>
-        <div class="item-content">
-          <div class="item-title">${esc(i.title)}</div>
-          <div class="item-meta">${esc(i.ownerName)} · ${i.branch} · New deadline: ${fmtDate(i.deadline)}</div>
-          ${i.fridayReview?.reason?`<div style="font-size:11px;color:var(--text2);margin-top:2px">Reason: ${esc(i.fridayReview.reason)}</div>`:''}
-          ${i.needsAssistance?`<div style="font-size:11px;color:var(--danger);font-weight:600;margin-top:2px">⚠ ${i.assistanceLevel==='upper_management'?'Upper management':'Branch manager'} assistance needed</div>`:''}
-          ${i.managerUpdate?`<div style="font-size:11px;color:var(--info);margin-top:3px;background:var(--info-l);padding:3px 7px;border-radius:4px">Manager (${esc(i.managerUpdate.by)}): ${esc(i.managerUpdate.note)}</div>`:''}
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-          <span class="badge ${i.needsAssistance?'danger':'warn'}">Carry-over</span>
-          ${ROLES[CD.role]?.isManager||CD.role==='admin'?`<button class="btn sm" onclick="openManagerCarryoverModal('${i.id}','${esc(i.title)}')">Update</button>`:''}
-        </div>
-      </div>`).join('')}
-    </div>` : ''}`;
-  setTimeout(loadInlineWeeklyItems, 100);
+  // Helper colours
+  function gc(grade) { return {A:'var(--success)',B:'var(--success)',C:'#FBBF24',D:'var(--warn)',F:'var(--danger)'}[grade]||'var(--text3)'; }
+  function rc(risk)  { return {low:'var(--success)',medium:'#FBBF24',high:'var(--warn)',critical:'var(--danger)'}[risk]||'var(--text3)'; }
+  function ti(t)     { return t==='improving'?'\u2191':t==='declining'?'\u2193':'\u2192'; }
+  function tc(t)     { return t==='improving'?'var(--success)':t==='declining'?'var(--danger)':'var(--text3)'; }
+
+  // Branch filter tabs (show only if admin or ALL-branch user)
+  const showBranchFilter = !branch; // null branch = admin/ALL
+  const branchTabs = showBranchFilter
+    ? '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+      + ['all','OC','LA'].map(b => {
+          const active2 = branchKey===b;
+          return '<button onclick="window._accBranch=\'' + b + '\';renderAccountability()" '
+            + 'style="padding:4px 14px;border-radius:20px;font-size:11px;font-weight:700;border:1px solid '+(active2?'transparent':'var(--border)')+';'
+            + 'background:'+(active2?'var(--swl-green)':'var(--surface)')+';color:'+(active2?'#fff':'var(--text2)')+';cursor:pointer">'
+            + (b==='all'?'All Branches':b)+'</button>';
+        }).join('')
+      + '</div>'
+    : '';
+
+  // Time range filter
+  const rangeTabs = '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+    + [['all','All Time'],['12w','Last 12 Wks'],['4w','Last 4 Wks'],['1w','This Week']].map(([k,l]) => {
+        const sel = rangeKey===k;
+        return '<button onclick="window._accRange=\'' + k + '\';renderAccountability()" '
+          + 'style="padding:4px 14px;border-radius:20px;font-size:11px;font-weight:700;border:1px solid '+(sel?'transparent':'var(--border)')+';'
+          + 'background:'+(sel?'var(--swl-green)':'var(--surface)')+';color:'+(sel?'#fff':'var(--text2)')+';cursor:pointer">'
+          + l+'</button>';
+      }).join('')
+    + '</div>';
+
+  // Build table row for one employee
+  function buildRow(p) {
+    if (p.noActivity) {
+      return '<tr style="border-bottom:1px solid var(--border);opacity:.5">'
+        + '<td style="padding:8px 10px;font-weight:600;color:var(--text3)">'+esc(p.name)+'</td>'
+        + '<td style="padding:8px 10px"><span class="badge '+(p.branch||'').toLowerCase()+'">'+(p.branch||'\u2014')+'</span></td>'
+        + '<td colspan="9" style="padding:8px 10px;font-size:11px;color:var(--text3);font-style:italic">No assigned items</td>'
+        + '</tr>';
+    }
+    const insuffFlag   = p.showInsufficientLabel ? ' <span style="font-size:9px;color:var(--text3)">(low data)</span>' : '';
+    const newHireFlag  = (p.newHireProtection && !p.noActivity) ? ' <span style="font-size:9px;color:var(--success)">(new)</span>' : '';
+    const overdueFlag  = p.overdue >= 3 ? ' <span style="font-size:9px;color:var(--danger);font-weight:700">\u26a0</span>' : '';
+    return '<tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="showEmployeeDrilldown(\'' + p.uid + '\')">'
+      + '<td style="padding:8px 10px;font-weight:600">'
+        + esc(p.name)+insuffFlag+newHireFlag+overdueFlag
+        + '<div style="font-size:10px;color:var(--text3);font-weight:400;margin-top:1px">'+esc(p.role||'')+'</div>'
+        + '</td>'
+      + '<td style="padding:8px 10px"><span class="badge '+(p.branch||'').toLowerCase()+'">'+(p.branch||'\u2014')+'</span></td>'
+      + '<td style="padding:8px 10px">'
+        + '<button onclick="event.stopPropagation();showScoreBreakdown(event,\'' + p.uid + '\')" title="Click for breakdown" style="background:none;border:none;cursor:pointer;padding:2px 4px;border-radius:4px">'
+        + '<span style="font-size:15px;font-weight:700;color:'+gc(p.grade)+'">'+(p.score===null?'\u2014':p.score)+'</span>'
+        + ' <span style="font-size:9px;color:var(--text3)">\u2139</span>'
+        + '</button>'
+        + '</td>'
+      + '<td style="padding:8px 10px"><span style="font-size:12px;font-weight:700;color:'+gc(p.grade)+'">'+(p.grade||'\u2014')+'</span>'
+        + ' <span style="font-size:10px;color:var(--text3)">'+(p.gradeLabel||'')+'</span></td>'
+      // Accountability Health
+      + '<td style="padding:8px 10px">'
+        + '<span style="font-size:11px;font-weight:700;color:'+p.healthColor+'">'+(p.healthRate===null?'\u2014':p.healthRate+'%')+'</span>'
+        + '<div style="font-size:9px;color:var(--text3);margin-top:1px">'+p.healthLabel+'</div>'
+        + '</td>'
+      + '<td style="padding:8px 10px;color:var(--success);font-weight:600">'+p.onTime+'</td>'
+      + '<td style="padding:8px 10px;color:var(--warn)">'+p.late+'</td>'
+      + '<td style="padding:8px 10px;color:'+(p.missed>0?'var(--danger)':'var(--text3)')+';font-weight:'+(p.missed>0?'700':'400')+'">'+p.missed+'</td>'
+      + '<td style="padding:8px 10px;color:'+(p.overdue>0?'#F87171':'var(--text3)')+';font-weight:'+(p.overdue>0?'700':'400')+'">'+p.overdue+'</td>'
+      + '<td style="padding:8px 10px">'
+        + '<div style="display:flex;align-items:center;gap:5px">'
+        + '<div style="flex:1;height:5px;background:var(--border);border-radius:3px;overflow:hidden">'
+        + '<div style="height:100%;width:'+p.onTimeRate+'%;background:'+gc(p.grade)+';border-radius:3px"></div></div>'
+        + '<span style="font-size:10px;font-weight:600;min-width:28px;color:var(--text2)">'+p.onTimeRate+'%</span>'
+        + '</div></td>'
+      + '<td style="padding:8px 10px;color:'+tc(p.trend)+'">'+ti(p.trend)+'<span style="font-size:10px;margin-left:2px">'+(p.insufficientHistory?'\u2014':p.trend)+'</span></td>'
+      + '<td style="padding:8px 10px"><span style="font-size:10px;font-weight:700;color:'+rc(p.risk)+'">'+p.riskLabel+'</span></td>'
+      + '</tr>';
+  }
+
+  // Quick-view indicator cards
+  const topPerf    = scoreData.topPerformers.filter(p => branchKey==='all'||p.branch===branchKey||p.branch==='ALL');
+  const coaching   = scoreData.needsCoaching.filter(p => branchKey==='all'||p.branch===branchKey||p.branch==='ALL');
+  const improved   = scoreData.mostImproved.filter(p => branchKey==='all'||p.branch===branchKey||p.branch==='ALL');
+  const atRisk2    = scoreData.increasingRisk.filter(p => branchKey==='all'||p.branch===branchKey||p.branch==='ALL');
+  const exOverdue  = scoreData.excessiveOverdue.filter(p => branchKey==='all'||p.branch===branchKey||p.branch==='ALL');
+  const newHires   = active.filter(p => p.newHireProtection);
+
+  function indicatorCard(icon, title, color, items, renderFn) {
+    if (!items.length) return '';
+    return '<div class="card" style="border-top:3px solid '+color+';margin-bottom:12px">'
+      + '<div class="card-header"><div class="card-title">'+icon+' '+title+'</div>'
+      + '<span class="badge" style="background:'+color+'22;color:'+color+';border-color:'+color+'44">'+items.length+'</span></div>'
+      + items.map(renderFn).join('')
+      + '</div>';
+  }
+
+  const indicatorRow = (p, extra) =>
+    '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="showEmployeeDrilldown(\'' + p.uid + '\')">'
+    + '<div style="flex:1"><span style="font-weight:600;font-size:13px">'+esc(p.name)+'</span>'
+    + ' <span class="badge '+(p.branch||'').toLowerCase()+'">'+p.branch+'</span></div>'
+    + (extra||'')
+    + '<span style="font-size:14px;font-weight:700;color:'+gc(p.grade)+'">'+p.score+'</span>'
+    + '</div>';
+
+  ca.innerHTML =
+    // ── TOP: Stat cards ──────────────────────────────────────────────
+    '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">'
+    + [
+        {n:totalOnTime,     l:'Completed On Time',      c:'var(--success)'},
+        {n:totalOverdue,    l:'Overdue (Past Deadline)', c:'var(--danger)'},
+        {n:totalMissed,     l:'Missed / Not Completed',  c:'var(--warn)'},
+        {n:totalNeedsAssist,l:'Needs Mgmt Assistance',   c:'var(--critical)'},
+        {n:totalCanceled,   l:'Canceled by Client',      c:'var(--text3)'}
+      ].map(s=>'<div class="stat-card" style="border-bottom:3px solid '+s.c+'">'
+        +'<div class="stat-num" style="color:'+s.c+'">'+s.n+'</div>'
+        +'<div class="stat-lbl">'+s.l+'</div></div>').join('')
+    + '</div>'
+
+    // ── FILTER BAR ────────────────────────────────────────────────────
+    + '<div class="card" style="margin-bottom:12px;padding:12px 16px">'
+    + '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">'
+    + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3)">Time Range:</div>'
+    + rangeTabs
+    + (showBranchFilter ? '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-left:8px">Branch:</div>' + branchTabs : '')
+    + '</div></div>'
+
+    // ── EXTENSION REQUESTS ───────────────────────────────────────────
+    + (pendingExtensions.length
+      ? '<div class="card" style="margin-bottom:12px;border-top:3px solid #FBBF24"><div class="card-header">'
+        + '<div class="card-title">\ud83d\udd04 Pending Extension Requests</div>'
+        + '<span class="badge warn">'+pendingExtensions.length+' pending</span></div>'
+        + pendingExtensions.map(er =>
+            '<div style="padding:10px 0;border-bottom:1px solid var(--border)">'
+            + '<div style="display:flex;align-items:flex-start;gap:12px">'
+            + '<div style="flex:1">'
+            + '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:2px">'+esc(er.itemTitle)+'</div>'
+            + '<div style="font-size:11px;color:var(--text3);margin-bottom:5px">Requested by <strong>'+esc(er.requestedByName)+'</strong>'
+            + ' &middot; <span style="color:var(--danger)">'+( er.originalDeadline||'\u2014')+'</span>'
+            + ' \u2192 <span style="color:var(--success)">'+(er.proposedDeadline||'\u2014')+'</span></div>'
+            + '<div style="font-size:12px;color:var(--text2);background:var(--surface2);border-radius:5px;padding:6px 10px;border-left:3px solid #FBBF24">&ldquo;'+esc(er.reason)+'&rdquo;</div>'
+            + '</div>'
+            + '<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">'
+            + '<button class="btn sm" style="color:var(--success);border-color:rgba(5,150,105,.3);background:rgba(5,150,105,.08)" '
+            + 'onclick="approveExtension(\''+er.id+'\',\''+er.itemId+'\',\''+er.proposedDeadline+'\',\''+esc(er.requestedByName)+'\',\''+(er.reason||'').replace(/'/g,"\'")+'\',\''+(er.originalDeadline||'')+'\')">\u2713 Approve</button>'
+            + '<button class="btn sm" style="color:var(--danger);border-color:rgba(220,38,38,.25);background:rgba(220,38,38,.08)" '
+            + 'onclick="denyExtension(\''+er.id+'\',\''+er.itemId+'\',\''+esc(er.requestedByName)+'\')">\u2715 Deny</button>'
+            + '</div></div></div>'
+          ).join('')
+        + '</div>'
+      : '')
+
+    // ── MAIN TABLE ───────────────────────────────────────────────────
+    + '<div class="card" style="margin-bottom:12px">'
+    + '<div class="card-header">'
+    + '<div class="card-title">\ud83d\udcca Accountability Tracker \u2014 By Person</div>'
+    + '<div style="display:flex;align-items:center;gap:10px">'
+    + '<span style="font-size:10px;font-weight:600;color:var(--swl-green);background:rgba(14,76,45,.08);padding:2px 8px;border-radius:12px;border:1px solid rgba(14,76,45,.15)">'
+    + ({'all':'All Time','12w':'Last 12 Weeks','4w':'Last 4 Weeks','1w':'This Week'}[rangeKey]||'All Time')
+    + '</span>'
+    + '<div style="font-size:10px;color:var(--text3)">\ud83d\udfe2 A/B = On Track &nbsp; \ud83d\udfe1 C = Developing &nbsp; \ud83d\udd34 D/F = Coaching Needed &nbsp; Click row for drilldown</div>'
+    + '</div>'
+    + '</div>'
+    + '<div style="overflow-x:auto">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:900px"><thead><tr>'
+    + ['Employee','Branch','Score','Grade','Acct Health','On Time','Late','Missed','Overdue','OT Rate','Trend','Risk']
+        .map(h=>'<th style="text-align:left;padding:6px 10px;border-bottom:2px solid var(--border);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);white-space:nowrap">'+h+'</th>').join('')
+    + '</tr></thead><tbody>'
+    + active.map(buildRow).join('')
+    + (inactive.length ? '<tr><td colspan="12" style="padding:6px 10px;font-size:10px;color:var(--text3);font-style:italic;border-top:1px dashed var(--border)">No-activity employees ('+inactive.length+')</td></tr>' + inactive.map(buildRow).join('') : '')
+    + '</tbody></table></div>'
+
+    // Branch scores bar
+    + '<div style="display:flex;gap:16px;padding:10px 0 2px;border-top:1px solid var(--border);margin-top:6px;font-size:11px;flex-wrap:wrap">'
+    + (scoreData.branchScores.OC  !==null ? '<span style="color:var(--text3)">OC Score: <strong style="color:var(--oc)">'+scoreData.branchScores.OC+'</strong></span>' : '')
+    + (scoreData.branchScores.LA  !==null ? '<span style="color:var(--text3)">LA Score: <strong style="color:var(--la)">'+scoreData.branchScores.LA+'</strong></span>' : '')
+    + (scoreData.companyScore     !==null ? '<span style="color:var(--text3)">Company: <strong style="color:var(--swl-green)">'+scoreData.companyScore+'</strong></span>' : '')
+    + '</div></div>'
+
+    // ── QUICK VIEW INDICATOR CARDS (2-col grid) ───────────────────────
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">'
+
+    + indicatorCard('\ud83c\udfc6','Top Performers','var(--success)', topPerf,
+        p => indicatorRow(p, '<span style="font-size:10px;color:var(--success);margin-right:6px">\u2191 '+p.onTimeRate+'% OT</span>'))
+
+    + indicatorCard('\ud83d\udcc8','Most Improved','#6EE7B7', improved,
+        p => indicatorRow(p, '<span style="font-size:10px;color:var(--success);margin-right:6px">+'+p.trendDelta+'pts trend</span>'))
+
+    + indicatorCard('\ud83d\udcde','Coaching Needed','var(--warn)', coaching,
+        p => indicatorRow(p, '<span style="font-size:10px;color:'+p.healthColor+';margin-right:6px">Health: '+p.healthLabel+'</span>'))
+
+    + indicatorCard('\ud83d\udcc9','Increasing Risk','var(--danger)', atRisk2,
+        p => indicatorRow(p, '<span style="font-size:10px;color:var(--danger);margin-right:6px">'+p.trendDelta+'pts \u2193</span>'))
+
+    + indicatorCard('\u23f0','Excessive Overdue',  '#F87171', exOverdue,
+        p => indicatorRow(p, '<span style="font-size:10px;color:#F87171;margin-right:6px">'+p.overdue+' overdue</span>'))
+
+    + (newHires.length ? indicatorCard('\ud83c\udf31','New / Trend Pending','var(--info)', newHires,
+        p => indicatorRow(p, '<span style="font-size:10px;color:var(--info);margin-right:6px">< 30 days</span>')) : '')
+
+    + '</div>';
+
+    console.log('[SWL] renderAccountability render complete');
+    setTimeout(loadInlineWeeklyItems, 100);
+
+  } catch(err) {
+    clearTimeout(hangTimer);
+    console.error('[SWL] renderAccountability error:', err);
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:580px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">\u274c Accountability Load Failed</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">'
+      + 'An error occurred while loading the Accountability Tracker. '
+      + 'Check the browser console for full details.</p>'
+      + '<div style="font-size:12px;font-family:monospace;background:var(--surface2);border-radius:6px;'
+      + 'padding:10px 12px;color:var(--danger);word-break:break-all;margin-bottom:12px">'
+      + esc(String(err)) + '</div>'
+      + '<button class="btn primary" onclick="renderAccountability()">Retry</button>'
+      + '</div>';
+  }
 }
 
 async function renderItems() {
@@ -2414,10 +3269,11 @@ async function renderItems() {
       </div>
       <div class="g2" style="margin-bottom:12px">
         <div class="fg"><label>Description</label><textarea id="ni-desc" rows="2" placeholder="Optional details…"></textarea></div>
-        <div class="fg"><label>Assigned to</label><input type="text" id="ni-owner" value="${CD.name}" placeholder="Owner name"></div>
+        <div class="fg"><label>Assigned to</label><select id="ni-owner-uid" style="width:100%"></select><input type="hidden" id="ni-owner"></div>
       </div>
       <button class="btn primary" onclick="addItem()">Add Item</button>
     </div>`;
+  populateOwnerDropdown();
 }
 
 function renderItemCard(it) {
@@ -2475,22 +3331,42 @@ function filterItems(f) {
   });
 }
 
+async function populateOwnerDropdown() {
+  const sel = document.getElementById('ni-owner-uid');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const snap = await db.collection('users').where('active','==',true).get();
+    const users = snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(u=>u.role!=='admin'&&u.role!=='exec_viewer')
+      .sort((a,b)=>a.name.localeCompare(b.name));
+    sel.innerHTML = users.map(u=>
+      '<option value="'+u.id+'" data-name="'+esc(u.name)+'"'+(u.id===CU.uid?' selected':'')+'>'+esc(u.name)+' ('+u.branch+')</option>'
+    ).join('');
+  } catch(e) {
+    sel.innerHTML = '<option value="'+CU.uid+'" data-name="'+esc(CD.name)+'">'+esc(CD.name)+'</option>';
+  }
+}
+
 async function addItem() {
   const title = document.getElementById('ni-title').value.trim();
   const deadline = document.getElementById('ni-deadline').value;
   if (!title||!deadline) { toast('Title and deadline required','err'); return; }
   const branch = getUserBranch() || CD.branch;
   const isMgr = ROLES[CD.role]?.isManager || CD.role==='admin';
+  const ownerSelect = document.getElementById('ni-owner-uid');
+  const ownerUid = ownerSelect ? ownerSelect.value : CU.uid;
+  const ownerName = ownerSelect ? ownerSelect.options[ownerSelect.selectedIndex]?.dataset?.name || CD.name : CD.name;
   await db.collection('weekly_items').add({
     branch, weekStart: weekKey(CW), title,
     description: document.getElementById('ni-desc').value.trim(),
     deadline,
-    deadlineLockedAt: new Date().toISOString(),   // deadline locked after creation
+    deadlineLockedAt: new Date().toISOString(),
     deadlineLockedBy: CD.name,
     priority: document.getElementById('ni-priority').value,
-    owner: CU.uid, ownerName: document.getElementById('ni-owner').value||CD.name,
+    owner: ownerUid, ownerName: ownerName,
     status:'pending', carriedOver:false,
-    deadlineEditableByManager: true,  // only managers can change
+    deadlineEditableByManager: true,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
   toast('✓ Item added'); renderItems();
@@ -2518,6 +3394,7 @@ async function updateItemStatusWithLog(id, status) {
     lastStatusBy: CD.name,
     lastStatusRole: CD.role,
     lastStatusAt: new Date().toISOString(),
+    resolvedAt: (status === 'completed_on_time' || status === 'completed_late' || status === 'not_completed') ? new Date().toISOString() : null,
     changeLog: firebase.firestore.FieldValue.arrayUnion(logEntry)
   });
   toast('✓ Status updated');
@@ -2606,7 +3483,8 @@ async function saveFridayReview(id) {
   };
   const update = {
     status, fridayReview: review,
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    resolvedAt: (status === 'completed_on_time' || status === 'completed_late' || status === 'not_completed') ? new Date().toISOString() : null
   };
   if (status === 'not_completed') {
     update.carriedOver = true;
@@ -3265,9 +4143,22 @@ async function renderAdmin() {
       <div id="badge-admin-content"></div>
     </div>
 
+    <div class="card" style="margin-top:16px;border-top:3px solid #FBBF24">
+      <div class="card-header">
+        <div class="card-title">&#128202; Data Integrity Report</div>
+        <span class="badge warn">Admin only</span>
+      </div>
+      <p style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:12px">
+        Scans all weekly items for duplicate owner names, UID mismatches, and unresolvable records.
+        Review this report before running any data cleanup. Shows estimated score impact per employee.
+      </p>
+      <button class="btn primary" onclick="runDataIntegrityReport()">&#128269; Run Data Integrity Report</button>
+      <div id="data-integrity-out" style="margin-top:14px"></div>
+    </div>
+
     <div class="card" style="margin-top:16px;border-top:3px solid var(--swl-green)">
       <div class="card-header">
-        <div class="card-title">💾 Data Backup</div>
+        <div class="card-title">&#128190; Data Backup</div>
         <span class="badge success">Admin only</span>
       </div>
       <p style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:16px;background:var(--success-l);padding:10px 12px;border-radius:var(--r);border:1px solid #A7F3D0">
@@ -3355,7 +4246,18 @@ async function uploadUserPhoto(uid, input) {
 
 async function toggleUser(uid, active) {
   await db.collection('users').doc(uid).update({ active: !active });
-  toast(`User ${active?'disabled':'enabled'}`); renderAdmin();
+  try {
+    const uSnap = await db.collection('users').doc(uid).get();
+    await db.collection('sync_log').add({
+      action: active ? 'user_disabled' : 'user_enabled',
+      targetUid: uid,
+      targetName: uSnap.data()?.name || uid,
+      by: CD.name, byUid: CU.uid, byRole: CD.role,
+      at: new Date().toISOString(),
+      ts: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } catch(e) { /* audit log failure is non-critical */ }
+  toast('User ' + (active ? 'disabled' : 'enabled')); renderAdmin();
 }
 
 async function createUserProfile() {
