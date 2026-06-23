@@ -1450,7 +1450,8 @@ async function loadCarryoverForDash(branch) {
   let q = db.collection('weekly_items').where('status','==','not_completed');
   if (branch) q = q.where('branch','==',branch);
   const snap = await q.get();
-  document.getElementById('ds-carryover').textContent = snap.size;
+  const countEl = document.getElementById('ds-carryover');
+  if (countEl) countEl.textContent = snap.size;
   const el = document.getElementById('dash-co-list');
   if (!el) return;
   if (snap.empty) { el.innerHTML='<div class="empty"><span class="empty-icon">✓</span>No carry-over items</div>'; return; }
@@ -2225,6 +2226,8 @@ async function renderMyHistory() {
 // ══════════════════════════════════════════════════
 // Cache for score breakdown tooltips — populated by buildUserScores
 let swl_scores_cache = {};
+// Module-level hang timer — must be module-level so re-renders can cancel prior timers
+let swl_hang_timer = null;
 
 function showScoreBreakdown(event, uid) {
   event.stopPropagation();
@@ -2962,7 +2965,8 @@ async function renderAccountability() {
 
   // Timeout guard: if Firestore hangs (permission denied, network issue, or file:// origin),
   // show a diagnostic card after 8s instead of spinning forever.
-  const hangTimer = setTimeout(() => {
+  if (swl_hang_timer) clearTimeout(swl_hang_timer); // cancel any prior render's timer
+  swl_hang_timer = setTimeout(() => {
     const el = document.getElementById('content-area');
     if (el && el.innerHTML.includes('Loading accountability')) {
       const href     = window.location.href;
@@ -3007,7 +3011,7 @@ async function renderAccountability() {
         : db.collection('extension_requests').where('status','==','pending').get())
     ]);
 
-    clearTimeout(hangTimer);
+    clearTimeout(swl_hang_timer); swl_hang_timer = null;
     console.log('[SWL] Firestore loaded — users scored:', scoreData.users.length,
       '| active:', scoreData.users.filter(u=>!u.noActivity).length,
       '| no-activity:', scoreData.users.filter(u=>u.noActivity).length);
@@ -3232,7 +3236,7 @@ async function renderAccountability() {
     setTimeout(loadInlineWeeklyItems, 100);
 
   } catch(err) {
-    clearTimeout(hangTimer);
+    clearTimeout(swl_hang_timer); swl_hang_timer = null;
     console.error('[SWL] renderAccountability error:', err);
     ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:580px;margin:20px auto">'
       + '<div class="card-header"><div class="card-title">\u274c Accountability Load Failed</div></div>'
