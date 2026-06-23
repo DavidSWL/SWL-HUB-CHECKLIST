@@ -2556,10 +2556,20 @@ async function buildUserScores(branchFilter, dateRange) {
   const priorFrom  = new Date(Date.now() - rangeMs*2).toISOString().split('T')[0];
   const priorTo    = dateFrom || new Date(Date.now() - rangeMs).toISOString().split('T')[0];
 
+  // Build Firestore queries — always filter by branch where possible.
+  // Unfiltered collection scans are blocked by Firestore security rules for non-admin roles.
+  let itemQuery = db.collection('weekly_items');
+  if (branchFilter) itemQuery = itemQuery.where('branch','==',branchFilter);
+
+  let subQuery = db.collection('weekly_submissions').where('status','==','submitted');
+  if (branchFilter) subQuery = subQuery.where('branch','==',branchFilter);
+
+  console.log('[SWL] buildUserScores Firestore queries starting — branch filter:', branchFilter||'ALL (admin)');
+
   const [userSnap, itemSnap, subSnap] = await Promise.all([
     db.collection('users').where('active','==',true).get(),
-    db.collection('weekly_items').get(),
-    db.collection('weekly_submissions').where('status','==','submitted').get()
+    itemQuery.get(),
+    subQuery.get()
   ]);
 
   console.log('[SWL] buildUserScores Firestore reads complete'
@@ -2950,24 +2960,33 @@ async function renderAccountability() {
   ca.innerHTML = '<div class="empty">Loading accountability data…</div>';
   console.log('[SWL] renderAccountability start — origin:', location.origin);
 
-  // Timeout guard: Firestore hangs indefinitely on file:// origin (service worker blocked).
-  // After 8s with no response, show a clear diagnostic instead of a permanent spinner.
+  // Timeout guard: if Firestore hangs (permission denied, network issue, or file:// origin),
+  // show a diagnostic card after 8s instead of spinning forever.
   const hangTimer = setTimeout(() => {
     const el = document.getElementById('content-area');
     if (el && el.innerHTML.includes('Loading accountability')) {
-      el.innerHTML = '<div class="card" style="border-top:3px solid var(--warn);max-width:580px;margin:20px auto">'
-        + '<div class="card-header"><div class="card-title">⚠ Accountability Tracker Could Not Load</div></div>'
+      const href     = window.location.href;
+      const origin   = window.location.origin;
+      const protocol = window.location.protocol;
+      const isFile   = protocol === 'file:';
+      console.warn('[SWL] Hang timeout — href:', href, '| origin:', origin);
+      el.innerHTML = '<div class="card" style="border-top:3px solid var(--warn);max-width:600px;margin:20px auto">'
+        + '<div class="card-header"><div class="card-title">⚠ Accountability — Load Timeout</div></div>'
         + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">'
-        + 'Firestore did not respond within 8 seconds. This is almost always caused by opening '
-        + 'the file directly from your computer (<code>file://</code>), which blocks Firebase network requests '
-        + 'via the browser’s service worker security policy.</p>'
-        + '<p style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">Fix:</p>'
-        + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:12px">'
-        + 'Upload the file to GitHub and open it at '
-        + '<strong>davidswl.github.io/SWL-HUB-CHECKLIST/</strong>. '
-        + 'The Accountability Tracker works correctly on the live site.</p>'
-        + '<div style="font-size:11px;color:var(--text3);background:var(--surface2);border-radius:6px;padding:9px 12px">'
-        + 'Current origin: <code>' + location.origin + '</code></div>'
+        + 'Firestore did not return data within 8 seconds. '
+        + (isFile
+            ? 'You are opening this file directly (file://), which blocks Firebase network requests. Upload to GitHub Pages.'
+            : 'A Firestore query was blocked or rejected. This is usually a security rules permission error on an unfiltered collection read.')
+        + '</p>'
+        + '<div style="font-size:11px;background:var(--surface2);border-radius:6px;padding:10px 12px;margin-bottom:10px;font-family:monospace;line-height:2">'
+        + 'window.location.href: <strong>' + href + '</strong><br>'
+        + 'window.location.origin: <strong>' + origin + '</strong><br>'
+        + 'window.location.protocol: <strong>' + protocol + '</strong>'
+        + '</div>'
+        + '<p style="font-size:12px;color:var(--text3);margin-bottom:10px">'
+        + 'Open DevTools → Console and look for <strong>FirebaseError: Missing or insufficient permissions</strong>.'
+        + '</p>'
+        + '<button class="btn primary" onclick="renderAccountability()">Retry</button>'
         + '</div>';
     }
   }, 8000);
