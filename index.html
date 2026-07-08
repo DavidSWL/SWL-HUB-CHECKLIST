@@ -986,10 +986,18 @@ function buildSidebar() {
       <button class="nav-btn" onclick="navigateTo('team')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
         Team Overview
+      </button>
+      <button class="nav-btn" onclick="navigateTo('items')">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Weekly Items
       </button>`;
   }
   if (role === 'admin') {
     html += `<span class="sb-section-label">Admin</span>
+      <button class="nav-btn" onclick="navigateTo('items')">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Weekly Items
+      </button>
       <button class="nav-btn" onclick="navigateTo('admin')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M12 14c-6 0-8 3-8 4v1h16v-1c0-1-2-4-8-4z"/></svg>
         Admin Panel
@@ -1118,6 +1126,7 @@ async function renderDashboard() {
     loadCarryoverForDash(branch);
     loadMyRecentHistory();
     loadAppreciationsForDash();
+    loadNewAssignmentsForDash();
 
   } else {
     var pendingNames = teamMembers
@@ -1154,6 +1163,7 @@ async function renderDashboard() {
     loadCarryoverForDash(branch);
     loadTeamStatus(branch, wk);
     loadAppreciationsForDash();
+    loadNewAssignmentsForDash();
   }
 }
 
@@ -3509,6 +3519,8 @@ async function addItem() {
     owner: ownerUid, ownerName: ownerName,
     status:'pending', carriedOver:false,
     deadlineEditableByManager: true,
+    assignedBy: CU.uid, assignedByName: CD.name,
+    seen: ownerUid === CU.uid,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
   toast('✓ Item added'); renderItems();
@@ -5672,6 +5684,60 @@ async function loadAppreciationsForDash() {
       }, 3000);
     }
   } catch(e) { console.warn('loadAppreciationsForDash:', e.message); }
+}
+
+// ══ NEW TASK ASSIGNMENT NOTIFICATIONS ══
+
+async function loadNewAssignmentsForDash() {
+  try {
+    const snap = await db.collection('weekly_items')
+      .where('owner','==',CU.uid).where('seen','==',false).get();
+    if (snap.empty) return;
+    const ca = document.getElementById('content-area');
+    if (!ca) return;
+
+    const docs = snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>{
+        const ta = a.createdAt?.toMillis?.() || 0;
+        const tb = b.createdAt?.toMillis?.() || 0;
+        return tb - ta;
+      });
+    if (!docs.length) return;
+
+    const cards = docs.map(it => {
+      const ts = it.createdAt?.toDate?.()?.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})||'';
+      return '<div style="background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.35);border-radius:10px;padding:14px 16px;margin-bottom:10px;position:relative">'
+        + '<div style="position:absolute;top:12px;right:12px;background:#60A5FA;color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.04em;text-transform:uppercase">NEW</div>'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+        + '<span style="font-size:20px">📌</span>'
+        + '<div><div style="font-size:12px;font-weight:700;color:#60A5FA">Assigned by ' + esc(it.assignedByName||'Manager') + '</div>'
+        + '<div style="font-size:10px;color:#777">' + ts + '</div></div>'
+        + '</div>'
+        + '<div style="font-size:13px;color:#E0E0E0;font-weight:600;line-height:1.6">' + esc(it.title) + '</div>'
+        + '<div style="font-size:11px;color:#999;margin-top:2px">Due ' + fmtDate(it.deadline) + (it.priority?' · '+it.priority.charAt(0).toUpperCase()+it.priority.slice(1)+' priority':'') + '</div>'
+        + '</div>';
+    }).join('');
+
+    const headerText = '&#128204; New Tasks Assigned <span style="background:#60A5FA;color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">' + docs.length + ' NEW</span>';
+
+    const wrapper = document.createElement('div');
+    wrapper.id = 'new-assignment-banner';
+    wrapper.innerHTML = '<div style="margin-bottom:16px">'
+      + '<div style="font-size:11px;font-weight:700;color:#60A5FA;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">' + headerText + '</div>'
+      + cards
+      + '</div>';
+    ca.insertBefore(wrapper, ca.firstChild);
+
+    setTimeout(async function() {
+      try {
+        const batch = db.batch();
+        docs.forEach(it => {
+          batch.update(db.collection('weekly_items').doc(it.id), {seen: true});
+        });
+        await batch.commit();
+      } catch(e) { /* silent — not critical */ }
+    }, 3000);
+  } catch(e) { console.warn('loadNewAssignmentsForDash:', e.message); }
 }
 
 </script>
