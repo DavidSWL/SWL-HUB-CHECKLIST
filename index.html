@@ -2475,6 +2475,25 @@ async function runDataIntegrityReport() {
   const items = itemSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   const today = new Date().toISOString().split('T')[0];
 
+  // Detect duplicate user accounts — same name or email across different UIDs
+  const dupByKey = {};
+  users.forEach(u => {
+    [u.name, u.email].forEach(key => {
+      if (!key) return;
+      const k = key.trim().toLowerCase();
+      if (!dupByKey[k]) dupByKey[k] = [];
+      if (!dupByKey[k].some(x => x.id === u.id)) dupByKey[k].push(u);
+    });
+  });
+  const seenDupUids = new Set();
+  const duplicateUserGroups = [];
+  Object.values(dupByKey).forEach(group => {
+    if (group.length > 1) {
+      const uids = group.map(u => u.id).sort().join(',');
+      if (!seenDupUids.has(uids)) { seenDupUids.add(uids); duplicateUserGroups.push(group); }
+    }
+  });
+
   // Build uid→user and name→uid maps
   const uidMap = {};
   const nameToUidMap = {};
@@ -2522,6 +2541,7 @@ async function runDataIntegrityReport() {
   const cDirty  = dirtyGroups.length > 0    ? '#FBBF24' : 'var(--success)';
   const cAuto   = autoResolvable > 0         ? '#FBBF24' : 'var(--success)';
   const cManual = unresolvable.length > 0    ? '#F87171' : 'var(--success)';
+  const cDupAcct = duplicateUserGroups.length > 0 ? '#F87171' : 'var(--success)';
   let html = '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px">'
     + '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Data Quality Summary</div>'
     + '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">'
@@ -2531,12 +2551,34 @@ async function runDataIntegrityReport() {
     + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">Auto-Resolvable by UID:</span><strong style="color:' + cAuto + '">' + autoResolvable + '</strong></div>'
     + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">Manual Review Required:</span><strong style="color:' + cManual + '">' + unresolvable.length + '</strong></div>'
     + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">UID-Resolved (clean):</span><strong style="color:var(--success)">' + cleanUid + '</strong></div>'
+    + '<div style="font-size:11px;color:#AAA"><span style="color:#555;margin-right:6px">Duplicate User Accounts:</span><strong style="color:' + cDupAcct + '">' + duplicateUserGroups.length + '</strong></div>'
     + '</div>'
-    + (dirtyGroups.length === 0 && unresolvable.length === 0 ? '<div style="font-size:11px;color:var(--success);font-weight:600">✓ All records resolve cleanly to unique UIDs.</div>' : '')
+    + (dirtyGroups.length === 0 && unresolvable.length === 0 && duplicateUserGroups.length === 0 ? '<div style="font-size:11px;color:var(--success);font-weight:600">✓ All records resolve cleanly to unique UIDs.</div>' : '')
     + '</div>';
 
+  if (duplicateUserGroups.length > 0) {
+    html += '<div style="font-size:11px;font-weight:700;color:#F87171;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">&#9888; ' + duplicateUserGroups.length + ' duplicate user account' + (duplicateUserGroups.length!==1?'s':'') + ' detected (same name or email, different UIDs)</div>';
+    duplicateUserGroups.forEach(group => {
+      html += '<div style="background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.2);border-radius:8px;padding:12px 14px;margin-bottom:10px">';
+      html += '<div style="font-size:13px;font-weight:700;color:#E0E0E0;margin-bottom:8px">' + esc(group[0].name || group[0].email || 'Unknown') + '</div>';
+      group.forEach(u => {
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:11px;color:#CCC">';
+        html += '<span class="badge ' + (u.active ? 'success' : 'danger') + '">' + (u.active ? 'Active' : 'Disabled') + '</span>';
+        html += '<span>UID: ' + u.id + '</span>';
+        html += '<span>Role: ' + esc(u.role||'—') + '</span>';
+        html += '<span>Branch: ' + esc(u.branch||'—') + '</span>';
+        html += '<span>Email: ' + esc(u.email||'—') + '</span>';
+        html += '</div>';
+      });
+      html += '<div style="font-size:11px;color:#777;margin-top:8px">Review in Firebase Console before deleting either doc — check weekly_items/weekly_submissions for data tied to the UID you plan to remove.</div>';
+      html += '</div>';
+    });
+  }
+
   if (dirtyGroups.length === 0 && unresolvable.length === 0) {
-    html += '<div style="background:rgba(125,200,85,.1);border:1px solid rgba(125,200,85,.3);border-radius:8px;padding:12px 14px;color:var(--success);font-size:12px;font-weight:600">✓ No data integrity issues found. All items resolve to unique UIDs.</div>';
+    if (duplicateUserGroups.length === 0) {
+      html += '<div style="background:rgba(125,200,85,.1);border:1px solid rgba(125,200,85,.3);border-radius:8px;padding:12px 14px;color:var(--success);font-size:12px;font-weight:600">✓ No data integrity issues found. All items resolve to unique UIDs.</div>';
+    }
   } else {
     html += '<div style="font-size:11px;font-weight:700;color:#FBBF24;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">⚠ ' + dirtyGroups.length + ' employee' + (dirtyGroups.length!==1?'s':'')+' with name variants detected</div>';
 
