@@ -1285,8 +1285,20 @@ async function renderCheckin(type) {
   // Load existing submission
   let existingData = {};
   let existingId = null;
-  const q = await db.collection('weekly_submissions')
-    .where('userId','==',CU.uid).where('weekStart','==',wk).where('formType','==',type).get();
+  let q;
+  try {
+    q = await db.collection('weekly_submissions')
+      .where('userId','==',CU.uid).where('weekStart','==',wk).where('formType','==',type).get();
+  } catch(e) {
+    console.error('[SWL] renderCheckin failed loading weekly_submissions:', e.message);
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Check-In — Load Failed</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">Could not load your check-in form: <strong>' + esc(e.message) + '</strong></p>'
+      + '<p style="font-size:12px;color:var(--text3);margin-bottom:10px">This is usually a Firestore security rules permission error. Open DevTools → Console for details.</p>'
+      + '<button class="btn primary" onclick="renderCheckin(\'' + type + '\')">Retry</button>'
+      + '</div>';
+    return;
+  }
   if (!q.empty) { existingId = q.docs[0].id; existingData = q.docs[0].data(); }
 
   const isDraft = existingData.status === 'draft';
@@ -2780,6 +2792,17 @@ function showEmployeeDrilldown(uid) {
 // ══════════════════════════════════════════════════
 // AI ANALYZER — Individual + Team
 // ══════════════════════════════════════════════════
+// Calling the Anthropic API directly from the browser cannot work: it has
+// no API key attached and would be blocked by CORS even with one (which
+// would also mean shipping the key publicly). This needs a server-side
+// proxy (e.g. a Firebase Cloud Function) that isn't deployed yet — flip
+// AI_ENABLED once one exists and point the fetch calls below at it.
+const AI_ENABLED = false;
+function aiNotConfiguredHtml() {
+  return '<div style="color:var(--text3);font-size:12px;padding:14px;text-align:center;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">'
+    + '✨ AI Analysis isn’t available yet — it needs a secure backend to call the AI service, which hasn’t been set up. Contact your developer to enable it.'
+    + '</div>';
+}
 
 async function runIndividualAI(uid, rangeLabel) {
   const p = swl_scores_cache[uid];
@@ -2803,6 +2826,13 @@ async function runIndividualAI(uid, rangeLabel) {
   const outEl = document.getElementById(outId);
   const btnEl = document.getElementById(btnId);
   if (!outEl) return;
+
+  if (!AI_ENABLED && !cached) {
+    outEl.style.display = 'block';
+    outEl.innerHTML = aiNotConfiguredHtml();
+    if (btnEl) { btnEl.disabled = false; btnEl.textContent = '✨ AI Analysis'; }
+    return;
+  }
 
   if (cached) {
     renderAIOutput(outEl, cached, true);
@@ -2881,6 +2911,13 @@ async function runTeamAI(branch, rangeLabel) {
       if (ageHrs < 168) cached = cd.content;
     }
   } catch(e) {}
+
+  if (!AI_ENABLED && !cached) {
+    el.style.display = 'block';
+    el.innerHTML = aiNotConfiguredHtml();
+    if (btn) { btn.disabled = false; btn.textContent = '\u2728 Team AI Analysis'; }
+    return;
+  }
 
   if (btn) { btn.disabled = true; btn.textContent = 'Analyzing\u2026'; }
   el.style.display = 'block';
@@ -5117,12 +5154,18 @@ async function runTeamAIAdmin(branch) {
 }
 
 async function runTeamAIForEl(branch, rangeLabel, outEl, btnEl) {
-  if (btnEl) { btnEl.disabled=true; btnEl.textContent='Analyzing\u2026'; }
-  outEl.style.display='block';
-  outEl.innerHTML='<div style="color:var(--text3);font-size:12px;padding:14px;text-align:center">\u2728 Analyzing team\u2026</div>';
   const cacheId=(branch||'ALL')+'_team';
   let cached=null;
   try{const cSnap=await db.collection('ai_summaries').doc(cacheId).get();if(cSnap.exists){const cd=cSnap.data();if((Date.now()-cd.generatedAt.toMillis())/3600000<168)cached=cd.content;}}catch(e){}
+  if (!AI_ENABLED && !cached) {
+    outEl.style.display='block';
+    outEl.innerHTML = aiNotConfiguredHtml();
+    if (btnEl) { btnEl.disabled=false; btnEl.textContent='\u2728 Team AI Analysis'; }
+    return;
+  }
+  if (btnEl) { btnEl.disabled=true; btnEl.textContent='Analyzing\u2026'; }
+  outEl.style.display='block';
+  outEl.innerHTML='<div style="color:var(--text3);font-size:12px;padding:14px;text-align:center">\u2728 Analyzing team\u2026</div>';
   if(cached){renderAITeamOutput(outEl,cached,true);if(btnEl){btnEl.disabled=false;btnEl.innerHTML='\u2728 Regenerate';}return;}
   const members=Object.values(swl_scores_cache).filter(p=>!p.noActivity&&(branch==='ALL'||!branch||p.branch===branch||p.branch==='ALL'));
   const payload={scope:'team',branch:branch||'ALL',rangeLabel,branchScore:members.length?Math.round(members.reduce((s,p)=>s+(p.score||0),0)/members.length):null,
@@ -5178,6 +5221,12 @@ async function runIndividualAIAdmin(uid) {
   const cacheId=uid+'_individual';
   let cached=null;
   try{const cSnap=await db.collection('ai_summaries').doc(cacheId).get();if(cSnap.exists){const cd=cSnap.data();if((Date.now()-cd.generatedAt.toMillis())/3600000<168&&Math.abs((cd.scoreAtGeneration||0)-(p.score||0))<5)cached=cd.content;}}catch(e){}
+  if (!AI_ENABLED && !cached) {
+    outEl.style.display='block';
+    outEl.innerHTML = aiNotConfiguredHtml();
+    if (btnEl) { btnEl.disabled=false; btnEl.textContent='\u2728 Analyze'; }
+    return;
+  }
   if(cached){renderAIOutput(outEl,cached,true);return;}
   if(btnEl){btnEl.disabled=true;btnEl.textContent='Analyzing\u2026';}
   outEl.style.display='block';
