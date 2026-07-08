@@ -681,7 +681,7 @@ let formData = {}; // live form state
 const ROLES = {
   admin:                { label:'Admin',                branch:'ALL', canViewAll:true,  isManager:true,  color:'var(--burg)' },
   branch_manager:       { label:'Branch Manager',       branch:null,  canViewAll:false, isManager:true,  color:'var(--swl-green)' },
-  ops_manager:          { label:'Operations Manager',   branch:'OC',  canViewAll:false, isManager:false, color:'var(--oc)' },
+  ops_manager:          { label:'Operations Manager',   branch:'OC',  canViewAll:false, isManager:true,  color:'var(--oc)' },
   ops_specialist:       { label:'Operations Specialist',branch:'LA',  canViewAll:false, isManager:false, color:'var(--la)' },
   client_rep:           { label:'Client Representative',branch:null,  canViewAll:false, isManager:false, color:'var(--burg)' },
   irrigation_supervisor:{ label:'Irrigation Supervisor',branch:'LA',  canViewAll:false, isManager:false, color:'var(--la)' },
@@ -3245,13 +3245,62 @@ async function renderItems() {
   const ca = document.getElementById('content-area');
   const branch = getUserBranch();
   const wk = weekKey(CW);
+  const isMgr = ROLES[CD.role]?.isManager || CD.role === 'admin';
   ca.innerHTML = '<div class="empty">Loading…</div>';
 
+  // For employees: also load their overdue/pending items from prior weeks
+  // so they can actually mark them complete
   let q = db.collection('weekly_items').where('weekStart','==',wk);
   if (branch) q = q.where('branch','==',branch);
-  const snap = await q.get();
 
-  const items = snap.docs.map(d=>({id:d.id,...d.data()}));
+  // For employees: load their own items from the last 4 weeks
+  // Shows recently completed items AND lets them resolve overdue ones
+  let priorSnap = null, priorSnapName = null;
+  if (!isMgr) {
+    const fourWeeksAgo = new Date(Date.now() - 28*86400000).toISOString().split('T')[0];
+    try {
+      priorSnap = await db.collection('weekly_items')
+        .where('owner','==',CU.uid)
+        .where('weekStart','>=',fourWeeksAgo)
+        .get();
+    } catch(e) { priorSnap = null; }
+    try {
+      priorSnapName = await db.collection('weekly_items')
+        .where('ownerName','==',CD.name)
+        .where('weekStart','>=',fourWeeksAgo)
+        .get();
+    } catch(e) { priorSnapName = null; }
+  }
+
+  const snap = await q.get();
+  const today = new Date().toISOString().split('T')[0];
+
+  let items = snap.docs.map(d=>({id:d.id,...d.data()}));
+
+  // Merge prior-week items for this employee
+  if (!isMgr) {
+    const currentIds = new Set(items.map(i=>i.id));
+    const addPrior = (docs) => {
+      if (!docs) return;
+      docs.forEach(d => {
+        const it = {id:d.id,...d.data()};
+        if (!currentIds.has(it.id) && it.weekStart !== wk) {
+          const isPastDeadline = it.deadline && it.deadline < today;
+          const isCompleted = ['completed_on_time','completed_late','not_completed'].includes(it.status);
+          if (isPastDeadline || isCompleted) {
+            items.push({
+              ...it,
+              _prior_week: true,
+              _overdue_prior: it.status === 'pending' && isPastDeadline
+            });
+            currentIds.add(it.id);
+          }
+        }
+      });
+    };
+    if (priorSnap) addPrior(priorSnap.docs);
+    if (priorSnapName) addPrior(priorSnapName.docs);
+  }
   const priorities = ['critical','high','medium','low'];
 
   ca.innerHTML = `
@@ -3296,13 +3345,13 @@ function renderItemCard(it) {
   const statusBadge = `<span class="badge ${statusColors[it.status||'pending']}">${statusLabels[it.status||it.status]||it.status}</span>`;
 
   // Employees update their own items; managers update any item
-  const isOwner = it.owner === CU.uid || it.ownerName === CD.name;
+  const isOwner = it.owner === CU.uid
+    || (it.ownerName || '').trim().toLowerCase() === (CD.name || '').trim().toLowerCase();
   const allStatuses = ['pending','in_progress','completed_on_time','completed_late','not_completed','canceled_by_client'];
   const actionBtns = isOwner && !isMgr
-    ? `<select class="btn sm" style="cursor:pointer;background:#2A2A2A;border-color:#3A3A3A;color:#E0E0E0" onchange="updateItemStatusWithLog('${it.id}',this.value)">
-        ${allStatuses.map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]||s}</option>`).join('')}
-       </select>
-       <button class="btn sm" onclick="openEmployeeUpdateModal('${it.id}','${esc(it.title)}','${it.deadline||''}','${it.status||'pending'}')" style="background:rgba(96,165,250,.12);color:#60A5FA;border-color:rgba(96,165,250,.25)">📝 Update</button>`
+    ? `<button class="btn sm" onclick="openEmployeeUpdateModal('${it.id}','${esc(it.title)}','${it.deadline||''}','${it.status||'pending'}')" style="background:rgba(96,165,250,.12);color:#60A5FA;border-color:rgba(96,165,250,.25)">
+         ${it.status==='completed_on_time'||it.status==='completed_late'?'✓ Done — Update':'📝 Update Status'}
+       </button>`
     : isMgr
     ? `<select class="btn sm" style="cursor:pointer" onchange="updateItemStatusWithLog('${it.id}',this.value)">
         ${allStatuses.map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]||s}</option>`).join('')}
@@ -3318,8 +3367,8 @@ function renderItemCard(it) {
   return `<div class="item-row" data-status="${it.status||'pending'}">
     <span class="priority-dot ${it.priority||'medium'}"></span>
     <div class="item-content">
-      <div class="item-title">${esc(it.title)}</div>
-      <div class="item-meta">${esc(it.ownerName||it.owner)} · ${deadlineDisplay}</div>
+      <div class="item-title">${esc(it.title)}${it._overdue_prior ? ' <span style="font-size:10px;background:#7f1d1d;color:#fca5a5;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">OVERDUE</span>' : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '')}</div>
+      <div class="item-meta">${esc(it.ownerName||it.owner)} · ${deadlineDisplay}${it._overdue_prior ? ' — <span style="color:var(--danger)">past deadline</span>' : (it._prior_week ? ' — <span style="color:var(--text3)">prior week</span>' : '')}</div>
       ${it.fridayReview?.reason?`<div style="font-size:11px;color:var(--text2);margin-top:2px;font-style:italic">Employee note: ${esc(it.fridayReview.reason)}</div>`:''}
     </div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
@@ -5321,20 +5370,30 @@ async function saveEmployeeUpdate(itemId) {
   const note   = document.getElementById('eu-note')?.value?.trim();
   const btn    = document.getElementById('eu-save');
   if (btn) { btn.textContent='Saving…'; btn.disabled=true; }
+  const isResolved = status === 'completed_on_time' || status === 'completed_late' || status === 'not_completed';
   try {
     await db.collection('weekly_items').doc(itemId).update({
-      status, latestNote:note, latestNoteBy:CD.name,
-      latestNoteAt:firebase.firestore.FieldValue.serverTimestamp(),
-      updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
-      lastStatusBy:CD.name, lastStatusRole:CD.role,
-      changeLog:firebase.firestore.FieldValue.arrayUnion({by:CD.name,role:CD.role,to:status,note:note||'',ts:new Date().toLocaleString()})
+      status,
+      latestNote: note,
+      latestNoteBy: CD.name,
+      latestNoteAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      lastStatusBy: CD.name,
+      lastStatusRole: CD.role,
+      lastStatusAt: new Date().toISOString(),
+      resolvedAt: isResolved ? new Date().toISOString() : null,
+      changeLog: firebase.firestore.FieldValue.arrayUnion({
+        by: CD.name, role: CD.role, to: status,
+        note: note || '', ts: new Date().toLocaleString()
+      })
     });
-    const modal = document.getElementById('emp-update-modal'); if (modal) modal.remove();
-    toast('✓ Item updated');
+    const modal = document.getElementById('emp-update-modal');
+    if (modal) modal.remove();
+    toast('✓ Item updated' + (isResolved ? ' — marked ' + status.replace(/_/g,' ') : ''));
     if (document.getElementById('inline-weekly-items')) loadInlineWeeklyItems();
     if (document.getElementById('items-list')) renderItems();
   } catch(e) {
-    toast('Error: '+e.message,'err');
+    toast('Error saving: ' + e.message, 'err');
     if (btn) { btn.textContent='Save Update'; btn.disabled=false; }
   }
 }
