@@ -1127,6 +1127,7 @@ async function renderDashboard() {
     loadMyRecentHistory();
     loadAppreciationsForDash();
     loadNewAssignmentsForDash();
+    loadCompletedTasksForDash();
 
   } else {
     var pendingNames = teamMembers
@@ -1164,6 +1165,7 @@ async function renderDashboard() {
     loadTeamStatus(branch, wk);
     loadAppreciationsForDash();
     loadNewAssignmentsForDash();
+    loadCompletedTasksForDash();
   }
 }
 
@@ -1829,7 +1831,20 @@ async function saveManagerCarryoverUpdate(id) {
     colorStatus,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  if (newDeadline) update.deadline = newDeadline;
+  if (newDeadline) {
+    try {
+      const curSnap = await db.collection('weekly_items').doc(id).get();
+      const oldDeadline = curSnap.data()?.deadline || '';
+      if (oldDeadline && oldDeadline !== newDeadline) {
+        update.extensionHistory = firebase.firestore.FieldValue.arrayUnion({
+          type: 'manager_carryover', by: CD.name, byRole: CD.role,
+          originalDeadline: oldDeadline, newDeadline,
+          reason: note, changedAt: new Date().toISOString()
+        });
+      }
+    } catch(e) {}
+    update.deadline = newDeadline;
+  }
   if (assistanceLevel !== 'none') { update.needsAssistance = true; update.assistanceLevel = assistanceLevel; }
   await db.collection('weekly_items').doc(id).update(update);
   document.getElementById('mgr-co-modal').remove();
@@ -2318,9 +2333,9 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
     healthRate, healthLabel, healthColor,
     streak,
     overdueItems: scoredItems.filter(i => i.status === 'pending' && i.deadline && i.deadline < today)
-      .map(i => ({ title: i.title, priority: i.priority, daysOverdue: swlDaysBetween(i.deadline, today) })),
+      .map(i => ({ title: i.title, priority: i.priority, daysOverdue: swlDaysBetween(i.deadline, today), pushedBackCount: (i.extensionHistory||[]).length })),
     missedItems: scoredItems.filter(i => i.status === 'not_completed')
-      .map(i => ({ title: i.title, priority: i.priority })),
+      .map(i => ({ title: i.title, priority: i.priority, pushedBackCount: (i.extensionHistory||[]).length })),
     allScoredItems: scoredItems
   };
 }
@@ -2694,17 +2709,20 @@ function showEmployeeDrilldown(uid) {
   function gc(grade) { return {A:'var(--success)',B:'var(--success)',C:'#FBBF24',D:'var(--warn)',F:'var(--danger)'}[grade]||'var(--text3)'; }
   function rc(risk)  { return {low:'var(--success)',medium:'#FBBF24',high:'var(--warn)',critical:'var(--danger)'}[risk]||'var(--text3)'; }
 
+  const pushedBackTag = (n) => n>0 ? '<span title="Deadline pushed back '+n+' time'+(n!==1?'s':'')+'" style="font-size:9px;font-weight:700;color:#FBBF24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);border-radius:8px;padding:1px 6px;margin-left:6px">&#9195; '+n+'x</span>' : '';
+
   const missedHtml = (p.missedItems||[]).length
     ? (p.missedItems||[]).map(i=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">'
         + '<span style="font-size:9px;font-weight:700;text-transform:uppercase;color:'+( i.priority==='critical'?'var(--danger)':i.priority==='high'?'var(--warn)':'var(--text3)')+';width:48px">'+esc(i.priority||'med')+'</span>'
         + '<span style="font-size:12px;color:var(--text)">'+esc(i.title)+'</span>'
+        + pushedBackTag(i.pushedBackCount)
         + '</div>').join('')
     : '<div style="font-size:11px;color:var(--text3);padding:6px 0">None</div>';
 
   const overdueHtml = (p.overdueItems||[]).length
     ? (p.overdueItems||[]).map(i=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">'
         + '<span style="font-size:9px;font-weight:700;text-transform:uppercase;color:'+(i.daysOverdue>30?'var(--danger)':i.daysOverdue>7?'var(--warn)':'#FBBF24')+';width:48px">'+esc(i.priority||'med')+'</span>'
-        + '<span style="font-size:12px;color:var(--text);flex:1">'+esc(i.title)+'</span>'
+        + '<span style="font-size:12px;color:var(--text);flex:1">'+esc(i.title)+pushedBackTag(i.pushedBackCount)+'</span>'
         + '<span style="font-size:11px;font-weight:700;color:var(--danger)">'+i.daysOverdue+'d</span>'
         + '</div>').join('')
     : '<div style="font-size:11px;color:var(--text3);padding:6px 0">None</div>';
@@ -3549,7 +3567,8 @@ async function updateItemStatusWithLog(id, status) {
     lastStatusRole: CD.role,
     lastStatusAt: new Date().toISOString(),
     resolvedAt: (status === 'completed_on_time' || status === 'completed_late' || status === 'not_completed') ? new Date().toISOString() : null,
-    changeLog: firebase.firestore.FieldValue.arrayUnion(logEntry)
+    changeLog: firebase.firestore.FieldValue.arrayUnion(logEntry),
+    ...(status === 'completed_on_time' || status === 'completed_late' ? {completionSeen: false} : {})
   });
   toast('✓ Status updated');
   renderItems();
@@ -3640,9 +3659,25 @@ async function saveFridayReview(id) {
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     resolvedAt: (status === 'completed_on_time' || status === 'completed_late' || status === 'not_completed') ? new Date().toISOString() : null
   };
+  if (status === 'completed_on_time' || status === 'completed_late') {
+    update.completionSeen = false;
+  }
   if (status === 'not_completed') {
     update.carriedOver = true;
-    if (newDeadline) update.deadline = newDeadline;
+    if (newDeadline) {
+      try {
+        const curSnap = await db.collection('weekly_items').doc(id).get();
+        const oldDeadline = curSnap.data()?.deadline || '';
+        if (oldDeadline && oldDeadline !== newDeadline) {
+          update.extensionHistory = firebase.firestore.FieldValue.arrayUnion({
+            type: 'friday_carryover', by: CD.name, byRole: CD.role,
+            originalDeadline: oldDeadline, newDeadline,
+            reason: review.reason || '', changedAt: new Date().toISOString()
+          });
+        }
+      } catch(e) {}
+      update.deadline = newDeadline;
+    }
     update.needsAssistance = review.assistLevel !== 'none';
     update.assistanceLevel = review.assistLevel;
   }
@@ -5475,6 +5510,7 @@ async function saveEmployeeUpdate(itemId) {
   const btn    = document.getElementById('eu-save');
   if (btn) { btn.textContent='Saving…'; btn.disabled=true; }
   const isResolved = status === 'completed_on_time' || status === 'completed_late' || status === 'not_completed';
+  const isCompleted = status === 'completed_on_time' || status === 'completed_late';
   try {
     await db.collection('weekly_items').doc(itemId).update({
       status,
@@ -5489,7 +5525,8 @@ async function saveEmployeeUpdate(itemId) {
       changeLog: firebase.firestore.FieldValue.arrayUnion({
         by: CD.name, role: CD.role, to: status,
         note: note || '', ts: new Date().toLocaleString()
-      })
+      }),
+      ...(isCompleted ? {completionSeen: false} : {})
     });
     const modal = document.getElementById('emp-update-modal');
     if (modal) modal.remove();
@@ -5738,6 +5775,54 @@ async function loadNewAssignmentsForDash() {
       } catch(e) { /* silent — not critical */ }
     }, 3000);
   } catch(e) { console.warn('loadNewAssignmentsForDash:', e.message); }
+}
+
+// ══ TASK COMPLETION NOTIFICATIONS (for the person who assigned it) ══
+
+async function loadCompletedTasksForDash() {
+  try {
+    const snap = await db.collection('weekly_items')
+      .where('assignedBy','==',CU.uid).where('completionSeen','==',false).get();
+    if (snap.empty) return;
+    const ca = document.getElementById('content-area');
+    if (!ca) return;
+
+    const docs = snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(b.resolvedAt||'').localeCompare(a.resolvedAt||''));
+    if (!docs.length) return;
+
+    const cards = docs.map(it => {
+      const isOnTime = it.status === 'completed_on_time';
+      const label = isOnTime ? '✓ Completed On Time' : '⚠ Completed Late';
+      const color = isOnTime ? '#7DC855' : '#FBBF24';
+      return '<div style="background:rgba(125,200,85,.08);border:1px solid rgba(125,200,85,.3);border-radius:10px;padding:14px 16px;margin-bottom:10px;position:relative">'
+        + '<div style="position:absolute;top:12px;right:12px;background:'+color+';color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.04em;text-transform:uppercase">NEW</div>'
+        + '<div style="font-size:12px;font-weight:700;color:'+color+';margin-bottom:4px">'+label+'</div>'
+        + '<div style="font-size:13px;color:#E0E0E0;font-weight:600;line-height:1.6">' + esc(it.title) + '</div>'
+        + '<div style="font-size:11px;color:#999;margin-top:2px">Completed by ' + esc(it.ownerName||it.owner||'') + '</div>'
+        + '</div>';
+    }).join('');
+
+    const headerText = '&#9989; Tasks Completed <span style="background:#7DC855;color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">' + docs.length + ' NEW</span>';
+
+    const wrapper = document.createElement('div');
+    wrapper.id = 'completed-tasks-banner';
+    wrapper.innerHTML = '<div style="margin-bottom:16px">'
+      + '<div style="font-size:11px;font-weight:700;color:#7DC855;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">' + headerText + '</div>'
+      + cards
+      + '</div>';
+    ca.insertBefore(wrapper, ca.firstChild);
+
+    setTimeout(async function() {
+      try {
+        const batch = db.batch();
+        docs.forEach(it => {
+          batch.update(db.collection('weekly_items').doc(it.id), {completionSeen: true});
+        });
+        await batch.commit();
+      } catch(e) { /* silent — not critical */ }
+    }, 3000);
+  } catch(e) { console.warn('loadCompletedTasksForDash:', e.message); }
 }
 
 </script>
