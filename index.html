@@ -1979,6 +1979,9 @@ async function renderMyHistory() {
   const rate = total ? Math.round(completed/total*100) : 0;
 
   ca.innerHTML = `
+    <div class="btn-row" style="border:none;padding:0;margin-bottom:12px;justify-content:flex-end">
+      <button class="btn primary" onclick="exportSummaryPDF('SWL My Submissions — ${esc(CD.name)}')">Export PDF</button>
+    </div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
       ${[
         {n:subs.length,  l:'Total submissions',    c:'var(--info)',    },
@@ -4596,12 +4599,13 @@ async function updateUserProfile() {
 // ══════════════════════════════════════════════════
 // PDF EXPORT
 // ══════════════════════════════════════════════════
-async function exportSummaryPDF() {
+async function exportSummaryPDF(title) {
   const summaryEl = document.getElementById('content-area');
   if (!summaryEl) { toast('No summary to export','err'); return; }
+  const pdfTitle = title || ('SWL Monday Summary — ' + fmtWeek(CW));
 
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>SWL Monday Summary — ${fmtWeek(CW)}</title>
+<title>${esc(pdfTitle)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -4636,7 +4640,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}
 th{text-align:left;padding:5px 8px;background:#F8F9FA;border-bottom:2px solid #E2E8E4;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7A9088}
 td{padding:5px 8px;border-bottom:1px solid #F0F2F0;vertical-align:top}
 .footer{text-align:center;font-size:11px;color:#B0C4BB;margin-top:20px;padding-top:12px;border-top:1px solid #E2E8E4}
-@media print{body{padding:12px}}
+@media print{body{padding:12px} .card-header button{display:none}}
 </style></head><body>
 ${summaryEl.innerHTML}
 <div class="footer">SouthWest Landscape Inc. · Confidential Internal Document · Generated ${new Date().toLocaleString()}</div>
