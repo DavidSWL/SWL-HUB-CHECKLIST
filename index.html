@@ -838,6 +838,7 @@ function enterApp() {
   if (lw) { lw.style.display='none'; }
   document.getElementById('app-shell').style.display = 'flex';
   buildSidebar();
+  updateInboxBadgeCount();
   updateWeekDisplay();
   applySidebarTheme();
   var _t=CU?localStorage.getItem("swl_theme_"+CU.uid):null;
@@ -896,6 +897,13 @@ function buildSidebar() {
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
       Dashboard
     </button>`;
+
+  // Inbox — visible to everyone; badge count is filled in async by updateInboxBadgeCount()
+  html += `<button class="nav-btn" onclick="navigateTo('inbox')" style="position:relative">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
+    Inbox
+    <span id="inbox-badge-count" style="display:none;margin-left:auto;background:var(--oc);color:#fff;font-size:10px;font-weight:700;border-radius:10px;padding:1px 6px;min-width:16px;text-align:center"></span>
+  </button>`;
 
   // Everyone can see their own grading — including managers, admin, and non-managers.
   // exec_viewer is excluded (buildUserScores excludes that role from scoring entirely).
@@ -1063,6 +1071,7 @@ function renderScreen(screen) {
     'monday-recap':   { title:'Monday Meeting Notes',     fn: renderMondayRecap },
     'my-history':     { title:'My Submissions & History', fn: renderMyHistory },
     'my-grading':     { title:'My Grading',                fn: renderMyGrading },
+    'inbox':          { title:'Inbox',                     fn: renderInbox },
     'accountability': { title:'Accountability Tracker',   fn: renderAccountability },
     'summary':        { title:'Monday Recap',    fn: renderSummary },
     'friday-summary': { title:'Friday Recap',         fn: renderFridaySummary },
@@ -1135,9 +1144,7 @@ async function renderDashboard() {
     });
     loadCarryoverForDash(branch);
     loadMyRecentHistory();
-    loadAppreciationsForDash();
-    loadNewAssignmentsForDash();
-    loadCompletedTasksForDash();
+    updateInboxBadgeCount();
 
   } else {
     var pendingNames = teamMembers
@@ -1173,9 +1180,7 @@ async function renderDashboard() {
     });
     loadCarryoverForDash(branch);
     loadTeamStatus(branch, wk);
-    loadAppreciationsForDash();
-    loadNewAssignmentsForDash();
-    loadCompletedTasksForDash();
+    updateInboxBadgeCount();
   }
 }
 
@@ -5730,165 +5735,121 @@ async function sendAppreciation() {
   }
 }
 
-async function loadAppreciationsForDash() {
+// ══ UNIFIED INBOX (kudos + new assignments + completions) ══
+// Replaces the three separate dashboard banners that used to live here —
+// dashboard now shows only a lightweight unread count (updateInboxBadgeCount);
+// the full feed and mark-as-seen behavior live entirely in the Inbox screen,
+// so items are never silently marked seen just from loading the dashboard.
+
+async function updateInboxBadgeCount() {
   try {
-    const snap = await db.collection('appreciations')
-      .where('toUserId','==',CU.uid).get();
-    if (snap.empty) return;
-    const ca = document.getElementById('content-area');
-    if (!ca) return;
-
-    const allDocs = snap.docs.map(d=>({id:d.id,...d.data()}))
-      .sort((a,b)=>{ // newest first
-        const ta = a.sentAt?.toMillis?.() || 0;
-        const tb = b.sentAt?.toMillis?.() || 0;
-        return tb - ta;
-      });
-    const unreadDocs = allDocs.filter(a=>!a.read);
-
-    const cards = allDocs.map(a => {
-      const ts = a.sentAt?.toDate?.()?.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})||'';
-      const toneIcon = a.tone ? a.tone.split(' ')[0] : '❤️';
-      const isNew = !a.read;
-      return '<div style="background:rgba(192,132,252,' + (isNew?'.1':'.05') + ');border:1px solid rgba(192,132,252,' + (isNew?'.35':'.15') + ');border-radius:10px;padding:14px 16px;margin-bottom:10px;position:relative">'
-        + (isNew ? '<div style="position:absolute;top:12px;right:12px;background:#C084FC;color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.04em;text-transform:uppercase">NEW</div>' : '')
-        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
-        + '<span style="font-size:20px">' + toneIcon + '</span>'
-        + '<div><div style="font-size:12px;font-weight:700;color:#C084FC">From ' + esc(a.fromName) + '</div>'
-        + '<div style="font-size:10px;color:#777">' + ts + '</div></div>'
-        + '</div>'
-        + (a.tone ? '<div style="font-size:10px;color:#C084FC;margin-bottom:6px;font-weight:600">' + esc(a.tone) + '</div>' : '')
-        + '<div style="font-size:13px;color:#E0E0E0;line-height:1.6">' + esc(a.message) + '</div>'
-        + '</div>';
-    }).join('');
-
-    const headerText = unreadDocs.length
-      ? '&#128140; Appreciations <span style="background:#C084FC;color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">' + unreadDocs.length + ' NEW</span>'
-      : '&#128140; Appreciations (' + allDocs.length + ')';
-
-    const wrapper = document.createElement('div');
-    wrapper.id = 'appreciation-banner';
-    wrapper.innerHTML = '<div style="margin-bottom:16px">'
-      + '<div style="font-size:11px;font-weight:700;color:#C084FC;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">' + headerText + '</div>'
-      + cards
-      + '</div>';
-    ca.insertBefore(wrapper, ca.firstChild);
-
-    // Mark unread as seen after 3 seconds (they stay visible — just removes NEW badge next visit)
-    if (unreadDocs.length) {
-      setTimeout(async function() {
-        try {
-          const batch = db.batch();
-          unreadDocs.forEach(a => {
-            batch.update(db.collection('appreciations').doc(a.id), {read: true});
-          });
-          await batch.commit();
-        } catch(e) { /* silent — not critical */ }
-      }, 3000);
-    }
-  } catch(e) { console.warn('loadAppreciationsForDash:', e.message); }
+    const [a, b, c] = await Promise.all([
+      db.collection('appreciations').where('toUserId','==',CU.uid).get(),
+      db.collection('weekly_items').where('owner','==',CU.uid).where('seen','==',false).get(),
+      db.collection('weekly_items').where('assignedBy','==',CU.uid).where('completionSeen','==',false).get()
+    ]);
+    const unreadApp = a.docs.filter(d => !d.data().read).length;
+    const total = unreadApp + b.size + c.size;
+    const el = document.getElementById('inbox-badge-count');
+    if (!el) return;
+    if (total > 0) { el.textContent = total > 99 ? '99+' : String(total); el.style.display = 'inline-flex'; }
+    else { el.style.display = 'none'; }
+  } catch(e) { /* silent — badge count is a nice-to-have, not critical */ }
 }
 
-// ══ NEW TASK ASSIGNMENT NOTIFICATIONS ══
-
-async function loadNewAssignmentsForDash() {
+async function renderInbox() {
+  const ca = document.getElementById('content-area');
+  ca.innerHTML = '<div class="empty">Loading your inbox…</div>';
   try {
-    const snap = await db.collection('weekly_items')
-      .where('owner','==',CU.uid).where('seen','==',false).get();
-    if (snap.empty) return;
-    const ca = document.getElementById('content-area');
-    if (!ca) return;
+    const [appSnap, assignSnap, compSnap] = await Promise.all([
+      db.collection('appreciations').where('toUserId','==',CU.uid).get(),
+      db.collection('weekly_items').where('owner','==',CU.uid).get(),
+      db.collection('weekly_items').where('assignedBy','==',CU.uid).get()
+    ]);
 
-    const docs = snap.docs.map(d=>({id:d.id,...d.data()}))
-      .sort((a,b)=>{
-        const ta = a.createdAt?.toMillis?.() || 0;
-        const tb = b.createdAt?.toMillis?.() || 0;
-        return tb - ta;
+    const feed = [];
+    appSnap.docs.forEach(d => {
+      const a = d.data();
+      feed.push({
+        kind: 'kudos', ts: a.sentAt?.toMillis?.() || 0, unread: !a.read,
+        icon: a.tone ? a.tone.split(' ')[0] : '❤️', color: '#C084FC',
+        kicker: 'Kudos · from ' + esc(a.fromName||'—'),
+        msg: esc(a.message||''),
+        markSeen: () => db.collection('appreciations').doc(d.id).update({read: true})
       });
-    if (!docs.length) return;
+    });
+    assignSnap.docs.forEach(d => {
+      const it = d.data();
+      if (!it.assignedBy || it.assignedBy === CU.uid) return; // skip self-assigned / legacy items
+      feed.push({
+        kind: 'assigned', ts: it.createdAt?.toMillis?.() || 0, unread: it.seen === false,
+        icon: '📌', color: '#60A5FA',
+        kicker: 'New task · from ' + esc(it.assignedByName||'Manager'),
+        msg: '<b>' + esc(it.title) + '</b> — due ' + fmtDate(it.deadline) + (it.priority ? ' · ' + it.priority.charAt(0).toUpperCase()+it.priority.slice(1) + ' priority' : ''),
+        markSeen: () => db.collection('weekly_items').doc(d.id).update({seen: true})
+      });
+    });
+    compSnap.docs.forEach(d => {
+      const it = d.data();
+      if (it.status !== 'completed_on_time' && it.status !== 'completed_late') return;
+      const onTime = it.status === 'completed_on_time';
+      feed.push({
+        kind: 'completed', ts: it.resolvedAt ? Date.parse(it.resolvedAt) : 0, unread: it.completionSeen === false,
+        icon: onTime ? '✅' : '⚠️', color: onTime ? '#7DC855' : '#FBBF24',
+        kicker: 'Task completed · ' + esc(it.ownerName||it.owner||''),
+        msg: 'Marked <b>' + esc(it.title) + '</b> complete' + (onTime ? ' on time' : ' (late)'),
+        markSeen: () => db.collection('weekly_items').doc(d.id).update({completionSeen: true})
+      });
+    });
 
-    const cards = docs.map(it => {
-      const ts = it.createdAt?.toDate?.()?.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})||'';
-      return '<div style="background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.35);border-radius:10px;padding:14px 16px;margin-bottom:10px;position:relative">'
-        + '<div style="position:absolute;top:12px;right:12px;background:#60A5FA;color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.04em;text-transform:uppercase">NEW</div>'
-        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
-        + '<span style="font-size:20px">📌</span>'
-        + '<div><div style="font-size:12px;font-weight:700;color:#60A5FA">Assigned by ' + esc(it.assignedByName||'Manager') + '</div>'
-        + '<div style="font-size:10px;color:#777">' + ts + '</div></div>'
-        + '</div>'
-        + '<div style="font-size:13px;color:#E0E0E0;font-weight:600;line-height:1.6">' + esc(it.title) + '</div>'
-        + '<div style="font-size:11px;color:#999;margin-top:2px">Due ' + fmtDate(it.deadline) + (it.priority?' · '+it.priority.charAt(0).toUpperCase()+it.priority.slice(1)+' priority':'') + '</div>'
-        + '</div>';
-    }).join('');
+    feed.sort((a,b) => b.ts - a.ts);
+    window._inboxFeed = feed.slice(0, 150); // defensive cap on a long-tenured account's history
 
-    const headerText = '&#128204; New Tasks Assigned <span style="background:#60A5FA;color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">' + docs.length + ' NEW</span>';
-
-    const wrapper = document.createElement('div');
-    wrapper.id = 'new-assignment-banner';
-    wrapper.innerHTML = '<div style="margin-bottom:16px">'
-      + '<div style="font-size:11px;font-weight:700;color:#60A5FA;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">' + headerText + '</div>'
-      + cards
+    renderInboxFeed('all');
+  } catch(e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:580px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load Inbox</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderInbox()">Retry</button>'
       + '</div>';
-    ca.insertBefore(wrapper, ca.firstChild);
-
-    setTimeout(async function() {
-      try {
-        const batch = db.batch();
-        docs.forEach(it => {
-          batch.update(db.collection('weekly_items').doc(it.id), {seen: true});
-        });
-        await batch.commit();
-      } catch(e) { /* silent — not critical */ }
-    }, 3000);
-  } catch(e) { console.warn('loadNewAssignmentsForDash:', e.message); }
+  }
 }
 
-// ══ TASK COMPLETION NOTIFICATIONS (for the person who assigned it) ══
+function renderInboxFeed(filter) {
+  const ca = document.getElementById('content-area');
+  const feed = window._inboxFeed || [];
+  const shown = filter === 'all' ? feed : feed.filter(f => f.kind === filter);
+  const unreadCount = feed.filter(f => f.unread).length;
+  const filters = [
+    {k:'all', l:'All'}, {k:'kudos', l:'Kudos'}, {k:'assigned', l:'Assigned to me'}, {k:'completed', l:'Completed'}
+  ];
 
-async function loadCompletedTasksForDash() {
-  try {
-    const snap = await db.collection('weekly_items')
-      .where('assignedBy','==',CU.uid).where('completionSeen','==',false).get();
-    if (snap.empty) return;
-    const ca = document.getElementById('content-area');
-    if (!ca) return;
+  ca.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:15px;font-weight:700">📥 Inbox</div>'
+    + (unreadCount ? '<span style="font-size:11px;color:var(--text3)">' + unreadCount + ' unread</span>' : '')
+    + '</div>'
+    + '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">'
+    + filters.map(f => '<button class="btn sm' + (filter===f.k?' primary':'') + '" onclick="renderInboxFeed(\'' + f.k + '\')">' + f.l + '</button>').join('')
+    + '</div>'
+    + (shown.length ? shown.map(f =>
+        '<div style="display:flex;gap:12px;padding:14px;border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px;'
+        + (f.unread ? 'border-left:3px solid ' + f.color + ';background:var(--surface2)' : 'background:var(--surface)') + '">'
+        + '<span style="font-size:20px;flex-shrink:0">' + f.icon + '</span>'
+        + '<div style="flex:1;min-width:0"><div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:' + f.color + ';margin-bottom:2px">' + f.kicker + '</div>'
+        + '<div style="font-size:13px;color:var(--text)">' + f.msg + '</div></div>'
+        + '<span style="font-size:10.5px;color:var(--text3);white-space:nowrap">' + (f.ts ? new Date(f.ts).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '') + '</span>'
+        + '</div>'
+      ).join('') : '<div class="empty">Nothing here yet.</div>');
 
-    const docs = snap.docs.map(d=>({id:d.id,...d.data()}))
-      .sort((a,b)=>(b.resolvedAt||'').localeCompare(a.resolvedAt||''));
-    if (!docs.length) return;
-
-    const cards = docs.map(it => {
-      const isOnTime = it.status === 'completed_on_time';
-      const label = isOnTime ? '✓ Completed On Time' : '⚠ Completed Late';
-      const color = isOnTime ? '#7DC855' : '#FBBF24';
-      return '<div style="background:rgba(125,200,85,.08);border:1px solid rgba(125,200,85,.3);border-radius:10px;padding:14px 16px;margin-bottom:10px;position:relative">'
-        + '<div style="position:absolute;top:12px;right:12px;background:'+color+';color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.04em;text-transform:uppercase">NEW</div>'
-        + '<div style="font-size:12px;font-weight:700;color:'+color+';margin-bottom:4px">'+label+'</div>'
-        + '<div style="font-size:13px;color:#E0E0E0;font-weight:600;line-height:1.6">' + esc(it.title) + '</div>'
-        + '<div style="font-size:11px;color:#999;margin-top:2px">Completed by ' + esc(it.ownerName||it.owner||'') + '</div>'
-        + '</div>';
-    }).join('');
-
-    const headerText = '&#9989; Tasks Completed <span style="background:#7DC855;color:#000;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle">' + docs.length + ' NEW</span>';
-
-    const wrapper = document.createElement('div');
-    wrapper.id = 'completed-tasks-banner';
-    wrapper.innerHTML = '<div style="margin-bottom:16px">'
-      + '<div style="font-size:11px;font-weight:700;color:#7DC855;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">' + headerText + '</div>'
-      + cards
-      + '</div>';
-    ca.insertBefore(wrapper, ca.firstChild);
-
-    setTimeout(async function() {
-      try {
-        const batch = db.batch();
-        docs.forEach(it => {
-          batch.update(db.collection('weekly_items').doc(it.id), {completionSeen: true});
-        });
-        await batch.commit();
-      } catch(e) { /* silent — not critical */ }
-    }, 3000);
-  } catch(e) { console.warn('loadCompletedTasksForDash:', e.message); }
+  // Mark whatever's currently in view as seen after a moment — matches the
+  // original banners' "stays visible, just clears the NEW badge" behavior.
+  const toMark = shown.filter(f => f.unread);
+  if (toMark.length) {
+    setTimeout(function() {
+      toMark.forEach(f => { f.unread = false; f.markSeen().catch(()=>{}); });
+      updateInboxBadgeCount();
+    }, 2500);
+  }
 }
 
 </script>
