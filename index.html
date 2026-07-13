@@ -897,6 +897,15 @@ function buildSidebar() {
       Dashboard
     </button>`;
 
+  // Everyone can see their own grading — including managers, admin, and non-managers.
+  // exec_viewer is excluded (buildUserScores excludes that role from scoring entirely).
+  if (role !== 'exec_viewer') {
+    html += `<button class="nav-btn" onclick="navigateTo('my-grading')">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      My Grading
+    </button>`;
+  }
+
   // My forms
   html += `<span class="sb-section-label">My Weekly Forms</span>`;
 
@@ -1053,6 +1062,7 @@ function renderScreen(screen) {
     'friday-recap':   { title:'Friday Recap',             fn: renderFridayRecap },
     'monday-recap':   { title:'Monday Recap',             fn: renderMondayRecap },
     'my-history':     { title:'My Submissions & History', fn: renderMyHistory },
+    'my-grading':     { title:'My Grading',                fn: renderMyGrading },
     'accountability': { title:'Accountability Tracker',   fn: renderAccountability },
     'summary':        { title:'Monday Meeting Summary',    fn: renderSummary },
     'friday-summary': { title:'Friday Team Summary',         fn: renderFridaySummary },
@@ -3070,6 +3080,31 @@ function renderAITeamOutput(el, r, fromCache) {
     + (r.trend_analysis ? '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#60A5FA;margin-bottom:6px">\ud83d\udcc8 Trend Analysis</div><div style="font-size:12px;color:var(--text2);line-height:1.65;padding:4px 0 4px 10px;border-left:2px solid rgba(96,165,250,.25)">'+esc(r.trend_analysis)+'</div></div>' : '')
     + section('\u2705','Recommended Actions', r.recommended_actions,'#60A5FA')
     + '</div>';
+}
+
+async function renderMyGrading() {
+  const ca = document.getElementById('content-area');
+  ca.innerHTML = '<div class="empty">Loading your grading…</div>';
+  try {
+    await buildUserScores(getUserBranch(), 'all');
+    const p = swl_scores_cache[CU.uid];
+    if (!p) {
+      ca.innerHTML = '<div class="empty">No scoring data yet — grading starts once you have weekly items assigned to you.</div>';
+      return;
+    }
+    ca.innerHTML = '<div class="card" style="max-width:400px;margin:40px auto;text-align:center">'
+      + '<div class="card-header" style="justify-content:center"><div class="card-title">My Grading</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);margin-bottom:14px">Your latest breakdown is shown below.</p>'
+      + '<button class="btn primary" onclick="showEmployeeDrilldown(\'' + CU.uid + '\')">View My Grading</button>'
+      + '</div>';
+    showEmployeeDrilldown(CU.uid);
+  } catch(e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:580px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load Grading</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderMyGrading()">Retry</button>'
+      + '</div>';
+  }
 }
 
 async function renderAccountability() {
