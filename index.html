@@ -726,6 +726,11 @@ function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 function isFriday() { return new Date().getDay()===5; }
 function isMonday() { return new Date().getDay()===1; }
 function getUserBranch() { return CD?.branch==='ALL' ? null : CD?.branch; }
+
+// Accountability/Team/Exec Dashboard render into this when hosted inside the
+// Reports tab shell (renderReports), and fall back to the real content area
+// when reached directly (old nav aliases, hang-timer retry buttons, etc.)
+function getContentTarget() { return document.getElementById('reports-subview') || document.getElementById('content-area'); }
 function canView(branch) { if(!CD) return false; if(CD.role==='admin') return true; return CD.branch===branch; }
 
 let toastT;
@@ -972,25 +977,17 @@ function buildSidebar() {
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="12" y2="18"/></svg>
         Friday Recap
       </button>
-      <button class="nav-btn" onclick="navigateTo('accountability')">
+      <button class="nav-btn" onclick="navigateTo('reports')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Accountability
-      </button>
-      <button class="nav-btn" onclick="navigateTo('team')">
-        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-        Team Overview
+        Reports
       </button>`;
   }
   } // end manager-only planning
   if (role === 'exec_viewer') {
   html += `<span class="sb-section-label">Executive</span>
-      <button class="nav-btn" onclick="navigateTo('exec-dashboard')">
-        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        Executive Dashboard
-      </button>
-      <button class="nav-btn" onclick="navigateTo('accountability')">
+      <button class="nav-btn" onclick="navigateTo('reports')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Accountability
+        Reports
       </button>
       <button class="nav-btn" onclick="navigateTo('summary')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg>
@@ -999,10 +996,6 @@ function buildSidebar() {
       <button class="nav-btn" onclick="navigateTo('friday-summary')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg>
         Friday Recap
-      </button>
-      <button class="nav-btn" onclick="navigateTo('team')">
-        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-        Team Overview
       </button>
       <button class="nav-btn" onclick="navigateTo('items')">
         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
@@ -1078,6 +1071,7 @@ function renderScreen(screen) {
     'team':         { title:'Team Overview',       fn: renderTeam },
     'admin':        { title:'Admin Panel',         fn: renderAdmin },
     'exec-dashboard': { title:'Executive Dashboard',  fn: renderExecDashboard },
+    'reports':      { title:'Reports',             fn: renderReports },
   };
   const s = screens[screen];
   if (!s) return;
@@ -3112,8 +3106,45 @@ async function renderMyGrading() {
   }
 }
 
-async function renderAccountability() {
+// ══ REPORTS — consolidates Accountability / Team Overview / Executive Dashboard
+// behind one tab strip. Each tab is the existing render function, unmodified
+// apart from targeting getContentTarget() instead of content-area directly —
+// this is a delegating shell, not a rewrite, so a bug in one tab stays
+// contained to that tab exactly as it was before consolidation. ══
+async function renderReports() {
   const ca = document.getElementById('content-area');
+  const isAdmin = CD.role === 'admin';
+  const isExec = CD.role === 'exec_viewer';
+  const isMgr = ROLES[CD.role]?.isManager || isAdmin;
+
+  const tabs = [];
+  if (isAdmin || isExec) tabs.push({ k:'accountability', l:'Accountability', fn: renderAccountability });
+  if (isMgr || isExec) tabs.push({ k:'team', l:'Team Overview', fn: renderTeam });
+  if (isExec) tabs.push({ k:'exec-dashboard', l:'Executive Dashboard', fn: renderExecDashboard });
+
+  if (!tabs.length) { ca.innerHTML = '<div class="empty">Reports access is restricted for your role.</div>'; return; }
+
+  const active = (window._reportsTab && tabs.some(t => t.k === window._reportsTab)) ? window._reportsTab : tabs[0].k;
+  window._reportsTab = active;
+
+  const tabStrip = tabs.length > 1
+    ? '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'
+      + tabs.map(t => '<button class="btn' + (t.k===active?' primary':'') + '" onclick="switchReportsTab(\'' + t.k + '\')">' + t.l + '</button>').join('')
+      + '</div>'
+    : '';
+  ca.innerHTML = tabStrip + '<div id="reports-subview"><div class="empty">Loading…</div></div>';
+
+  const activeTab = tabs.find(t => t.k === active);
+  activeTab.fn();
+}
+
+function switchReportsTab(tabKey) {
+  window._reportsTab = tabKey;
+  renderReports();
+}
+
+async function renderAccountability() {
+  const ca = getContentTarget();
   if (CD.role !== 'admin' && CD.role !== 'exec_viewer') {
     ca.innerHTML='<div class="empty">Access restricted to Admin and Executive viewers.</div>'; return;
   }
@@ -3124,7 +3155,7 @@ async function renderAccountability() {
   // show a diagnostic card after 8s instead of spinning forever.
   if (swl_hang_timer) clearTimeout(swl_hang_timer); // cancel any prior render's timer
   swl_hang_timer = setTimeout(() => {
-    const el = document.getElementById('content-area');
+    const el = getContentTarget();
     if (el && el.innerHTML.includes('Loading accountability')) {
       const href     = window.location.href;
       const origin   = window.location.origin;
@@ -4017,7 +4048,7 @@ async function renderFridaySummary() {
 }
 
 async function renderTeam() {
-  const ca = document.getElementById('content-area');
+  const ca = getContentTarget();
   const wk = weekKey(CW);
   const branch = getUserBranch();
   ca.innerHTML = '<div class="empty">Loading team status…</div>';
@@ -5202,7 +5233,7 @@ async function showBadgeHistory() {
 
 // ═══ EXEC VIEWER DASHBOARD ═══
 async function renderExecDashboard() {
-  const ca = document.getElementById('content-area');
+  const ca = getContentTarget();
   ca.innerHTML = '<div class="dash-greeting">'+greet()+', '+esc(CD.name.split(" ")[0])+'!</div>'
     +'<div class="dash-sub">Executive Viewer · All Branches · '+fmtWeek(CW)+'</div>'
     +'<div style="display:flex;gap:8px;margin:12px 0">'
@@ -5308,7 +5339,7 @@ function populateAdminAIEmployeeList() {
   if (!el) return;
   const scored = Object.values(swl_scores_cache).filter(p=>!p.noActivity).sort((a,b)=>(b.score||0)-(a.score||0));
   if (!scored.length) {
-    el.innerHTML='<div style="font-size:12px;color:var(--text3)">Scores not yet loaded. Open the Accountability Tracker first, then return here to analyze employees.</div>';
+    el.innerHTML='<div style="font-size:12px;color:var(--text3)">Scores not yet loaded. Open Reports → Accountability first, then return here to analyze employees.</div>';
     return;
   }
   const rangeNote = '<div style="font-size:10.5px;font-weight:600;color:var(--text3);margin-bottom:8px">&#128197; Scores shown are from: '
