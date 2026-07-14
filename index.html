@@ -1686,12 +1686,16 @@ async function loadOverdueBannerForDash(branch) {
   if (!el) return;
   const today = new Date().toISOString().split('T')[0];
   try {
-    const base = branch ? db.collection('weekly_items').where('branch','==',branch) : db.collection('weekly_items');
+    // Query on status alone (a single filter always uses Firestore's automatic
+    // single-field index) and filter branch + deadline client-side — adding
+    // *any* second filter alongside a range comparison like deadline<today
+    // requires a manual composite index, which we can't assume exists.
     const [pendingSnap, progressSnap] = await Promise.all([
-      base.where('status','==','pending').where('deadline','<',today).get(),
-      base.where('status','==','in_progress').where('deadline','<',today).get()
+      db.collection('weekly_items').where('status','==','pending').get(),
+      db.collection('weekly_items').where('status','==','in_progress').get()
     ]);
-    const count = pendingSnap.size + progressSnap.size;
+    const isOverdue = (d) => { const it = d.data(); return it.deadline && it.deadline < today && (!branch || it.branch === branch); };
+    const count = pendingSnap.docs.filter(isOverdue).length + progressSnap.docs.filter(isOverdue).length;
     if (count > 0) {
       el.style.display = 'flex';
       const textEl = el.querySelector('.ob-text');
@@ -3953,27 +3957,29 @@ async function renderItems() {
   // For managers: load the whole branch's items from the last quarter so
   // overdue backlog and how it was resolved is visible team-wide, not just
   // for the current week.
+  // Each query below uses only a single filter — combining an equality filter
+  // (owner/ownerName/branch) with a range filter (weekStart>=quarterAgo) in
+  // the same query needs a manual Firestore composite index we can't assume
+  // exists, so the weekStart cutoff is applied client-side instead.
   let priorSnap = null, priorSnapName = null, priorSnapBranch = null;
   const quarterAgo = new Date(Date.now() - 90*86400000).toISOString().split('T')[0];
   if (!isMgr) {
     try {
-      priorSnap = await db.collection('weekly_items')
-        .where('owner','==',CU.uid)
-        .where('weekStart','>=',quarterAgo)
-        .get();
+      const snap = await db.collection('weekly_items').where('owner','==',CU.uid).get();
+      priorSnap = { docs: snap.docs.filter(d => (d.data().weekStart||'') >= quarterAgo) };
     } catch(e) { priorSnap = null; }
     try {
-      priorSnapName = await db.collection('weekly_items')
-        .where('ownerName','==',CD.name)
-        .where('weekStart','>=',quarterAgo)
-        .get();
+      const snap = await db.collection('weekly_items').where('ownerName','==',CD.name).get();
+      priorSnapName = { docs: snap.docs.filter(d => (d.data().weekStart||'') >= quarterAgo) };
     } catch(e) { priorSnapName = null; }
   } else {
     try {
-      priorSnapBranch = await (branch
-        ? db.collection('weekly_items').where('branch','==',branch).where('weekStart','>=',quarterAgo)
-        : db.collection('weekly_items').where('weekStart','>=',quarterAgo)
-      ).get();
+      if (branch) {
+        const snap = await db.collection('weekly_items').where('branch','==',branch).get();
+        priorSnapBranch = { docs: snap.docs.filter(d => (d.data().weekStart||'') >= quarterAgo) };
+      } else {
+        priorSnapBranch = await db.collection('weekly_items').where('weekStart','>=',quarterAgo).get();
+      }
     } catch(e) { priorSnapBranch = null; }
   }
 
@@ -6399,20 +6405,24 @@ async function updateInboxBadgeCount() {
     const isMgr = ROLES[CD.role]?.isManager || CD.role === 'admin';
     const today = new Date().toISOString().split('T')[0];
     const branch = getUserBranch();
-    const base = branch ? db.collection('weekly_items').where('branch','==',branch) : db.collection('weekly_items');
     const queries = [
       db.collection('appreciations').where('toUserId','==',CU.uid).get(),
       db.collection('weekly_items').where('owner','==',CU.uid).where('seen','==',false).get(),
       db.collection('weekly_items').where('assignedBy','==',CU.uid).where('completionSeen','==',false).get()
     ];
     if (isMgr) {
-      queries.push(base.where('status','==','pending').where('deadline','<',today).get());
-      queries.push(base.where('status','==','in_progress').where('deadline','<',today).get());
+      // Query on status alone — a single filter always uses Firestore's
+      // automatic single-field index — and filter branch + deadline
+      // client-side. Any second filter alongside deadline<today would need
+      // a manual composite index, which we can't assume exists.
+      queries.push(db.collection('weekly_items').where('status','==','pending').get());
+      queries.push(db.collection('weekly_items').where('status','==','in_progress').get());
     }
     const results = await Promise.all(queries);
     const [a, b, c] = results;
     const unreadApp = a.docs.filter(d => !d.data().read).length;
-    const overdueCount = isMgr ? results[3].size + results[4].size : 0;
+    const isOverdue = (d) => { const it = d.data(); return it.deadline && it.deadline < today && (!branch || it.branch === branch); };
+    const overdueCount = isMgr ? results[3].docs.filter(isOverdue).length + results[4].docs.filter(isOverdue).length : 0;
     const total = unreadApp + b.size + c.size + overdueCount;
     const el = document.getElementById('inbox-badge-count');
     if (!el) return;
@@ -6428,14 +6438,17 @@ async function renderInbox() {
     const isMgr = ROLES[CD.role]?.isManager || CD.role === 'admin';
     const today = new Date().toISOString().split('T')[0];
     const branch = getUserBranch();
-    const overdueBase = branch ? db.collection('weekly_items').where('branch','==',branch) : db.collection('weekly_items');
 
+    // Query on status alone — a single filter always uses Firestore's
+    // automatic single-field index — and filter branch + deadline
+    // client-side below. Any second filter alongside deadline<today would
+    // need a manual composite index, which we can't assume exists.
     const [appSnap, assignSnap, compSnap, overduePendingSnap, overdueProgressSnap] = await Promise.all([
       db.collection('appreciations').where('toUserId','==',CU.uid).get(),
       db.collection('weekly_items').where('owner','==',CU.uid).get(),
       db.collection('weekly_items').where('assignedBy','==',CU.uid).get(),
-      isMgr ? overdueBase.where('status','==','pending').where('deadline','<',today).get() : Promise.resolve(null),
-      isMgr ? overdueBase.where('status','==','in_progress').where('deadline','<',today).get() : Promise.resolve(null)
+      isMgr ? db.collection('weekly_items').where('status','==','pending').get() : Promise.resolve(null),
+      isMgr ? db.collection('weekly_items').where('status','==','in_progress').get() : Promise.resolve(null)
     ]);
 
     const feed = [];
@@ -6478,6 +6491,8 @@ async function renderInbox() {
       // resolved and drops out of this query on its own.
       overduePendingSnap.docs.concat(overdueProgressSnap.docs).forEach(d => {
         const it = d.data();
+        if (branch && it.branch !== branch) return;
+        if (!it.deadline || it.deadline >= today) return;
         const daysOverdue = swlDaysBetween(it.deadline, today);
         feed.push({
           kind: 'overdue', ts: it.deadline ? Date.parse(it.deadline) : 0, unread: true,
