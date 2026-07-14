@@ -1143,7 +1143,11 @@ async function renderDashboard() {
       + "<div class='card warn-card' id='dash-carryover-card'><div class='card-header'><div class='card-title'>&#9888; Carry-Over Items</div><button class='btn sm' data-nav='items'>View all &#8594;</button></div><div id='dash-co-list'><div class='empty'>Loading&#8230;</div></div></div>";
 
     ca.querySelectorAll("[data-nav]").forEach(function(el){
-      el.addEventListener("click", function(){navigateTo(this.getAttribute("data-nav"));});
+      el.addEventListener("click", function(){
+        var filt = this.getAttribute("data-filter");
+        if (filt) window._pendingItemsFilter = filt;
+        navigateTo(this.getAttribute("data-nav"));
+      });
     });
     loadCarryoverForDash(branch);
     loadMyRecentHistory();
@@ -1173,19 +1177,29 @@ async function renderDashboard() {
       + "<div style='background:var(--surface2);border:1px solid var(--border);border-left:3px solid " + accent + ";border-radius:var(--rl);padding:10px 13px;display:flex;align-items:center;gap:9px;margin-bottom:14px'>"
       + "<div style='width:26px;height:26px;border-radius:50%;background:" + primBtn + ";display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0'>&#128101;</div>"
       + "<div style='font-size:12px;color:var(--text2);line-height:1.5'>" + nudge + "</div></div>"
+      + "<div id='dash-overdue-banner' style='display:none;align-items:center;gap:9px;background:var(--danger-l);border:1px solid rgba(220,38,38,.25);border-left:3px solid var(--danger);border-radius:var(--rl);padding:10px 13px;margin-bottom:14px;cursor:pointer' data-nav='items' data-filter='overdue' title='Review overdue items'>"
+      + "<div style='width:26px;height:26px;border-radius:50%;background:var(--danger);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0'>&#9888;</div>"
+      + "<div class='ob-text' style='font-size:12px;color:var(--danger);font-weight:600;flex:1'>Loading…</div>"
+      + "<span style='font-size:11px;color:var(--danger);font-weight:700;white-space:nowrap'>Review &#8594;</span>"
+      + "</div>"
       + "<div class='stats-grid' style='margin-bottom:14px'>"
       + "<div class='stat-card " + (isOC?"oc-stat":isLA?"la-stat":"ok-stat") + "' style='border-top:2.5px solid " + accent + ";cursor:pointer' data-nav='reports' title='View team submission status'><div class='stat-num'>" + sc + "/" + tc + "</div><div class='stat-lbl'>Submitted</div></div>"
       + "<div class='stat-card warn-stat' style='cursor:pointer' data-nav='reports' title='View team submission status'><div class='stat-num'>" + pc + "</div><div class='stat-lbl'>Pending</div></div>"
-      + "<div class='stat-card' style='border-top:2.5px solid #C84B00;cursor:pointer' data-nav='items' title='View carry-over items'><div class='stat-num' id='ds-carryover'>&#8212;</div><div class='stat-lbl'>Carry-overs</div></div>"
+      + "<div class='stat-card' style='border-top:2.5px solid #C84B00;cursor:pointer' data-nav='items' data-filter='not_completed' title='View carry-over items'><div class='stat-num' id='ds-carryover'>&#8212;</div><div class='stat-lbl'>Carry-overs</div></div>"
       + "<div class='stat-card' style='border-top:2.5px solid #185FA5'><div class='stat-num'>W" + getWeekNum(CW) + "</div><div class='stat-lbl'>Work week</div></div>"
       + "</div>"
       + "<div style='margin-bottom:12px'><div style='display:flex;justify-content:space-between;margin-bottom:4px'><span style='font-size:11px;color:var(--text3)'>Team progress — " + bl + "</span><span style='font-size:11px;font-weight:700;color:var(--text)'>" + pct + "%</span></div>"
       + "<div class='progress-bar' style='height:6px'><div class='progress-fill " + (isOC?"oc":isLA?"la":"green") + "' style='width:" + pct + "%'></div></div></div>";
 
     ca.querySelectorAll("[data-nav]").forEach(function(el){
-      el.addEventListener("click", function(){navigateTo(this.getAttribute("data-nav"));});
+      el.addEventListener("click", function(){
+        var filt = this.getAttribute("data-filter");
+        if (filt) window._pendingItemsFilter = filt;
+        navigateTo(this.getAttribute("data-nav"));
+      });
     });
     loadCarryoverForDash(branch);
+    loadOverdueBannerForDash(branch);
     updateInboxBadgeCount();
   }
 }
@@ -1343,6 +1357,27 @@ function getFirstCheckinRole() {
 function getWeekNum(d) {
   const start = new Date(d.getFullYear(),0,1);
   return Math.ceil((((d-start)/86400000)+start.getDay()+1)/7);
+}
+
+async function loadOverdueBannerForDash(branch) {
+  const el = document.getElementById('dash-overdue-banner');
+  if (!el) return;
+  const today = new Date().toISOString().split('T')[0];
+  try {
+    const base = branch ? db.collection('weekly_items').where('branch','==',branch) : db.collection('weekly_items');
+    const [pendingSnap, progressSnap] = await Promise.all([
+      base.where('status','==','pending').where('deadline','<',today).get(),
+      base.where('status','==','in_progress').where('deadline','<',today).get()
+    ]);
+    const count = pendingSnap.size + progressSnap.size;
+    if (count > 0) {
+      el.style.display = 'flex';
+      const textEl = el.querySelector('.ob-text');
+      if (textEl) textEl.textContent = count + ' overdue item' + (count!==1?'s':'') + ' across your team — click to review and follow up.';
+    } else {
+      el.style.display = 'none';
+    }
+  } catch(e) { el.style.display = 'none'; }
 }
 
 async function loadCarryoverForDash(branch) {
@@ -2305,6 +2340,8 @@ function swlHealthColor(rate) {
   return 'var(--danger)';
 }
 
+const SWL_SCORE_DECAY_DAYS = 90; // a quarter — items past their deadline this long no longer affect the current score
+
 function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, daysSinceFirstItem) {
   // Returns a detailed score object for one user
   const today = new Date().toISOString().split('T')[0];
@@ -2313,9 +2350,13 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
   // Items due today (deadline === today) are NOT yet overdue — exclude them same as future.
   // in_progress is treated identically to pending for this purpose: a future-dated
   // in_progress item shouldn't be penalized before its deadline arrives.
+  // Items whose deadline is more than a quarter in the past have aged out of the
+  // scoring window entirely — they still show up in reports, they just stop
+  // dragging the current score down forever.
   const scoredItems = userItems.filter(i => {
     if (i.status === 'canceled_by_client') return false;
     if ((i.status === 'pending' || i.status === 'in_progress') && i.deadline && i.deadline >= today) return false; // future or due today
+    if (i.deadline && swlDaysBetween(i.deadline, today) > SWL_SCORE_DECAY_DAYS) return false; // aged out
     return true;
   });
 
@@ -3573,7 +3614,11 @@ async function renderItems() {
 
   // For employees: load their own items from the last 4 weeks
   // Shows recently completed items AND lets them resolve overdue ones
-  let priorSnap = null, priorSnapName = null;
+  // For managers: load the whole branch's items from the last quarter (matches
+  // the score-decay window) so overdue backlog and how it was resolved is visible
+  // team-wide, not just for the current week.
+  let priorSnap = null, priorSnapName = null, priorSnapBranch = null;
+  const quarterAgo = new Date(Date.now() - 90*86400000).toISOString().split('T')[0];
   if (!isMgr) {
     const fourWeeksAgo = new Date(Date.now() - 28*86400000).toISOString().split('T')[0];
     try {
@@ -3588,6 +3633,13 @@ async function renderItems() {
         .where('weekStart','>=',fourWeeksAgo)
         .get();
     } catch(e) { priorSnapName = null; }
+  } else {
+    try {
+      priorSnapBranch = await (branch
+        ? db.collection('weekly_items').where('branch','==',branch).where('weekStart','>=',quarterAgo)
+        : db.collection('weekly_items').where('weekStart','>=',quarterAgo)
+      ).get();
+    } catch(e) { priorSnapBranch = null; }
   }
 
   const snap = await q.get();
@@ -3618,6 +3670,27 @@ async function renderItems() {
     };
     if (priorSnap) addPrior(priorSnap.docs);
     if (priorSnapName) addPrior(priorSnapName.docs);
+  } else if (priorSnapBranch) {
+    // Merge branch-wide backlog: items still open past their deadline, or items
+    // that WERE overdue and have since been resolved late / not completed / canceled.
+    // completed_on_time items from prior weeks are left out — nothing to follow up on.
+    const currentIds = new Set(items.map(i=>i.id));
+    priorSnapBranch.docs.forEach(d => {
+      const it = {id:d.id,...d.data()};
+      if (currentIds.has(it.id) || it.weekStart === wk) return;
+      const isPastDeadline = it.deadline && it.deadline < today;
+      const isOpenOverdue = (it.status === 'pending' || it.status === 'in_progress') && isPastDeadline;
+      const wasResolvedNotOnTime = ['completed_late','not_completed','canceled_by_client'].includes(it.status);
+      if (isOpenOverdue || wasResolvedNotOnTime) {
+        items.push({
+          ...it,
+          _prior_week: true,
+          _overdue_prior: isOpenOverdue,
+          _resolved_late: wasResolvedNotOnTime
+        });
+        currentIds.add(it.id);
+      }
+    });
   }
   const priorities = ['critical','high','medium','low'];
 
@@ -3627,7 +3700,7 @@ async function renderItems() {
         <div class="card-header">
           <div class="card-title">Weekly Items — ${fmtWeek(CW)}</div>
           <div style="display:flex;gap:6px">
-            ${['all','pending','not_completed'].map(f=>`<button class="btn sm" onclick="filterItems('${f}')">${f==='all'?'All':f==='pending'?'Pending':'Carry-over'}</button>`).join('')}
+            ${['all','overdue','pending','not_completed'].map(f=>`<button class="btn sm" onclick="filterItems('${f}')">${f==='all'?'All':f==='overdue'?'⚠ Overdue':f==='pending'?'Pending':'Carry-over'}</button>`).join('')}
           </div>
         </div>
         <div id="items-list">
@@ -3654,6 +3727,10 @@ async function renderItems() {
       <button class="btn primary" onclick="addItem()">Add Item</button>
     </div>`;
   populateOwnerDropdown();
+  if (window._pendingItemsFilter) {
+    filterItems(window._pendingItemsFilter);
+    window._pendingItemsFilter = null;
+  }
 }
 
 function renderItemCard(it) {
@@ -3682,12 +3759,26 @@ function renderItemCard(it) {
     ? `Due ${fmtDate(it.deadline)}`
     : `Due ${fmtDate(it.deadline)}`;  // locked for employees too, just no edit UI
 
-  return `<div class="item-row" data-status="${it.status||'pending'}">
+  const today = new Date().toISOString().split('T')[0];
+  const isOverdueNow = it._overdue_prior || ((it.status==='pending'||it.status==='in_progress') && it.deadline && it.deadline < today);
+
+  const tag = isOverdueNow
+    ? ' <span style="font-size:10px;background:#7f1d1d;color:#fca5a5;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">OVERDUE</span>'
+    : it._resolved_late
+      ? (it.status==='canceled_by_client'
+          ? ' <span style="font-size:10px;background:rgba(148,163,184,.18);color:#94A3B8;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">CANCELED</span>'
+          : it.status==='not_completed'
+            ? ' <span style="font-size:10px;background:rgba(220,38,38,.15);color:#F87171;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">NOT COMPLETED</span>'
+            : ' <span style="font-size:10px;background:rgba(251,191,36,.15);color:#FBBF24;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE LATE</span>')
+      : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '');
+
+  return `<div class="item-row" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}">
     <span class="priority-dot ${it.priority||'medium'}"></span>
     <div class="item-content">
-      <div class="item-title">${esc(it.title)}${it._overdue_prior ? ' <span style="font-size:10px;background:#7f1d1d;color:#fca5a5;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">OVERDUE</span>' : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '')}</div>
-      <div class="item-meta">${esc(it.ownerName||it.owner)} · ${deadlineDisplay}${it._overdue_prior ? ' — <span style="color:var(--danger)">past deadline</span>' : (it._prior_week ? ' — <span style="color:var(--text3)">prior week</span>' : '')}</div>
+      <div class="item-title">${esc(it.title)}${tag}</div>
+      <div class="item-meta">${esc(it.ownerName||it.owner)} · ${deadlineDisplay}${isOverdueNow ? ' — <span style="color:var(--danger)">past deadline</span>' : (it._prior_week ? ' — <span style="color:var(--text3)">prior week</span>' : '')}</div>
       ${it.fridayReview?.reason?`<div style="font-size:11px;color:var(--text2);margin-top:2px;font-style:italic">Employee note: ${esc(it.fridayReview.reason)}</div>`:''}
+      ${it._resolved_late && it.latestNote?`<div style="font-size:11px;color:var(--text2);margin-top:2px;font-style:italic">${it.status==='canceled_by_client'?'Cancellation reason':'Resolution note'}: ${esc(it.latestNote)}</div>`:''}
     </div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
       ${actionBtns}
@@ -3706,7 +3797,7 @@ function renderItemCard(it) {
 
 function filterItems(f) {
   document.querySelectorAll('#items-list .item-row').forEach(row => {
-    const show = f==='all' || row.dataset.status===f;
+    const show = f==='all' || (f==='overdue' ? row.dataset.overdue==='1' : row.dataset.status===f);
     row.style.display = show ? 'flex' : 'none';
   });
 }
@@ -5875,13 +5966,24 @@ async function sendAppreciation() {
 
 async function updateInboxBadgeCount() {
   try {
-    const [a, b, c] = await Promise.all([
+    const isMgr = ROLES[CD.role]?.isManager || CD.role === 'admin';
+    const today = new Date().toISOString().split('T')[0];
+    const branch = getUserBranch();
+    const base = branch ? db.collection('weekly_items').where('branch','==',branch) : db.collection('weekly_items');
+    const queries = [
       db.collection('appreciations').where('toUserId','==',CU.uid).get(),
       db.collection('weekly_items').where('owner','==',CU.uid).where('seen','==',false).get(),
       db.collection('weekly_items').where('assignedBy','==',CU.uid).where('completionSeen','==',false).get()
-    ]);
+    ];
+    if (isMgr) {
+      queries.push(base.where('status','==','pending').where('deadline','<',today).get());
+      queries.push(base.where('status','==','in_progress').where('deadline','<',today).get());
+    }
+    const results = await Promise.all(queries);
+    const [a, b, c] = results;
     const unreadApp = a.docs.filter(d => !d.data().read).length;
-    const total = unreadApp + b.size + c.size;
+    const overdueCount = isMgr ? results[3].size + results[4].size : 0;
+    const total = unreadApp + b.size + c.size + overdueCount;
     const el = document.getElementById('inbox-badge-count');
     if (!el) return;
     if (total > 0) { el.textContent = total > 99 ? '99+' : String(total); el.style.display = 'inline-flex'; }
@@ -5893,10 +5995,17 @@ async function renderInbox() {
   const ca = document.getElementById('content-area');
   ca.innerHTML = '<div class="empty">Loading your inbox…</div>';
   try {
-    const [appSnap, assignSnap, compSnap] = await Promise.all([
+    const isMgr = ROLES[CD.role]?.isManager || CD.role === 'admin';
+    const today = new Date().toISOString().split('T')[0];
+    const branch = getUserBranch();
+    const overdueBase = branch ? db.collection('weekly_items').where('branch','==',branch) : db.collection('weekly_items');
+
+    const [appSnap, assignSnap, compSnap, overduePendingSnap, overdueProgressSnap] = await Promise.all([
       db.collection('appreciations').where('toUserId','==',CU.uid).get(),
       db.collection('weekly_items').where('owner','==',CU.uid).get(),
-      db.collection('weekly_items').where('assignedBy','==',CU.uid).get()
+      db.collection('weekly_items').where('assignedBy','==',CU.uid).get(),
+      isMgr ? overdueBase.where('status','==','pending').where('deadline','<',today).get() : Promise.resolve(null),
+      isMgr ? overdueBase.where('status','==','in_progress').where('deadline','<',today).get() : Promise.resolve(null)
     ]);
 
     const feed = [];
@@ -5933,6 +6042,22 @@ async function renderInbox() {
         markSeen: () => db.collection('weekly_items').doc(d.id).update({completionSeen: true})
       });
     });
+    if (isMgr && overduePendingSnap && overdueProgressSnap) {
+      // Overdue items are a live backlog signal, not a one-time event — they stay
+      // "unread" every visit (no Firestore write) until the item is actually
+      // resolved and drops out of this query on its own.
+      overduePendingSnap.docs.concat(overdueProgressSnap.docs).forEach(d => {
+        const it = d.data();
+        const daysOverdue = swlDaysBetween(it.deadline, today);
+        feed.push({
+          kind: 'overdue', ts: it.deadline ? Date.parse(it.deadline) : 0, unread: true,
+          icon: '⚠️', color: '#F87171',
+          kicker: 'Overdue · ' + esc(it.ownerName||it.owner||''),
+          msg: '<b>' + esc(it.title) + '</b> — was due ' + fmtDate(it.deadline) + ' (' + daysOverdue + ' day' + (daysOverdue!==1?'s':'') + ' overdue)',
+          markSeen: () => Promise.resolve()
+        });
+      });
+    }
 
     feed.sort((a,b) => b.ts - a.ts);
     window._inboxFeed = feed.slice(0, 150); // defensive cap on a long-tenured account's history
@@ -5955,6 +6080,7 @@ function renderInboxFeed(filter) {
   const filters = [
     {k:'all', l:'All'}, {k:'kudos', l:'Kudos'}, {k:'assigned', l:'Assigned to me'}, {k:'completed', l:'Completed'}
   ];
+  if (feed.some(f => f.kind === 'overdue')) filters.push({k:'overdue', l:'⚠ Overdue'});
 
   ca.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
     + '<div style="font-size:15px;font-weight:700">📥 Inbox</div>'
