@@ -6125,59 +6125,141 @@ async function saveItemNote(itemId) {
   } catch(e) { toast('Error: '+e.message,'err'); }
 }
 
+// Guided Y/N completion flow — replaces a raw status dropdown so an employee
+// can't just self-select "Completed On Time." On-time vs. late is computed
+// from the actual date entered vs. the item's real deadline, so an honestly
+// reported date is what decides the outcome, not a manual pick.
+let _euItemDeadline = null;
+
 function openEmployeeUpdateModal(itemId, itemTitle, currentDeadline, currentStatus) {
   const ex = document.getElementById('emp-update-modal'); if (ex) ex.remove();
+  _euItemDeadline = currentDeadline || null;
+  const today = new Date().toISOString().split('T')[0];
   const modal = document.createElement('div');
   modal.id = 'emp-update-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
-  const opts = [{v:'pending',l:'Open'},{v:'in_progress',l:'In Progress'},{v:'completed_on_time',l:'✓ Completed On Time'},{v:'completed_late',l:'⚠ Completed Late'},{v:'not_completed',l:'✗ Not Completed'},{v:'canceled_by_client',l:'🚫 Canceled by Client'}];
   modal.innerHTML = '<div style="background:#1E1E1E;border:1px solid #333;border-radius:12px;padding:24px;width:480px;max-height:90vh;overflow-y:auto">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><div style="font-size:14px;font-weight:700;color:#F0F0F0">Update My Item</div><button id="eu-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">&#10005;</button></div>'
-    +'<div style="font-size:12px;padding:8px 11px;background:#2A2A2A;border-radius:6px;margin-bottom:14px;color:#D0D0D0;font-weight:500;border-left:3px solid #60A5FA">'+itemTitle+'</div>'
-    +'<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Status</label>'
-    +'<select id="eu-status" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:13px">'+opts.map(o=>'<option value="'+o.v+'"'+(currentStatus===o.v?' selected':'')+'>'+o.l+'</option>').join('')+'</select></div>'
-    +'<div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Progress note / update</label>'
-    +'<textarea id="eu-note" rows="3" placeholder="What did you accomplish? Any blockers? If canceled — what did client say?" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:12px;font-family:inherit;resize:vertical"></textarea></div>'
-    +'<div style="background:rgba(96,165,250,.07);border:1px solid rgba(96,165,250,.15);border-radius:6px;padding:8px 11px;margin-bottom:14px;font-size:11px;color:#60A5FA;line-height:1.5">&#128712; To change your deadline, use the <strong>Extend Deadline</strong> button — manager must approve.</div>'
-    +'<div style="display:flex;gap:8px"><button id="eu-save" style="flex:1;padding:10px;background:#60A5FA;color:#000;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Save Update</button><button id="eu-cancel" style="padding:10px 16px;background:transparent;color:#888;border:1px solid #383838;border-radius:6px;font-size:12px;cursor:pointer">Cancel</button></div></div>';
+    +'<div style="font-size:12px;padding:8px 11px;background:#2A2A2A;border-radius:6px;margin-bottom:16px;color:#D0D0D0;font-weight:500;border-left:3px solid #60A5FA">'+itemTitle+'</div>'
+
+    // Step 1 — the yes/no question
+    +'<div id="eu-step1">'
+    +'<label style="font-size:12.5px;font-weight:600;color:#CCC;display:block;margin-bottom:10px">Was this item completed?</label>'
+    +'<div style="display:flex;gap:8px;margin-bottom:14px">'
+    +'<button onclick="euChooseCompleted(true)" style="flex:1;padding:12px;background:rgba(125,200,85,.14);color:#7DC855;border:1px solid rgba(125,200,85,.35);border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">&#10003; Yes, it&rsquo;s done</button>'
+    +'<button onclick="euChooseCompleted(false)" style="flex:1;padding:12px;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.3);border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">Not yet</button>'
+    +'</div>'
+    +'</div>'
+
+    // Step 2a — completed: when + reason, status is computed, not chosen
+    +'<div id="eu-step-done" style="display:none">'
+    +'<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">When did you finish it?</label>'
+    +'<input type="date" id="eu-completed-date" max="'+today+'" value="'+today+'" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:13px">'
+    +'<div id="eu-late-hint" style="font-size:10.5px;color:#FBBF24;margin-top:5px;display:none">This is after the deadline — it&rsquo;ll be logged as completed late, with your reason attached.</div></div>'
+    +'<div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Reason / notes (optional)</label>'
+    +'<textarea id="eu-completed-note" rows="3" placeholder="Anything worth noting — e.g. why it ran late" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:12px;font-family:inherit;resize:vertical"></textarea></div>'
+    +'<div style="display:flex;gap:8px"><button id="eu-save-done" style="flex:1;padding:10px;background:#60A5FA;color:#000;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Save</button><button onclick="euBackToStep1()" style="padding:10px 16px;background:transparent;color:#888;border:1px solid #383838;border-radius:6px;font-size:12px;cursor:pointer">Back</button></div>'
+    +'</div>'
+
+    // Step 2b — not completed: what's actually going on + a required reason
+    +'<div id="eu-step-notdone" style="display:none">'
+    +'<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">What&rsquo;s the status?</label>'
+    +'<select id="eu-notdone-status" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:13px">'
+    +'<option value="in_progress">Still working on it</option>'
+    +'<option value="not_completed">Won&rsquo;t be completing this</option>'
+    +'<option value="canceled_by_client">Canceled by client</option>'
+    +'</select></div>'
+    +'<div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Reason<span style="color:#F87171">*</span></label>'
+    +'<textarea id="eu-notdone-reason" rows="3" placeholder="What is blocking you? If canceled — what did the client say?" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:12px;font-family:inherit;resize:vertical"></textarea></div>'
+    +'<div style="display:flex;gap:8px"><button id="eu-save-notdone" style="flex:1;padding:10px;background:#60A5FA;color:#000;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Save</button><button onclick="euBackToStep1()" style="padding:10px 16px;background:transparent;color:#888;border:1px solid #383838;border-radius:6px;font-size:12px;cursor:pointer">Back</button></div>'
+    +'</div>'
+
+    +'<div style="background:rgba(96,165,250,.07);border:1px solid rgba(96,165,250,.15);border-radius:6px;padding:8px 11px;margin-top:14px;font-size:11px;color:#60A5FA;line-height:1.5">&#128712; To change your deadline instead, use the <strong>Extend Deadline</strong> button — manager must approve.</div>'
+    +'</div>';
   document.body.appendChild(modal);
   document.getElementById('eu-close').addEventListener('click',function(){modal.remove();});
-  document.getElementById('eu-cancel').addEventListener('click',function(){modal.remove();});
-  document.getElementById('eu-save').addEventListener('click',function(){saveEmployeeUpdate(itemId);});
+  document.getElementById('eu-save-done').addEventListener('click',function(){saveEmployeeUpdateCompleted(itemId);});
+  document.getElementById('eu-save-notdone').addEventListener('click',function(){saveEmployeeUpdateNotDone(itemId);});
+  const dateInput = document.getElementById('eu-completed-date');
+  dateInput.addEventListener('input', function(){
+    const hint = document.getElementById('eu-late-hint');
+    if (hint) hint.style.display = (_euItemDeadline && dateInput.value > _euItemDeadline) ? 'block' : 'none';
+  });
 }
 
-async function saveEmployeeUpdate(itemId) {
-  const status = document.getElementById('eu-status')?.value;
-  const note   = document.getElementById('eu-note')?.value?.trim();
-  const btn    = document.getElementById('eu-save');
-  if (btn) { btn.textContent='Saving…'; btn.disabled=true; }
+function euChooseCompleted(isDone) {
+  document.getElementById('eu-step1').style.display = 'none';
+  document.getElementById('eu-step-done').style.display = isDone ? 'block' : 'none';
+  document.getElementById('eu-step-notdone').style.display = isDone ? 'none' : 'block';
+  if (isDone) document.getElementById('eu-completed-date')?.dispatchEvent(new Event('input'));
+}
+
+function euBackToStep1() {
+  document.getElementById('eu-step-done').style.display = 'none';
+  document.getElementById('eu-step-notdone').style.display = 'none';
+  document.getElementById('eu-step1').style.display = 'block';
+}
+
+async function euSaveEmployeeStatus(status, note, resolvedDate) {
   const isResolved = status === 'completed_on_time' || status === 'completed_late' || status === 'not_completed';
   const isCompleted = status === 'completed_on_time' || status === 'completed_late';
+  return {
+    status,
+    latestNote: note || '',
+    latestNoteBy: CD.name,
+    latestNoteAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    lastStatusBy: CD.name,
+    lastStatusRole: CD.role,
+    lastStatusAt: new Date().toISOString(),
+    resolvedAt: isResolved ? resolvedDate : null,
+    changeLog: firebase.firestore.FieldValue.arrayUnion({
+      by: CD.name, role: CD.role, to: status,
+      note: note || '', ts: new Date().toLocaleString()
+    }),
+    ...(isCompleted ? {completionSeen: false} : {})
+  };
+}
+
+async function saveEmployeeUpdateCompleted(itemId) {
+  const dateVal = document.getElementById('eu-completed-date')?.value;
+  const note    = document.getElementById('eu-completed-note')?.value?.trim();
+  const btn     = document.getElementById('eu-save-done');
+  if (!dateVal) { toast('Please enter the date you finished it', 'warn'); return; }
+  const status = (_euItemDeadline && dateVal > _euItemDeadline) ? 'completed_late' : 'completed_on_time';
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
   try {
-    await db.collection('weekly_items').doc(itemId).update({
-      status,
-      latestNote: note,
-      latestNoteBy: CD.name,
-      latestNoteAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      lastStatusBy: CD.name,
-      lastStatusRole: CD.role,
-      lastStatusAt: new Date().toISOString(),
-      resolvedAt: isResolved ? new Date().toISOString() : null,
-      changeLog: firebase.firestore.FieldValue.arrayUnion({
-        by: CD.name, role: CD.role, to: status,
-        note: note || '', ts: new Date().toLocaleString()
-      }),
-      ...(isCompleted ? {completionSeen: false} : {})
-    });
+    const update = await euSaveEmployeeStatus(status, note, dateVal);
+    await db.collection('weekly_items').doc(itemId).update(update);
     const modal = document.getElementById('emp-update-modal');
     if (modal) modal.remove();
-    toast('✓ Item updated' + (isResolved ? ' — marked ' + status.replace(/_/g,' ') : ''));
+    toast('✓ Marked ' + status.replace(/_/g,' '));
     if (document.getElementById('inline-weekly-items')) loadInlineWeeklyItems();
     if (document.getElementById('items-list')) renderItems();
   } catch(e) {
     toast('Error saving: ' + e.message, 'err');
-    if (btn) { btn.textContent='Save Update'; btn.disabled=false; }
+    if (btn) { btn.textContent = 'Save'; btn.disabled = false; }
+  }
+}
+
+async function saveEmployeeUpdateNotDone(itemId) {
+  const status = document.getElementById('eu-notdone-status')?.value;
+  const reason = document.getElementById('eu-notdone-reason')?.value?.trim();
+  const btn    = document.getElementById('eu-save-notdone');
+  if (status !== 'in_progress' && !reason) { toast('Please add a reason', 'warn'); return; }
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+  try {
+    const resolvedDate = new Date().toISOString().split('T')[0];
+    const update = await euSaveEmployeeStatus(status, reason, resolvedDate);
+    await db.collection('weekly_items').doc(itemId).update(update);
+    const modal = document.getElementById('emp-update-modal');
+    if (modal) modal.remove();
+    toast('✓ Item updated — marked ' + status.replace(/_/g,' '));
+    if (document.getElementById('inline-weekly-items')) loadInlineWeeklyItems();
+    if (document.getElementById('items-list')) renderItems();
+  } catch(e) {
+    toast('Error saving: ' + e.message, 'err');
+    if (btn) { btn.textContent = 'Save'; btn.disabled = false; }
   }
 }
 
@@ -6399,7 +6481,7 @@ async function renderInbox() {
         const daysOverdue = swlDaysBetween(it.deadline, today);
         feed.push({
           kind: 'overdue', ts: it.deadline ? Date.parse(it.deadline) : 0, unread: true,
-          icon: '⚠️', color: '#F87171',
+          icon: '⚠️', color: '#F87171', itemId: d.id,
           kicker: 'Overdue · ' + esc(it.ownerName||it.owner||''),
           msg: '<b>' + esc(it.title) + '</b> — was due ' + fmtDate(it.deadline) + ' (' + daysOverdue + ' day' + (daysOverdue!==1?'s':'') + ' overdue)',
           markSeen: () => Promise.resolve()
@@ -6438,12 +6520,13 @@ function renderInboxFeed(filter) {
     + filters.map(f => '<button class="btn sm' + (filter===f.k?' primary':'') + '" style="border-radius:20px" onclick="renderInboxFeed(\'' + f.k + '\')">' + f.l + '</button>').join('')
     + '</div>'
     + (shown.length ? shown.map(f =>
-        '<div style="display:flex;gap:12px;padding:14px;border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px;'
+        '<div ' + (f.itemId ? 'onclick="swlGoToScoredItem(\''+f.itemId+'\',\'overdue\')" title="Open in Weekly Items"' : '') + ' style="display:flex;gap:12px;padding:14px;border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px;' + (f.itemId ? 'cursor:pointer;' : '')
         + (f.unread ? 'border-left:3px solid ' + f.color + ';background:var(--surface2)' : 'background:var(--surface)') + '">'
         + '<span style="font-size:20px;flex-shrink:0">' + f.icon + '</span>'
         + '<div style="flex:1;min-width:0"><div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:' + f.color + ';margin-bottom:2px">' + f.kicker + '</div>'
         + '<div style="font-size:13px;color:var(--text)">' + f.msg + '</div></div>'
         + '<span style="font-size:10.5px;color:var(--text3);white-space:nowrap">' + (f.ts ? new Date(f.ts).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '') + '</span>'
+        + (f.itemId ? '<span style="font-size:11px;color:var(--text3);align-self:center">&#8250;</span>' : '')
         + '</div>'
       ).join('') : '<div class="empty">Nothing here yet.</div>');
 
