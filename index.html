@@ -3401,8 +3401,8 @@ async function renderAccountability() {
       + '<td style="padding:8px 10px">'
         + '<div style="display:flex;align-items:center;gap:5px">'
         + '<div style="flex:1;height:5px;background:var(--border);border-radius:3px;overflow:hidden">'
-        + '<div style="height:100%;width:'+p.onTimeRate+'%;background:'+gc(p.grade)+';border-radius:3px"></div></div>'
-        + '<span style="font-size:10px;font-weight:600;min-width:28px;color:var(--text2)">'+p.onTimeRate+'%</span>'
+        + '<div style="height:100%;width:'+p.reliabilityRate+'%;background:'+gc(p.grade)+';border-radius:3px"></div></div>'
+        + '<span style="font-size:10px;font-weight:600;min-width:28px;color:var(--text2)">'+p.reliabilityRate+'%</span>'
         + '</div></td>'
       + '<td style="padding:8px 10px;color:'+tc(p.trend)+'">'+ti(p.trend)+'<span style="font-size:10px;margin-left:2px">'+(p.insufficientHistory?'\u2014':p.trend)+'</span></td>'
       + '<td style="padding:8px 10px"><span style="font-size:10px;font-weight:700;color:'+rc(p.risk)+'">'+p.riskLabel+'</span></td>'
@@ -3500,7 +3500,7 @@ async function renderAccountability() {
     + '</div>'
     + '<div style="overflow-x:auto">'
     + '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:900px"><thead><tr>'
-    + ['Employee','Branch','Score','Grade','Acct Health','On Time','Late','Missed','Overdue','OT Rate','Trend','Risk','AI']
+    + ['Employee','Branch','Score','Grade','Acct Health','On Time','Late','Missed','Overdue','Reliability','Trend','Risk','AI']
         .map(h=>'<th style="text-align:left;padding:6px 10px;border-bottom:2px solid var(--border);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);white-space:nowrap">'+h+'</th>').join('')
     + '</tr></thead><tbody>'
     + active.map(buildRow).join('')
@@ -3521,7 +3521,7 @@ async function renderAccountability() {
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">'
 
     + indicatorCard('\ud83c\udfc6','Top Performers','var(--success)', topPerf,
-        p => indicatorRow(p, '<span style="font-size:10px;color:var(--success);margin-right:6px">\u2191 '+p.onTimeRate+'% OT</span>'))
+        p => indicatorRow(p, '<span style="font-size:10px;color:var(--success);margin-right:6px">\u2191 '+p.reliabilityRate+'% reliable</span>'))
 
     + indicatorCard('\ud83d\udcc8','Most Improved','#6EE7B7', improved,
         p => indicatorRow(p, '<span style="font-size:10px;color:var(--success);margin-right:6px">+'+p.trendDelta+'pts trend</span>'))
