@@ -1173,6 +1173,7 @@ async function renderDashboard() {
       + "</div>"
       + (streakMgr>0 ? "<div style='display:flex;align-items:center;gap:6px;background:var(--success-l);color:var(--success);border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;white-space:nowrap'>&#128293; " + streakMgr + "-week streak</div>" : "")
       + "</div>"
+      + (CD.role==="admin" ? "<div id='exec-overview'></div>" : "")
       + "<div class='badges-row' style='margin-bottom:10px'>" + renderBadgeChips(ub) + "</div>"
       + "<div style='background:var(--surface2);border:1px solid var(--border);border-left:3px solid " + accent + ";border-radius:var(--rl);padding:10px 13px;display:flex;align-items:center;gap:9px;margin-bottom:14px'>"
       + "<div style='width:26px;height:26px;border-radius:50%;background:" + primBtn + ";display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0'>&#128101;</div>"
@@ -1201,9 +1202,330 @@ async function renderDashboard() {
     loadCarryoverForDash(branch);
     loadOverdueBannerForDash(branch);
     updateInboxBadgeCount();
+    if (CD.role === "admin") renderExecOverviewBlock("exec-overview");
   }
 }
 
+// ══════════════════════════════════════════════════
+// EXECUTIVE OVERVIEW — scene widget + branch comparison + score trend +
+// leaderboard. Admin and exec_viewer only. Shared between renderDashboard()'s
+// admin branch and renderExecDashboard(). Weather is intentionally NOT shown
+// as a number — there's no weather API wired up (same constraint as the AI
+// Analyzer: no backend to call one from), so faking a temperature would just
+// be wrong information. The scene itself (sky color, clouds) is decorative
+// and time-of-day driven, not a claim about real conditions.
+// ══════════════════════════════════════════════════
+
+let swl_scene_gen = 0;
+
+function swlSceneSkyFor(hr) {
+  if (hr < 6)  return ['#16223F','#0A0F1F'];
+  if (hr < 11) return ['#FFD9AE','#FFF3E4'];
+  if (hr < 17) return ['#BFE0FF','#EAF6FF'];
+  if (hr < 20) return ['#F2A76B','#E7C6D9'];
+  return ['#16223F','#0A0F1F'];
+}
+
+function swlSceneWidgetHtml() {
+  return '<div style="position:relative;border-radius:var(--rl);overflow:hidden;height:190px;margin-bottom:14px">'
+    + '<canvas id="exec-scene-canvas" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>'
+    + '<div style="position:absolute;inset:0;background:linear-gradient(180deg, rgba(6,14,10,.34) 0%, rgba(6,14,10,0) 26%, rgba(6,14,10,0) 55%, rgba(6,14,10,.5) 100%);pointer-events:none"></div>'
+    + '<div style="position:absolute;top:14px;left:16px;right:16px;display:flex;justify-content:space-between;align-items:center;color:#fff;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;text-shadow:0 1px 3px rgba(0,0,0,.45)">'
+    + '<span>All Branches</span><span id="exec-scene-daypart">—</span>'
+    + '</div>'
+    + '<div style="position:absolute;left:16px;right:16px;bottom:14px;background:rgba(8,20,14,.56);backdrop-filter:blur(10px) saturate(140%);-webkit-backdrop-filter:blur(10px) saturate(140%);border:1px solid rgba(255,255,255,.16);border-radius:var(--r);padding:11px 16px;display:flex;align-items:center;justify-content:space-between;color:#fff">'
+    + '<div><div style="font-family:var(--disp);font-size:24px;font-weight:700;font-variant-numeric:tabular-nums" id="exec-scene-time">—</div><div style="font-size:10.5px;opacity:.9;margin-top:2px" id="exec-scene-date">—</div></div>'
+    + '<div style="text-align:right;font-size:11px;opacity:.8">Weather not yet connected</div>'
+    + '</div>'
+    + '</div>';
+}
+
+function swlInitSceneWidget() {
+  const myGen = ++swl_scene_gen;
+  const canvas = document.getElementById('exec-scene-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let w, h, dpr;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    w = canvas.clientWidth; h = canvas.clientHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const clouds = Array.from({length:4}, (_,i) => ({
+    x: Math.random()*1.4 - 0.2, y: 0.10 + i*0.08 + Math.random()*0.05,
+    scale: 0.7 + Math.random()*0.6, speed: 0.0025 + Math.random()*0.003
+  }));
+  const leaves = Array.from({length:14}, () => ({
+    x: Math.random(), y: Math.random(),
+    r: 3 + Math.random()*3, sway: Math.random()*Math.PI*2,
+    fall: 0.04 + Math.random()*0.05,
+    hue: Math.random() > 0.5 ? '#E8A33C' : '#8FBF6E'
+  }));
+
+  function drawCloud(cx, cy, scale) {
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(scale, scale);
+    ctx.fillStyle = 'rgba(255,255,255,.88)';
+    ctx.beginPath();
+    ctx.ellipse(0,0,26,14,0,0,Math.PI*2);
+    ctx.ellipse(20,4,18,11,0,0,Math.PI*2);
+    ctx.ellipse(-20,4,18,11,0,0,Math.PI*2);
+    ctx.ellipse(0,-8,20,12,0,0,Math.PI*2);
+    ctx.fill(); ctx.restore();
+  }
+
+  function frame() {
+    if (myGen !== swl_scene_gen) return; // a newer dashboard render superseded this loop
+    ctx.clearRect(0,0,w,h);
+    const hr = new Date().getHours();
+    const [top, bot] = swlSceneSkyFor(hr);
+    const g = ctx.createLinearGradient(0,0,0,h);
+    g.addColorStop(0, top); g.addColorStop(1, bot);
+    ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
+
+    const sunX = w*0.78, sunY = h*0.26;
+    const isNight = hr < 6 || hr >= 20;
+    const glow = ctx.createRadialGradient(sunX,sunY,2,sunX,sunY,70);
+    glow.addColorStop(0, isNight ? 'rgba(230,235,255,.9)' : 'rgba(255,236,180,.95)');
+    glow.addColorStop(1, 'rgba(255,236,180,0)');
+    ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(sunX,sunY,70,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = isNight ? '#F4F6FF' : '#FFE9A8';
+    ctx.beginPath(); ctx.arc(sunX,sunY,15,0,Math.PI*2); ctx.fill();
+
+    clouds.forEach(c => {
+      if (!reduceMotion) c.x += c.speed * 0.5;
+      if (c.x > 1.3) c.x = -0.3;
+      drawCloud(c.x*w, c.y*h, c.scale);
+    });
+
+    ctx.fillStyle = 'rgba(14,76,45,.22)';
+    ctx.beginPath();
+    ctx.moveTo(0,h*0.84);
+    ctx.quadraticCurveTo(w*0.25,h*0.74, w*0.5,h*0.82);
+    ctx.quadraticCurveTo(w*0.75,h*0.9, w,h*0.78);
+    ctx.lineTo(w,h); ctx.lineTo(0,h);
+    ctx.closePath(); ctx.fill();
+
+    leaves.forEach(l => {
+      if (!reduceMotion) {
+        l.y += l.fall/h*1.6; l.sway += 0.02;
+        if (l.y > 1.05) { l.y = -0.05; l.x = Math.random(); }
+      }
+      const px = (l.x + Math.sin(l.sway)*0.02) * w, py = l.y * h;
+      ctx.fillStyle = l.hue;
+      ctx.beginPath();
+      ctx.ellipse(px, py, l.r, l.r*0.6, l.sway, 0, Math.PI*2);
+      ctx.fill();
+    });
+
+    if (!reduceMotion) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  function tick() {
+    if (myGen !== swl_scene_gen) return;
+    const now = new Date();
+    let hh = now.getHours(), mm = now.getMinutes();
+    const ap = hh >= 12 ? 'PM' : 'AM';
+    hh = hh % 12; if (hh === 0) hh = 12;
+    const timeEl = document.getElementById('exec-scene-time');
+    if (timeEl) timeEl.textContent = hh + ':' + String(mm).padStart(2,'0') + ' ' + ap;
+    const dateEl = document.getElementById('exec-scene-date');
+    if (dateEl) dateEl.textContent = now.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'});
+    const dp = now.getHours();
+    const label = dp<6?'Night':dp<11?'Morning':dp<17?'Afternoon':dp<20?'Evening':'Night';
+    const dpEl = document.getElementById('exec-scene-daypart');
+    if (dpEl) dpEl.textContent = label;
+    setTimeout(tick, 15000);
+  }
+  tick();
+}
+
+function swlBranchColHtml(name, key, score, submitted, total, rate, carry) {
+  const accent = key === 'oc' ? 'var(--oc)' : 'var(--la)';
+  const bg = key === 'oc' ? 'var(--oc-l)' : 'var(--la-l)';
+  return '<div style="border-radius:var(--r);padding:12px 14px;background:' + bg + '">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+    + '<span style="font-family:var(--disp);font-weight:700;font-size:13px;color:' + accent + '">' + name + '</span>'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text2)">' + (score===null?'No score yet':'Score '+score) + '</span>'
+    + '</div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:baseline;font-size:11px;color:var(--text2);margin-bottom:4px"><span>Submitted</span><b style="font-family:var(--disp);font-size:15px;color:var(--text)">' + submitted + '/' + total + '</b></div>'
+    + '<div style="height:6px;border-radius:3px;background:rgba(0,0,0,.08);overflow:hidden;margin-bottom:8px"><div style="height:100%;border-radius:3px;background:' + accent + ';width:' + rate + '%"></div></div>'
+    + '<div style="font-size:10.5px;color:var(--text2)">' + carry + ' carry-over item' + (carry!==1?'s':'') + '</div>'
+    + '</div>';
+}
+
+function buildBranchCompareHtml(d) {
+  const ocRate = d.ocTotal ? Math.round(d.ocSubmitted/d.ocTotal*100) : 0;
+  const laRate = d.laTotal ? Math.round(d.laSubmitted/d.laTotal*100) : 0;
+
+  let insight;
+  if (d.ocScore === null && d.laScore === null) {
+    insight = 'Not enough data yet to compare branches.';
+  } else {
+    const ahead = ocRate === laRate ? null : (ocRate > laRate ? 'OC' : 'LA');
+    const rateDelta = Math.abs(ocRate - laRate);
+    const carryDelta = d.ocCarry - d.laCarry; // positive = OC has more carry-overs
+    if (!ahead) {
+      insight = 'Orange County and Los Angeles are neck-and-neck on submissions this week.';
+    } else {
+      const aheadFull = ahead === 'OC' ? 'Orange County' : 'Los Angeles';
+      const behindFull = ahead === 'OC' ? 'Los Angeles' : 'Orange County';
+      const fewerCarry = (ahead === 'OC' ? carryDelta < 0 : carryDelta > 0);
+      insight = '<b>' + aheadFull + ' is ahead this week</b> — ' + rateDelta + '% higher submission rate' + (fewerCarry ? ' and fewer carry-over items' : '') + ' than ' + behindFull + '.';
+    }
+  }
+
+  return '<div style="border:1px solid var(--border);border-radius:var(--rl);padding:16px;background:var(--surface);margin-bottom:14px">'
+    + '<div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text3);margin-bottom:12px">Branch Comparison — This Week</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">'
+    + swlBranchColHtml('Orange County', 'oc', d.ocScore, d.ocSubmitted, d.ocTotal, ocRate, d.ocCarry)
+    + swlBranchColHtml('Los Angeles', 'la', d.laScore, d.laSubmitted, d.laTotal, laRate, d.laCarry)
+    + '</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--text2);line-height:1.5">' + insight + '</div>'
+    + '</div>';
+}
+
+function buildScoreTrendHtml(points) {
+  const header = (rangeLabel, rightHtml) =>
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+    + '<div><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text3)">Company Score Trend</div>'
+    + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + rangeLabel + '</div></div>'
+    + '<div style="text-align:right">' + rightHtml + '</div>'
+    + '</div>';
+  const wrap = (inner) => '<div style="border:1px solid var(--border);border-radius:var(--rl);padding:16px;background:var(--surface);margin-bottom:14px">' + inner + '</div>';
+
+  if (points.length === 0) {
+    return wrap(header('No history yet', '')
+      + '<div style="font-size:11.5px;color:var(--text3);padding:8px 0 2px">Trend history starts collecting from this week — check back next week to see it build.</div>');
+  }
+  const current = points[points.length-1].companyScore;
+  if (points.length === 1) {
+    return wrap(header('Week of ' + esc(points[0].weekStart),
+        '<div style="font-family:var(--disp);font-size:22px;font-weight:700;color:var(--forest2,var(--swl-green))">' + current + '</div>')
+      + '<div style="font-size:11.5px;color:var(--text3);padding:8px 0 2px">Only one week recorded so far — the trend line fills in as more weeks are captured.</div>');
+  }
+
+  const first = points[0].companyScore;
+  const delta = current - first;
+  const W = 400, H = 80, padTop = 8, padBottom = 16;
+  const vals = points.map(p=>p.companyScore);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = Math.max(1, max-min);
+  const stepX = W/(points.length-1);
+  const coords = points.map((p,i) => ({
+    x: i*stepX,
+    y: padTop + (1-(p.companyScore-min)/span) * (H-padTop-padBottom),
+    wk: p.weekStart, v: p.companyScore
+  }));
+  const linePath = coords.map((c,i)=> (i===0?'M':'L') + c.x.toFixed(1) + ',' + c.y.toFixed(1)).join(' ');
+  const areaPath = linePath + ' L' + coords[coords.length-1].x.toFixed(1) + ',' + H + ' L0,' + H + ' Z';
+  const dots = coords.map((c,i) => i===coords.length-1
+    ? '<circle cx="'+c.x.toFixed(1)+'" cy="'+c.y.toFixed(1)+'" r="5" fill="var(--surface)" stroke="#166B41" stroke-width="2.5"><title>' + esc(c.wk) + ' — ' + c.v + ' (current)</title></circle>'
+    : '<circle cx="'+c.x.toFixed(1)+'" cy="'+c.y.toFixed(1)+'" r="3" fill="#166B41"><title>' + esc(c.wk) + ' — ' + c.v + '</title></circle>'
+  ).join('');
+
+  return wrap(
+    header(points.length + ' weeks recorded',
+      '<div style="font-family:var(--disp);font-size:22px;font-weight:700;color:var(--forest2,var(--swl-green))">' + current + '</div>'
+      + '<div style="font-size:11px;font-weight:700;color:' + (delta>=0?'var(--success)':'var(--danger)') + '">' + (delta>=0?'▲ +':'▼ ') + delta + ' vs ' + points.length + ' wks ago</div>')
+    + '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:auto;display:block;margin-top:4px">'
+    + '<defs><linearGradient id="trendFillG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#166B41" stop-opacity="0.22"/><stop offset="100%" stop-color="#166B41" stop-opacity="0"/></linearGradient></defs>'
+    + '<line x1="0" y1="' + (H-padBottom) + '" x2="' + W + '" y2="' + (H-padBottom) + '" stroke="var(--border2)" stroke-width="1" stroke-dasharray="3,4"/>'
+    + '<path d="' + areaPath + '" fill="url(#trendFillG)"/>'
+    + '<path d="' + linePath + '" fill="none" stroke="#166B41" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
+    + dots
+    + '</svg>'
+  );
+}
+
+async function loadScoreTrendForDash() {
+  const el = document.getElementById('exec-trend-wrap');
+  if (!el) return;
+  try {
+    const eightWeeksAgo = new Date(Date.now() - 8*7*86400000).toISOString().split('T')[0];
+    const snap = await db.collection('weekly_score_snapshots').where('weekStart','>=',eightWeeksAgo).get();
+    const points = snap.docs.map(d=>d.data()).filter(p=>p.companyScore!=null).sort((a,b)=>(a.weekStart||'').localeCompare(b.weekStart||''));
+    el.innerHTML = buildScoreTrendHtml(points);
+  } catch(e) {
+    el.innerHTML = '<div style="border:1px solid var(--border);border-radius:var(--rl);padding:16px;margin-bottom:14px"><div class="empty" style="font-size:11px">Trend unavailable.</div></div>';
+  }
+}
+
+async function snapshotCompanyScoreForTrend(scoreData) {
+  try {
+    const wk = weekKey(new Date());
+    await db.collection('weekly_score_snapshots').doc(wk).set({
+      weekStart: wk,
+      companyScore: scoreData.companyScore,
+      ocScore: scoreData.branchScores.OC,
+      laScore: scoreData.branchScores.LA,
+      computedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  } catch(e) { /* silent — trend history is a nice-to-have */ }
+}
+
+function buildLeaderboardHtml(scoreData) {
+  const top = (scoreData.topPerformers||[]).slice(0,3);
+  const coaching = (scoreData.needsCoaching||[]).slice(0,3);
+  const row = (p, cls, sub) => '<div onclick="showEmployeeDrilldown(\'' + p.uid + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer">'
+    + '<div><span style="color:var(--text)">' + esc(p.name) + '</span>' + (sub?'<div style="font-size:9.5px;color:var(--text3);margin-top:1px">'+sub+'</div>':'') + '</div>'
+    + '<span style="font-family:var(--disp);font-weight:700;font-size:12px;color:' + (cls==='good'?'var(--success)':'var(--warn)') + '">' + (p.score===null?'—':p.score) + '</span>'
+    + '</div>';
+  const emptyRow = (msg) => '<div style="font-size:11px;color:var(--text3);padding:6px 0">' + msg + '</div>';
+
+  return '<div style="border:1px solid var(--border);border-radius:var(--rl);padding:16px;background:var(--surface)">'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'
+    + '<div>'
+    + '<div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;width:fit-content;margin-bottom:10px;background:var(--success-l);color:var(--success)">&#127942; Top Performers</div>'
+    + (top.length ? top.map(p=>row(p,'good')).join('') : emptyRow('Not enough data yet'))
+    + '</div>'
+    + '<div>'
+    + '<div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;width:fit-content;margin-bottom:10px;background:var(--warn-l);color:var(--warn)">&#128222; Coaching Needed</div>'
+    + (coaching.length ? coaching.map(p=>row(p,'warn', p.overdue ? p.overdue+' overdue item'+(p.overdue!==1?'s':'') : '')).join('') : emptyRow('Nobody flagged right now'))
+    + '</div>'
+    + '</div>'
+    + '</div>';
+}
+
+async function renderExecOverviewBlock(containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '<div class="empty">Loading overview…</div>';
+  try {
+    const wk = weekKey(CW);
+    const [scoreData, subSnap, carrySnap] = await Promise.all([
+      buildUserScores(null, 'all'),
+      db.collection('weekly_submissions').where('weekStart','==',wk).get(),
+      db.collection('weekly_items').where('status','==','not_completed').get()
+    ]);
+
+    const ocTotal = TEAM.filter(t => t.role!=='admin' && t.branch==='OC').length;
+    const laTotal = TEAM.filter(t => t.role!=='admin' && t.branch==='LA').length;
+    const ocSubmitted = subSnap.docs.filter(d => d.data().branch==='OC' && d.data().status==='submitted').length;
+    const laSubmitted = subSnap.docs.filter(d => d.data().branch==='LA' && d.data().status==='submitted').length;
+    const ocCarry = carrySnap.docs.filter(d => d.data().branch==='OC').length;
+    const laCarry = carrySnap.docs.filter(d => d.data().branch==='LA').length;
+
+    el.innerHTML = swlSceneWidgetHtml()
+      + buildBranchCompareHtml({
+          ocScore: scoreData.branchScores.OC, laScore: scoreData.branchScores.LA,
+          ocSubmitted, ocTotal, laSubmitted, laTotal, ocCarry, laCarry
+        })
+      + '<div id="exec-trend-wrap"></div>'
+      + buildLeaderboardHtml(scoreData);
+
+    swlInitSceneWidget();
+    loadScoreTrendForDash();
+    snapshotCompanyScoreForTrend(scoreData);
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Could not load overview — ' + esc(e.message) + '</div>';
+  }
+}
 
 async function loadDashboardChecklist() {
   const el = document.getElementById('dash-checklist');
@@ -5452,6 +5774,7 @@ async function renderExecDashboard() {
   const ca = getContentTarget();
   ca.innerHTML = '<div class="dash-greeting">'+greet()+', '+esc(CD.name.split(" ")[0])+'!</div>'
     +'<div class="dash-sub">Executive Viewer · All Branches · '+fmtWeek(CW)+'</div>'
+    +'<div id="exec-overview" style="margin-top:12px"></div>'
     +'<div style="display:flex;gap:8px;margin:12px 0">'
     +"<button class='btn' id='ev-oc-btn' data-branch='OC' onclick='loadExecBranch(this.dataset.branch)'>Orange County</button>"
     +"<button class='btn' id='ev-la-btn' data-branch='LA' onclick='loadExecBranch(this.dataset.branch)'>Los Angeles</button>"
@@ -5459,6 +5782,7 @@ async function renderExecDashboard() {
     +'</div>'
     +'<div id="exec-content"><div class="empty">Select a branch view above</div></div>';
   loadExecBranch('ALL');
+  renderExecOverviewBlock('exec-overview');
 }
 
 async function loadExecBranch(branch) {
