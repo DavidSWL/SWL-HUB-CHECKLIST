@@ -408,6 +408,9 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   .mob-menu-btn{display:none}
   .sb-user-name{display:none}
   .top-icon-link{padding:5px 7px}
+  .theme-sw{display:none}
+  .tb-controls{gap:6px}
+  .tb-week{min-width:0;padding:4px 6px;font-size:10px}
   .cards-row{grid-template-columns:1fr}
   .g2,.g3,.g4{grid-template-columns:1fr 1fr}
   .content-area{padding:14px}
@@ -621,6 +624,15 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
     <nav class="sb-nav" id="sb-nav">
       <!-- dynamically populated based on role -->
     </nav>
+    <span id="tb-title" style="display:none">Dashboard</span>
+    <div class="tb-controls" style="display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:4px">
+      <div class="theme-sw" id="theme-sw"><button class="ts-opt" onclick="setContentTheme('grey',this)">Grey</button><button class="ts-opt on" onclick="setContentTheme('white',this)">White</button></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button onclick="prevWeek()" style="width:26px;height:26px;border:1px solid rgba(255,255,255,.18);border-radius:8px;background:rgba(255,255,255,.08);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.85)" title="Previous week">‹</button>
+        <div class="tb-week" id="tb-week" style="min-width:150px;text-align:center;font-size:11px;color:rgba(255,255,255,.85);background:rgba(255,255,255,.08);padding:4px 10px;border-radius:20px;border:1px solid rgba(255,255,255,.15)">—</div>
+        <button onclick="nextWeek()" style="width:26px;height:26px;border:1px solid rgba(255,255,255,.18);border-radius:8px;background:rgba(255,255,255,.08);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.85)" title="Next week">›</button>
+      </div>
+    </div>
     <div class="sb-user" id="sb-user" onclick="toggleUserPopover(event)">
       <div class="sb-user-avatar" id="sb-user-avatar">—</div>
       <div class="sb-user-name" id="sb-name">—</div>
@@ -639,17 +651,6 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 
   <!-- MAIN -->
   <div class="main-area">
-    <div class="top-bar">
-      <button class="mob-menu-btn" onclick="toggleMobileNav()"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
-      <div class="tb-title" id="tb-title">Dashboard</div>
-      <div style="flex:1"></div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <div class="theme-sw" id="theme-sw"><button class="ts-opt" onclick="setContentTheme('grey',this)">Grey</button><button class="ts-opt on" onclick="setContentTheme('white',this)">White</button></div>
-        <button onclick="prevWeek()" style="width:28px;height:28px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;color:var(--text2)" title="Previous week">‹</button>
-        <div class="tb-week" id="tb-week" style="min-width:180px;text-align:center">—</div>
-        <button onclick="nextWeek()" style="width:28px;height:28px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;color:var(--text2)" title="Next week">›</button>
-      </div>
-    </div>
     <div class="content-area" id="content-area">
       <!-- screens injected here -->
     </div>
@@ -1173,23 +1174,18 @@ async function renderDashboard() {
       + "<div style='width:26px;height:26px;border-radius:50%;background:" + primBtn + ";display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0'>&#128101;</div>"
       + "<div style='font-size:12px;color:var(--text2);line-height:1.5'>" + nudge + "</div></div>"
       + "<div class='stats-grid' style='margin-bottom:14px'>"
-      + "<div class='stat-card " + (isOC?"oc-stat":isLA?"la-stat":"ok-stat") + "' style='border-top:2.5px solid " + accent + "'><div class='stat-num'>" + sc + "/" + tc + "</div><div class='stat-lbl'>Submitted</div></div>"
-      + "<div class='stat-card warn-stat'><div class='stat-num'>" + pc + "</div><div class='stat-lbl'>Pending</div></div>"
-      + "<div class='stat-card' style='border-top:2.5px solid #C84B00'><div class='stat-num' id='ds-carryover'>&#8212;</div><div class='stat-lbl'>Carry-overs</div></div>"
+      + "<div class='stat-card " + (isOC?"oc-stat":isLA?"la-stat":"ok-stat") + "' style='border-top:2.5px solid " + accent + ";cursor:pointer' data-nav='reports' title='View team submission status'><div class='stat-num'>" + sc + "/" + tc + "</div><div class='stat-lbl'>Submitted</div></div>"
+      + "<div class='stat-card warn-stat' style='cursor:pointer' data-nav='reports' title='View team submission status'><div class='stat-num'>" + pc + "</div><div class='stat-lbl'>Pending</div></div>"
+      + "<div class='stat-card' style='border-top:2.5px solid #C84B00;cursor:pointer' data-nav='items' title='View carry-over items'><div class='stat-num' id='ds-carryover'>&#8212;</div><div class='stat-lbl'>Carry-overs</div></div>"
       + "<div class='stat-card' style='border-top:2.5px solid #185FA5'><div class='stat-num'>W" + getWeekNum(CW) + "</div><div class='stat-lbl'>Work week</div></div>"
       + "</div>"
       + "<div style='margin-bottom:12px'><div style='display:flex;justify-content:space-between;margin-bottom:4px'><span style='font-size:11px;color:var(--text3)'>Team progress — " + bl + "</span><span style='font-size:11px;font-weight:700;color:var(--text)'>" + pct + "%</span></div>"
-      + "<div class='progress-bar' style='height:6px'><div class='progress-fill " + (isOC?"oc":isLA?"la":"green") + "' style='width:" + pct + "%'></div></div></div>"
-      + "<div class='cards-row'>"
-      + "<div class='card warn-card' id='dash-carryover-card'><div class='card-header'><div class='card-title'>&#9888; Carry-Over Items</div><button class='btn sm' data-nav='items'>View all &#8594;</button></div><div id='dash-co-list'><div class='empty'>Loading&#8230;</div></div></div>"
-      + "<div class='card'><div class='card-header'><div class='card-title'>&#128101; Team Check-In Status</div></div><div id='dash-team-list'><div class='empty'>Loading&#8230;</div></div></div>"
-      + "</div>";
+      + "<div class='progress-bar' style='height:6px'><div class='progress-fill " + (isOC?"oc":isLA?"la":"green") + "' style='width:" + pct + "%'></div></div></div>";
 
     ca.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){navigateTo(this.getAttribute("data-nav"));});
     });
     loadCarryoverForDash(branch);
-    loadTeamStatus(branch, wk);
     updateInboxBadgeCount();
   }
 }
@@ -1371,42 +1367,6 @@ async function loadCarryoverForDash(branch) {
       <span class="badge ${it.needsAssistance?'danger':'warn'}">Carry-over${it.needsAssistance?' · Help needed':''}</span>
     </div>`;
   }).join('') + (snap.size>5?`<div style="padding:8px 0;font-size:12px;color:var(--text3)">+${snap.size-5} more…</div>`:'');
-}
-
-async function loadTeamStatus(branch, wk) {
-  const el = document.getElementById('dash-team-list');
-  if (!el) return;
-  let q = db.collection('weekly_submissions').where('weekStart','==',wk);
-  if (branch) q = q.where('branch','==',branch);
-  const snap = await q.get();
-  // Build a map of submitted emails and userIds
-  const submittedEmails = new Set(snap.docs.filter(d=>d.data().status==='submitted').map(d=>d.data().userEmail));
-  const submittedNames  = new Set(snap.docs.filter(d=>d.data().status==='submitted').map(d=>d.data().userName));
-  const roleOrder2 = {branch_manager:0, ops_manager:1, ops_specialist:1, irrigation_supervisor:2, client_rep:3};
-  const teamToShow = TEAM
-    .filter(t => (!branch||t.branch===branch||branch==='ALL') && t.role!=='admin')
-    .sort((a,b) => (roleOrder2[a.role]||5) - (roleOrder2[b.role]||5));
-  // Load photos
-  const photoMap = {};
-  try {
-    const uSnap = await db.collection('users').get();
-    uSnap.docs.forEach(d=>{ const u=d.data(); if(u.photoURL){photoMap[u.email]=u.photoURL; photoMap[u.name]=u.photoURL;}});
-  } catch(e){}
-  el.innerHTML = teamToShow.map(t => {
-    const done = submittedEmails.has(t.email) || submittedNames.has(t.name);
-    const photo = photoMap[t.email] || photoMap[t.name];
-    const avatar = photo
-      ? `<img src="${photo}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;flex-shrink:0;border:2px solid var(--border)">`
-      : `<div class="tmr-avatar" style="background:${t.color};color:#fff">${t.initials}</div>`;
-    return `<div class="team-member-row">
-      ${avatar}
-      <div style="flex:1">
-        <div class="tmr-name">${esc(t.name)}</div>
-        <div class="tmr-role">${ROLES[t.role]?.label||t.role} · ${t.branch}</div>
-      </div>
-      <span class="badge ${done?'success':'warn'}">${done?'✓ Done':'Pending'}</span>
-    </div>`;
-  }).join('');
 }
 
 // ══════════════════════════════════════════════════
