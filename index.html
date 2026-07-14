@@ -2477,9 +2477,9 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
     healthRate, healthLabel, healthColor,
     streak,
     overdueItems: scoredItems.filter(i => (i.status === 'pending' || i.status === 'in_progress') && i.deadline && i.deadline < today)
-      .map(i => ({ title: i.title, priority: i.priority, daysOverdue: swlDaysBetween(i.deadline, today), pushedBackCount: (i.extensionHistory||[]).length, wasInProgress: i.status === 'in_progress' })),
+      .map(i => ({ id: i.id, title: i.title, priority: i.priority, daysOverdue: swlDaysBetween(i.deadline, today), pushedBackCount: (i.extensionHistory||[]).length, wasInProgress: i.status === 'in_progress' })),
     missedItems: scoredItems.filter(i => i.status === 'not_completed')
-      .map(i => ({ title: i.title, priority: i.priority, pushedBackCount: (i.extensionHistory||[]).length })),
+      .map(i => ({ id: i.id, title: i.title, priority: i.priority, pushedBackCount: (i.extensionHistory||[]).length })),
     allScoredItems: scoredItems
   };
 }
@@ -2845,87 +2845,104 @@ async function runDataCleanup() {
   runDataIntegrityReport();
 }
 
-function showEmployeeDrilldown(uid) {
-  const p = swl_scores_cache[uid];
-  if (!p) return;
-  const existing = document.getElementById('swl-drilldown-modal');
-  if (existing) existing.remove();
+// \u2550\u2550 SCORE REPORT \u2550\u2550 shared by the admin/exec drilldown modal (Reports \u2192
+// Accountability) and the employee's own My Grading page \u2014 one report,
+// two places, per SWL's request. Rows for overdue/missed items are
+// clickable (jump to that item in Weekly Items, pre-filtered and
+// highlighted) and every metric has a "what does this mean" toggle.
 
+function swlScoreExplainToggle(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function swlGoToScoredItem(itemId, bucket) {
+  const modal = document.getElementById('swl-drilldown-modal');
+  if (modal) modal.remove();
+  window._pendingItemsFilter = bucket;
+  window._pendingItemsHighlightId = itemId;
+  navigateTo('items');
+}
+
+function buildScoreReportHtml(p, idPrefix) {
   function gc(grade) { return {A:'var(--success)',B:'var(--success)',C:'#FBBF24',D:'var(--warn)',F:'var(--danger)'}[grade]||'var(--text3)'; }
   function rc(risk)  { return {low:'var(--success)',medium:'#FBBF24',high:'var(--warn)',critical:'var(--danger)'}[risk]||'var(--text3)'; }
+  const px = idPrefix || 'sr';
+
+  const infoBtn = (id) => '<span onclick="swlScoreExplainToggle(\''+id+'\')" style="cursor:pointer;color:var(--text3);font-size:11px;margin-left:3px" title="What is this?">&#9432;</span>';
+  const explainDiv = (id, text) => '<div id="'+id+'" style="display:none;margin-top:6px;font-size:10.5px;color:var(--text2);line-height:1.5;background:var(--surface2);border-radius:6px;padding:7px 9px">'+text+'</div>';
 
   const pushedBackTag = (n) => n>0 ? '<span title="Deadline pushed back '+n+' time'+(n!==1?'s':'')+'" style="font-size:9px;font-weight:700;color:#FBBF24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);border-radius:8px;padding:1px 6px;margin-left:6px">&#9195; '+n+'x</span>' : '';
 
+  const clickableRow = (i, bucket, extraRight) => '<div onclick="swlGoToScoredItem(\''+i.id+'\',\''+bucket+'\')" style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid var(--border);cursor:pointer;border-radius:6px" onmouseover="this.style.background=\'var(--surface2)\'" onmouseout="this.style.background=\'\'" title="Open in Weekly Items">'
+    + '<span style="font-size:9px;font-weight:700;text-transform:uppercase;color:'+( i.priority==='critical'?'var(--danger)':i.priority==='high'?'var(--warn)':'var(--text3)')+';width:48px;flex-shrink:0">'+esc(i.priority||'med')+'</span>'
+    + '<span style="font-size:12px;color:var(--text);flex:1">'+esc(i.title)+pushedBackTag(i.pushedBackCount)+'</span>'
+    + (extraRight||'')
+    + '<span style="font-size:11px;color:var(--text3)">&#8250;</span>'
+    + '</div>';
+
   const missedHtml = (p.missedItems||[]).length
-    ? (p.missedItems||[]).map(i=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">'
-        + '<span style="font-size:9px;font-weight:700;text-transform:uppercase;color:'+( i.priority==='critical'?'var(--danger)':i.priority==='high'?'var(--warn)':'var(--text3)')+';width:48px">'+esc(i.priority||'med')+'</span>'
-        + '<span style="font-size:12px;color:var(--text)">'+esc(i.title)+'</span>'
-        + pushedBackTag(i.pushedBackCount)
-        + '</div>').join('')
+    ? (p.missedItems||[]).map(i => clickableRow(i, 'not_completed')).join('')
     : '<div style="font-size:11px;color:var(--text3);padding:6px 0">None</div>';
 
   const overdueHtml = (p.overdueItems||[]).length
-    ? (p.overdueItems||[]).map(i=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">'
-        + '<span style="font-size:9px;font-weight:700;text-transform:uppercase;color:'+(i.daysOverdue>30?'var(--danger)':i.daysOverdue>7?'var(--warn)':'#FBBF24')+';width:48px">'+esc(i.priority||'med')+'</span>'
-        + '<span style="font-size:12px;color:var(--text);flex:1">'+esc(i.title)+pushedBackTag(i.pushedBackCount)+'</span>'
-        + '<span style="font-size:11px;font-weight:700;color:var(--danger)">'+i.daysOverdue+'d</span>'
-        + '</div>').join('')
+    ? (p.overdueItems||[]).map(i => clickableRow(i, 'overdue', '<span style="font-size:11px;font-weight:700;color:var(--danger);margin-right:4px">'+i.daysOverdue+'d</span>')).join('')
     : '<div style="font-size:11px;color:var(--text3);padding:6px 0">None</div>';
 
   const c = p.components || {};
 
-  const modal = document.createElement('div');
-  modal.id = 'swl-drilldown-modal';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:800;display:flex;align-items:center;justify-content:center;padding:16px';
-  modal.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);width:100%;max-width:640px;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">'
-    // Header
-    + '<div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between">'
-    + '<div>'
-    + '<div style="font-size:16px;font-weight:700;color:var(--text)">'+esc(p.name)+'</div>'
-    + '<div style="font-size:11px;color:var(--text3);margin-top:2px">'+esc(p.role||'')+' &middot; <span class="badge '+(p.branch||'').toLowerCase()+'">'+( p.branch||'')+'</span></div>'
-    + '</div>'
-    + '<button onclick="document.getElementById(\'swl-drilldown-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:0 4px">\u2715</button>'
-    + '</div>'
-
+  return ''
     // Range + backlog strip \u2014 a score is never shown without saying what it's measuring against
-    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 24px;background:var(--surface2);border-bottom:1px solid var(--border)">'
-    + '<span style="font-size:10.5px;font-weight:700;color:var(--text2);background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:4px 10px">&#128197; Scored: '+esc(SWL_RANGE_LABELS[swl_scores_cache_meta.dateRange]||'All Time')+'</span>'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 0;margin-bottom:4px">'
+    + '<span style="font-size:10.5px;font-weight:700;color:var(--text2);background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 10px">&#128197; Scored: '+esc(SWL_RANGE_LABELS[swl_scores_cache_meta.dateRange]||'All Time')+'</span>'
     + (p.overdue>0 ? '<span style="font-size:10.5px;font-weight:700;color:var(--warn);background:var(--warn-l);border-radius:20px;padding:4px 10px">&#9888; '+p.overdue+' item'+(p.overdue!==1?'s':'')+' overdue</span>' : '')
+    + '<span style="font-size:10px;color:var(--text3)">Items more than 90 days past their deadline no longer affect this score.</span>'
     + '</div>'
 
     // Score summary row
-    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-bottom:1px solid var(--border)">'
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:16px">'
     + [
-        {l:'Acct Score',    v: p.score===null?'\u2014':p.score, sub: p.gradeLabel, c: gc(p.grade)},
-        {l:'Acct Health',   v: p.healthRate===null?'\u2014':p.healthRate+'%', sub: p.healthLabel, c: p.healthColor},
-        {l:'Reliability',   v: p.reliabilityRate+'%', sub: (p.onTime+p.late)+' of '+(p.onTime+p.late+p.missed+p.overdue)+' due items finished'+(p.overdue>0?' &middot; '+p.overdue+' still open':''), c: p.reliabilityRate>=80?'var(--success)':p.reliabilityRate>=50?'#FBBF24':'var(--danger)'},
-        {l:'Risk Level',    v: p.riskLabel, sub: p.trend+' trend', c: rc(p.risk)}
-      ].map(x=>'<div style="padding:14px 18px;border-right:1px solid var(--border)">'
-        + '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:4px">'+x.l+'</div>'
+        {id:px+'-score',   l:'Acct Score',    v: p.score===null?'\u2014':p.score, sub: p.gradeLabel, c: gc(p.grade),
+         expl:'Your overall grade out of 100, combining Completion Quality, On-Time Performance, Submission Consistency, and Trend into one number (see breakdown below).'},
+        {id:px+'-health',  l:'Acct Health',   v: p.healthRate===null?'\u2014':p.healthRate+'%', sub: p.healthLabel, c: p.healthColor,
+         expl:'A read on how often work gets done on time vs. late vs. missed.'},
+        {id:px+'-rel',     l:'Reliability',   v: p.reliabilityRate+'%', sub: (p.onTime+p.late)+' of '+(p.onTime+p.late+p.missed+p.overdue)+' due items finished'+(p.overdue>0?' &middot; '+p.overdue+' still open':''), c: p.reliabilityRate>=80?'var(--success)':p.reliabilityRate>=50?'#FBBF24':'var(--danger)',
+         expl:'Every item that\u2019s ever been due, on time or late, finished or still open \u2014 divided into what actually got finished. Unlike a simple on-time rate, a growing backlog of open overdue items can\u2019t hide behind a good finish record here.'},
+        {id:px+'-risk',    l:'Risk Level',    v: p.riskLabel, sub: p.trend+' trend', c: rc(p.risk),
+         expl:'How likely a coaching conversation is needed soon, based on the score trend direction plus overdue/missed backlog.'}
+      ].map(x=>'<div style="padding:14px 18px;border-right:1px solid var(--border);background:var(--surface)">'
+        + '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:4px">'+x.l+infoBtn(x.id)+'</div>'
         + '<div style="font-size:18px;font-weight:700;color:'+x.c+'">'+x.v+'</div>'
         + '<div style="font-size:10px;color:var(--text3);margin-top:2px">'+x.sub+'</div>'
+        + explainDiv(x.id, x.expl)
         + '</div>').join('')
     + '</div>'
 
     // Score component breakdown
-    + '<div style="padding:16px 24px;border-bottom:1px solid var(--border)">'
+    + '<div style="padding:16px 0;border-top:1px solid var(--border)">'
     + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:10px">Score Breakdown</div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+    + '<div class="g2" style="gap:14px">'
     + [
-        {l:'A \u2014 Completion Quality',     v:c.A, max:50, note: (c.earnedA||0)+'pts earned of '+(c.maxA||0)+'pts possible'},
-        {l:'B \u2014 On-Time Performance',    v:c.B, max:25, note: p.onTime+' on-time / '+(p.onTime+p.late)+' completed'},
-        {l:'C \u2014 Submission Consistency', v:c.C, max:15, note: (p.streak||0)+'-week check-in streak'},
-        {l:'D \u2014 Trend Impact',           v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':'vs prior period'}
+        {id:px+'-a', l:'A \u2014 Completion Quality',     v:c.A, max:50, note: (c.earnedA||0)+'pts earned of '+(c.maxA||0)+'pts possible',
+         expl:'Points earned from finished work, divided by everything that should count \u2014 including growing older overdue items, which increase the max more the longer they sit. The largest piece of the score (50 of 100 points).'},
+        {id:px+'-b', l:'B \u2014 On-Time Performance',    v:c.B, max:25, note: p.onTime+' on-time / '+(p.onTime+p.late)+' completed',
+         expl:'Of the items actually finished, what share were on time vs. late (25 of 100 points). This only looks at completed work \u2014 it can\u2019t see anything still open, which is why Reliability exists as a separate, backlog-aware number.'},
+        {id:px+'-c', l:'C \u2014 Submission Consistency', v:c.C, max:15, note: (p.streak||0)+'-week check-in streak',
+         expl:'Rewards a steady streak of weekly check-ins, separate from whether items are finished (15 of 100 points).'},
+        {id:px+'-d', l:'D \u2014 Trend Impact',           v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':'vs prior period',
+         expl:'Compares this period to the one before it \u2014 improving adds up to 10 points, declining subtracts up to 10. Needs 30+ days of history and 4+ scored items in both periods, otherwise it\u2019s dropped and the score is rescaled out of 90 instead of 100 so it\u2019s never held against you.'}
       ].map(x=>{
         const pct = x.max>0?Math.round(Math.max(0,x.v)/x.max*100):0;
         const col = pct>=80?'var(--success)':pct>=60?'#FBBF24':'var(--danger)';
         return '<div><div style="display:flex;justify-content:space-between;margin-bottom:3px">'
-          + '<span style="font-size:11px;color:var(--text2)">'+x.l+'</span>'
+          + '<span style="font-size:11px;color:var(--text2)">'+x.l+infoBtn(x.id)+'</span>'
           + '<span style="font-size:11px;font-weight:700;color:'+col+'">'+Math.max(0,x.v)+'/'+x.max+'</span>'
           + '</div>'
           + '<div style="height:5px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:2px">'
           + '<div style="height:100%;width:'+pct+'%;background:'+col+';border-radius:3px"></div></div>'
-          + '<div style="font-size:10px;color:var(--text3)">'+x.note+'</div></div>';
+          + '<div style="font-size:10px;color:var(--text3)">'+x.note+'</div>'
+          + explainDiv(x.id, x.expl)
+          + '</div>';
       }).join('')
     + '</div>'
     + '<div style="margin-top:10px;font-size:10px;color:var(--text3)">Volume modifier: \u00d7'+(p.volMod||1.0)+' &middot; '+( p.scoredItems||0)+' scored items'
@@ -2933,10 +2950,10 @@ function showEmployeeDrilldown(uid) {
     + '</div>'
 
     // Item counts + overdue/missed detail
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid var(--border)">'
-    + '<div style="padding:16px 24px;border-right:1px solid var(--border)">'
+    + '<div class="g2" style="gap:0;border-top:1px solid var(--border)">'
+    + '<div style="padding:16px 16px 16px 0;border-right:1px solid var(--border)">'
     + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:8px">Item Summary</div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'
+    + '<div class="g2" style="gap:6px">'
     + [
         {l:'On Time',   v:p.onTime,        c:'var(--success)'},
         {l:'Late',      v:p.late,           c:'var(--warn)'},
@@ -2950,15 +2967,33 @@ function showEmployeeDrilldown(uid) {
         + '</div>').join('')
     + '</div></div>'
 
-    + '<div style="padding:16px 24px">'
+    + '<div style="padding:16px 0 16px 16px">'
     + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:8px">Overdue Items</div>'
     + overdueHtml
     + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin:12px 0 8px">Missed Items</div>'
     + missedHtml
     + '</div>'
-    + '</div>'
+    + '</div>';
+}
 
-    // Footer
+function showEmployeeDrilldown(uid) {
+  const p = swl_scores_cache[uid];
+  if (!p) return;
+  const existing = document.getElementById('swl-drilldown-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'swl-drilldown-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:800;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);width:100%;max-width:640px;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between">'
+    + '<div>'
+    + '<div style="font-size:16px;font-weight:700;color:var(--text)">'+esc(p.name)+'</div>'
+    + '<div style="font-size:11px;color:var(--text3);margin-top:2px">'+esc(p.role||'')+' &middot; <span class="badge '+(p.branch||'').toLowerCase()+'">'+( p.branch||'')+'</span></div>'
+    + '</div>'
+    + '<button onclick="document.getElementById(\'swl-drilldown-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:0 4px">\u2715</button>'
+    + '</div>'
+    + '<div style="padding:0 24px">' + buildScoreReportHtml(p, 'dd') + '</div>'
     + '<div style="padding:14px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">'
     + '<button class="btn" onclick="document.getElementById(\'swl-drilldown-modal\').remove()">Close</button>'
     + '</div>'
@@ -3205,19 +3240,9 @@ async function renderMyGrading() {
       ca.innerHTML = '<div class="empty">No scoring data yet — grading starts once you have weekly items assigned to you.</div>';
       return;
     }
-    const c = p.components || {};
-    const rangeLabel = SWL_RANGE_LABELS[swl_scores_cache_meta.dateRange] || 'All Time';
-    const totalDue = p.onTime + p.late + p.missed + p.overdue;
     const avgAge = (p.overdueItems||[]).length
       ? Math.round(p.overdueItems.reduce((s,i)=>s+(i.daysOverdue||0),0) / p.overdueItems.length)
       : 0;
-
-    const grades = [
-      { l:'Quality',     v:c.A, max:50 },
-      { l:'Promptness',  v:c.B, max:25 },
-      { l:'Consistency', v:c.C, max:15 },
-      { l:'Trend',       v: p.insufficientHistory ? null : c.D, max:10 }
-    ];
 
     const strengths = [];
     const focus = [];
@@ -3229,25 +3254,12 @@ async function renderMyGrading() {
       + (focus.length ? ' Focus area: ' + focus.join('; ') + '.' : '')
       || "Keep submitting and finishing items on time — your grading fills in as you build history.";
 
-    ca.innerHTML = '<div style="max-width:640px">'
-      + '<div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:var(--text2);background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:5px 12px;margin-bottom:16px">&#128197; Scored: ' + esc(rangeLabel) + '</div>'
-      + '<div style="display:flex;gap:24px;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap">'
-      + '<div><div style="font-size:52px;font-weight:700;line-height:.9;color:var(--swl-green)">' + p.reliabilityRate + '%</div>'
-      + '<div style="font-size:12.5px;color:var(--text3);margin-top:6px">' + (p.onTime+p.late) + ' of ' + totalDue + ' due items finished</div></div>'
-      + (p.overdue > 0 ? '<div style="background:var(--warn-l);color:var(--warn);border-radius:var(--r);padding:8px 14px;font-size:12px;font-weight:700;margin-left:auto">&#9888; ' + p.overdue + ' open' + (avgAge?', avg ' + avgAge + ' days old':'') + '</div>' : '')
-      + '</div>'
-      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">'
-      + grades.map(g => {
-          const pct = g.v===null ? 0 : Math.max(0, Math.round(g.v)) / g.max * 100;
-          return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:12px">'
-            + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)">' + g.l + '</div>'
-            + '<div style="font-size:20px;font-weight:700;margin-top:4px;color:var(--text)">' + (g.v===null?'n/a':Math.round(g.v)+'/'+g.max) + '</div>'
-            + '<div style="height:4px;background:var(--border);border-radius:2px;margin-top:8px;overflow:hidden"><div style="display:block;height:100%;width:' + pct + '%;background:var(--swl-green)"></div></div>'
-            + '</div>';
-        }).join('')
-      + '</div>'
-      + '<div style="background:var(--success-l);border-radius:var(--r);padding:14px 16px;font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:16px">' + encourage + '</div>'
-      + '<button class="btn" onclick="showEmployeeDrilldown(\'' + CU.uid + '\')">View full breakdown &amp; item list</button>'
+    // Same full score report shown to admin/exec in Reports → Accountability —
+    // one report, two places, so an employee sees exactly what their manager sees.
+    ca.innerHTML = '<div style="max-width:680px">'
+      + '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:10px">My Grading</div>'
+      + '<div style="background:var(--success-l);border-radius:var(--r);padding:14px 16px;font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:6px">' + encourage + '</div>'
+      + buildScoreReportHtml(p, 'my')
       + '</div>';
   } catch(e) {
     ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:580px;margin:20px auto">'
@@ -3612,25 +3624,26 @@ async function renderItems() {
   let q = db.collection('weekly_items').where('weekStart','==',wk);
   if (branch) q = q.where('branch','==',branch);
 
-  // For employees: load their own items from the last 4 weeks
-  // Shows recently completed items AND lets them resolve overdue ones
-  // For managers: load the whole branch's items from the last quarter (matches
-  // the score-decay window) so overdue backlog and how it was resolved is visible
-  // team-wide, not just for the current week.
+  // For employees: load their own items from the last quarter (matches the
+  // score-decay window, and My Grading's overdue/missed rows link here, so
+  // this needs to reach as far back as anything that can still affect the
+  // score). Shows recently completed items AND lets them resolve overdue ones.
+  // For managers: load the whole branch's items from the last quarter so
+  // overdue backlog and how it was resolved is visible team-wide, not just
+  // for the current week.
   let priorSnap = null, priorSnapName = null, priorSnapBranch = null;
   const quarterAgo = new Date(Date.now() - 90*86400000).toISOString().split('T')[0];
   if (!isMgr) {
-    const fourWeeksAgo = new Date(Date.now() - 28*86400000).toISOString().split('T')[0];
     try {
       priorSnap = await db.collection('weekly_items')
         .where('owner','==',CU.uid)
-        .where('weekStart','>=',fourWeeksAgo)
+        .where('weekStart','>=',quarterAgo)
         .get();
     } catch(e) { priorSnap = null; }
     try {
       priorSnapName = await db.collection('weekly_items')
         .where('ownerName','==',CD.name)
-        .where('weekStart','>=',fourWeeksAgo)
+        .where('weekStart','>=',quarterAgo)
         .get();
     } catch(e) { priorSnapName = null; }
   } else {
@@ -3731,6 +3744,17 @@ async function renderItems() {
     filterItems(window._pendingItemsFilter);
     window._pendingItemsFilter = null;
   }
+  if (window._pendingItemsHighlightId) {
+    const hid = window._pendingItemsHighlightId;
+    window._pendingItemsHighlightId = null;
+    const row = document.querySelector('#items-list .item-row[data-id="' + hid + '"]');
+    if (row) {
+      row.scrollIntoView({behavior:'smooth', block:'center'});
+      row.style.transition = 'background-color .3s';
+      row.style.backgroundColor = 'rgba(251,191,36,.18)';
+      setTimeout(() => { row.style.backgroundColor = ''; }, 2200);
+    }
+  }
 }
 
 function renderItemCard(it) {
@@ -3772,7 +3796,7 @@ function renderItemCard(it) {
             : ' <span style="font-size:10px;background:rgba(251,191,36,.15);color:#FBBF24;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE LATE</span>')
       : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '');
 
-  return `<div class="item-row" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}">
+  return `<div class="item-row" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}">
     <span class="priority-dot ${it.priority||'medium'}"></span>
     <div class="item-content">
       <div class="item-title">${esc(it.title)}${tag}</div>
