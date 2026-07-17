@@ -738,7 +738,7 @@ function getUserBranch() { return CD?.branch==='ALL' ? null : CD?.branch; }
 // Accountability/Team/Exec Dashboard render into this when hosted inside the
 // Reports tab shell (renderReports), and fall back to the real content area
 // when reached directly (old nav aliases, hang-timer retry buttons, etc.)
-function getContentTarget() { return document.getElementById('reports-subview') || document.getElementById('content-area'); }
+function getContentTarget() { return document.getElementById('reports-subview') || document.getElementById('weekly-notes-subview') || document.getElementById('content-area'); }
 function canView(branch) { if(!CD) return false; if(CD.role==='admin') return true; return CD.branch===branch; }
 
 let toastT;
@@ -923,35 +923,19 @@ function buildSidebar() {
   // Primary destinations — always visible as icons in the bar
   let html = topIcon('dashboard','Dashboard','🏠');
   html += topIcon('inbox','Inbox','📥', true);
+  if (!isExec) html += topIcon('weekly-notes','Weekly Notes','📝');
   if (!isExec) html += topIcon('my-grading','My Grading','📊');
   if (isManager || isExec) html += topIcon('reports','Reports','📈');
 
   // Everything else lives in the "More" dropdown, grouped exactly as the
   // old vertical nav did — same role-gating, just a different container.
+  // Monday Check-In and Friday Notes now live in the "Weekly Notes" tab
+  // above, not here — no duplicate path to the same screen.
   let more = '';
-
-  more += '<div class="more-dd-label">My Weekly Forms</div>';
-  if (['branch_manager','admin'].includes(role)) more += navBtn('checkin-bm','Branch Manager Check-In','📋');
-  if (['ops_manager','admin'].includes(role)) more += navBtn('checkin-om','Operations Manager','🟠');
-  if (['ops_specialist','admin'].includes(role)) more += navBtn('checkin-os','Operations Specialist','🔵');
-  if (['irrigation_supervisor','admin'].includes(role)) more += navBtn('checkin-sv','Supervisor (LA)','👷');
-  if (['client_rep','admin'].includes(role)) {
-    const isBranchOC = branch==='OC' || branch==='ALL';
-    const isBranchLA = branch==='LA' || branch==='ALL';
-    if (CD?.formType && CD.formType.startsWith('cr-')) {
-      const ft = CD.formType;
-      const brLabel = ft==='cr-oc'?'OC':'LA';
-      more += navBtn('checkin-'+ft, `Client Rep (${brLabel})`, '🤝');
-    } else {
-      if (isBranchOC) more += navBtn('checkin-cr-oc','Client Rep (OC)','🤝');
-      if (isBranchLA) more += navBtn('checkin-cr-la','Client Rep (LA)','🤝');
-    }
-  }
 
   if (isManager || isExec) {
     more += '<div class="more-dd-label">Planning</div>';
-    more += navBtn('monday-recap','Monday Meeting Notes','📆');
-    more += navBtn('friday-recap','Friday Meeting Notes','📅');
+    more += navBtn('monday-recap','Monday Planning Overview','📆');
     more += navBtn('my-history','My History','📚');
     more += navBtn('summary','Monday Recap','📄');
     more += navBtn('friday-summary','Friday Recap','📊');
@@ -1053,8 +1037,9 @@ function renderScreen(screen) {
     'checkin-cr-oc':{ title:'Client Rep Check-In (OC)', fn: ()=>renderCheckin('cr-oc') },
     'checkin-cr-la':{ title:'Client Rep Check-In (LA)', fn: ()=>renderCheckin('cr-la') },
     'items':        { title:'Weekly Items',        fn: renderItems },
+    'weekly-notes':   { title:'Weekly Notes',              fn: renderWeeklyNotes },
     'friday-recap':   { title:'Friday Meeting Notes',     fn: renderFridayRecap },
-    'monday-recap':   { title:'Monday Meeting Notes',     fn: renderMondayRecap },
+    'monday-recap':   { title:'Monday Planning Overview',  fn: renderMondayRecap },
     'my-history':     { title:'My Submissions & History', fn: renderMyHistory },
     'my-grading':     { title:'My Grading',                fn: renderMyGrading },
     'inbox':          { title:'Inbox',                     fn: renderInbox },
@@ -1094,12 +1079,18 @@ async function renderDashboard() {
   var subQ = db.collection("weekly_submissions").where("weekStart","==",wk);
   if (branch && branch!=="ALL") subQ = subQ.where("branch","==",branch);
 
+  // Filter by formType — without it, mySnap could match either the Monday
+  // check-in or the Friday notes submission ambiguously, since both live in
+  // the same weekly_submissions collection for the same user/week.
+  var checkinType = getFirstCheckinRole();
   var results = await Promise.all([
     subQ.get(),
-    db.collection("weekly_submissions").where("userId","==",CU.uid).where("weekStart","==",wk).get()
+    db.collection("weekly_submissions").where("userId","==",CU.uid).where("weekStart","==",wk).where("formType","==",checkinType).get(),
+    db.collection("weekly_submissions").where("userId","==",CU.uid).where("weekStart","==",wk).where("formType","==","friday-recap").get()
   ]);
-  var subSnap=results[0], mySnap=results[1];
+  var subSnap=results[0], mySnap=results[1], myFridaySnap=results[2];
   var submitted = !mySnap.empty && mySnap.docs[0]&&mySnap.docs[0].data().status==="submitted";
+  var fridaySubmitted = !myFridaySnap.empty && myFridaySnap.docs[0]&&myFridaySnap.docs[0].data().status==="submitted";
   var teamMembers = TEAM.filter(function(t){return !branch||branch==="ALL"||t.branch===branch;});
   var tc = teamMembers.length;
   var sc = subSnap.docs.filter(function(d){return d.data().status==="submitted";}).length;
@@ -1108,7 +1099,7 @@ async function renderDashboard() {
   var ub = await computeBadges(CU.uid, CD.role);
 
   if (!isMgr) {
-    var checkinNav = "checkin-" + getFirstCheckinRole();
+    var checkinNav = "checkin-" + checkinType;
     var myAllSubsSnap = await db.collection('weekly_submissions').where('userId','==',CU.uid).where('status','==','submitted').get();
     var streak = swlSubmissionStreak(myAllSubsSnap.docs.map(function(d){return d.data().weekStart;}).filter(Boolean));
     ca.innerHTML =
@@ -1121,6 +1112,7 @@ async function renderDashboard() {
       + "</div>"
       + "<div style='display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap'>"
       + "<span class='badge " + (submitted?"success":"warn") + "' style='cursor:pointer' data-nav='" + checkinNav + "'>" + (submitted?"&#10003; Monday check-in submitted":"&#9888; Monday check-in pending — submit now") + "</span>"
+      + "<span class='badge " + (fridaySubmitted?"success":"warn") + "' style='cursor:pointer' data-nav='friday-recap'>" + (fridaySubmitted?"&#10003; Friday notes submitted":"&#9888; Friday notes pending — submit now") + "</span>"
       + "<div class='badges-row'>" + renderBadgeChips(ub) + "</div>"
       + "</div>"
       + "<div style='display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:16px' class='dash-blocks-grid'>"
@@ -1734,7 +1726,7 @@ async function loadCarryoverForDash(branch) {
 // CHECK-IN FORMS
 // ══════════════════════════════════════════════════
 async function renderCheckin(type) {
-  const ca = document.getElementById('content-area');
+  const ca = getContentTarget();
   const wk = weekKey(CW);
 
   // Load existing submission
@@ -2107,7 +2099,7 @@ function collectFormFields() {
 // WEEKLY ITEMS
 // ══════════════════════════════════════════════════
 async function renderFridayRecap() {
-  const ca = document.getElementById('content-area');
+  const ca = getContentTarget();
   const wk = weekKey(CW);
   const branch = getUserBranch() || CD.branch;
 
@@ -2325,7 +2317,7 @@ async function renderMondayRecap() {
 
   ca.innerHTML = `
     <div style="background:var(--swl-green);border-radius:var(--rxl);padding:20px 24px;margin-bottom:20px;color:#fff">
-      <div style="font-size:18px;font-weight:700;margin-bottom:3px">Monday Meeting Notes — ${branchLabel}</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:3px">Monday Planning Overview — ${branchLabel}</div>
       <div style="font-size:12px;opacity:.7">Week of ${fmtWeek(CW)} · Operational planning overview</div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
@@ -2388,7 +2380,7 @@ async function renderMondayRecap() {
       </table>` : '<div class="empty">No items with deadlines this week</div>'}
     </div>
     <div class="btn-row" style="border:none;padding:0">
-      <button class="btn primary" onclick="exportSummaryPDF('SWL Monday Meeting Notes — '+fmtWeek(CW))">Export PDF</button>
+      <button class="btn primary" onclick="exportSummaryPDF('SWL Monday Planning Overview — '+fmtWeek(CW))">Export PDF</button>
       <button class="btn" onclick="navigateTo('summary')">Full Monday Recap →</button>
     </div>`;
 }
@@ -3635,6 +3627,33 @@ async function renderReports() {
 function switchReportsTab(tabKey) {
   window._reportsTab = tabKey;
   renderReports();
+}
+
+// ══ WEEKLY NOTES — same delegating-shell pattern as Reports: a tab strip
+// whose sub-screens redirect renderCheckin()/renderFridayRecap()'s
+// document.getElementById('content-area') writes to a sub-container via
+// getContentTarget(), instead of rewriting either form. ══
+async function renderWeeklyNotes() {
+  const ca = document.getElementById('content-area');
+  const tabs = [
+    { k:'monday', l:'Monday Check-In', fn: () => renderCheckin(getFirstCheckinRole()) },
+    { k:'friday', l:'Friday Notes', fn: renderFridayRecap }
+  ];
+  const active = (window._weeklyNotesTab && tabs.some(t => t.k === window._weeklyNotesTab)) ? window._weeklyNotesTab : tabs[0].k;
+  window._weeklyNotesTab = active;
+
+  const tabStrip = '<div style="display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px;margin-bottom:16px;flex-wrap:wrap">'
+    + tabs.map(t => '<button onclick="switchWeeklyNotesTab(\'' + t.k + '\')" style="font-size:12px;font-weight:700;padding:6px 16px;border-radius:16px;border:none;cursor:pointer;font-family:inherit;background:' + (t.k===active?'var(--swl-green)':'transparent') + ';color:' + (t.k===active?'#fff':'var(--text3)') + '">' + t.l + '</button>').join('')
+    + '</div>';
+  ca.innerHTML = tabStrip + '<div id="weekly-notes-subview"><div class="empty">Loading…</div></div>';
+
+  const activeTab = tabs.find(t => t.k === active);
+  activeTab.fn();
+}
+
+function switchWeeklyNotesTab(tabKey) {
+  window._weeklyNotesTab = tabKey;
+  renderWeeklyNotes();
 }
 
 async function renderAccountability() {
