@@ -1179,7 +1179,11 @@ async function renderDashboard() {
       + "<div class='stat-card' style='border-top:2.5px solid #185FA5'><div class='stat-num'>W" + getWeekNum(CW) + "</div><div class='stat-lbl'>Work week</div></div>"
       + "</div>"
       + "<div style='margin-bottom:12px'><div style='display:flex;justify-content:space-between;margin-bottom:4px'><span style='font-size:11px;color:var(--text3)'>Team progress — " + bl + "</span><span style='font-size:11px;font-weight:700;color:var(--text)'>" + pct + "%</span></div>"
-      + "<div class='progress-bar' style='height:6px'><div class='progress-fill " + (isOC?"oc":isLA?"la":"green") + "' style='width:" + pct + "%'></div></div></div>";
+      + "<div class='progress-bar' style='height:6px'><div class='progress-fill " + (isOC?"oc":isLA?"la":"green") + "' style='width:" + pct + "%'></div></div></div>"
+      + "<div style='border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px;background:var(--surface)'>"
+      + "<div style='font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text3);margin-bottom:10px'>Due This Week <span id='dash-due-count'></span></div>"
+      + "<div id='dash-due-list'><div class='empty' style='font-size:12px'>Loading&#8230;</div></div>"
+      + "</div>";
 
     ca.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -1190,6 +1194,7 @@ async function renderDashboard() {
     });
     loadCarryoverForDash(branch);
     loadOverdueBannerForDash(branch);
+    loadDueItemsForDash(branch, wk);
     updateInboxBadgeCount();
     if (CD.role === "admin") renderExecOverviewBlock("exec-overview");
   }
@@ -1751,6 +1756,57 @@ async function loadOverdueBannerForDash(branch) {
       }
     }
   } catch(e) { el.style.display = 'none'; }
+}
+
+function swlTeamBreakdownHtml(docs, colorVar, colorLVar) {
+  const groups = {};
+  docs.forEach(({ id, it, sub }) => {
+    const key = it.ownerName || it.owner || 'Unassigned';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push({ id, ...it, _sub: sub });
+  });
+  const groupEntries = Object.entries(groups).sort((a,b) => b[1].length - a[1].length);
+  return groupEntries.map(([name, its]) => {
+    const initials = esc((name||'?').trim().split(/\s+/).map(n=>n[0]||'').slice(0,2).join('').toUpperCase());
+    const itemsHtml = its.slice(0,3).map(it => '<div onclick="event.stopPropagation();swlGoToScoredItem(\'' + it.id + '\',\'all\')" style="display:flex;align-items:center;gap:8px;padding:4px 0 4px 32px;cursor:pointer">'
+      + '<span style="font-size:12px;color:var(--text2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(it.title) + '</span>'
+      + '<span style="font-size:10.5px;font-weight:700;color:var(--' + colorVar + ');flex-shrink:0">' + it._sub + '</span>'
+      + '</div>').join('');
+    const moreCount = its.length > 3 ? its.length - 3 : 0;
+    return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">'
+      + '<div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="swlGoToScoredItem(\'' + its[0].id + '\',\'all\')">'
+      + '<div style="width:22px;height:22px;border-radius:50%;background:var(--' + colorLVar + ');color:var(--' + colorVar + ');display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">' + initials + '</div>'
+      + '<span style="font-size:12.5px;font-weight:600;color:var(--text);flex:1">' + esc(name) + '</span>'
+      + '<span style="font-size:10.5px;font-weight:700;color:var(--' + colorVar + ');background:var(--' + colorLVar + ');border-radius:10px;padding:1px 8px">' + its.length + '</span>'
+      + '</div>'
+      + itemsHtml
+      + (moreCount ? '<div style="font-size:10.5px;color:var(--text3);padding-left:32px">+' + moreCount + ' more</div>' : '')
+      + '</div>';
+  }).join('');
+}
+
+async function loadDueItemsForDash(branch, wk) {
+  const el = document.getElementById('dash-due-list');
+  const countEl = document.getElementById('dash-due-count');
+  if (!el) return;
+  const today = new Date().toISOString().split('T')[0];
+  try {
+    // Single-field query (weekStart equality) — safe, no composite index needed.
+    const snap = await db.collection('weekly_items').where('weekStart','==',wk).get();
+    const dueDocs = snap.docs
+      .map(d => ({ id: d.id, it: d.data() }))
+      .filter(({it}) => (it.status === 'pending' || it.status === 'in_progress')
+        && it.deadline && it.deadline >= today
+        && (!branch || it.branch === branch))
+      .map(({id, it}) => ({ id, it, sub: it.deadline === today ? 'Today' : fmtDate(it.deadline) }));
+
+    if (countEl) countEl.textContent = dueDocs.length ? '(' + dueDocs.length + ')' : '';
+    el.innerHTML = dueDocs.length
+      ? swlTeamBreakdownHtml(dueDocs, 'info', 'info-l')
+      : '<div class="empty" style="font-size:12px">Nothing due this week.</div>';
+  } catch(e) {
+    el.innerHTML = '<div class="empty" style="font-size:12px">Could not load.</div>';
+  }
 }
 
 async function loadCarryoverForDash(branch) {
@@ -4022,42 +4078,37 @@ async function renderItems() {
   const wk = weekKey(CW);
   const isMgr = ROLES[CD.role]?.isManager || CD.role === 'admin';
   ca.innerHTML = '<div class="empty">Loading…</div>';
+  _itemsCurrentFilter = 'all'; // reset on every fresh render — a prior visit's filter shouldn't silently persist
 
   // For employees: also load their overdue/pending items from prior weeks
   // so they can actually mark them complete
   let q = db.collection('weekly_items').where('weekStart','==',wk);
   if (branch) q = q.where('branch','==',branch);
 
-  // For employees: load their own items from the last quarter (matches the
-  // score-decay window, and My Grading's overdue/missed rows link here, so
-  // this needs to reach as far back as anything that can still affect the
-  // score). Shows recently completed items AND lets them resolve overdue ones.
-  // For managers: load the whole branch's items from the last quarter so
-  // overdue backlog and how it was resolved is visible team-wide, not just
-  // for the current week.
+  // For employees: load every one of their own items, not just the current
+  // week's. For managers: load the whole branch's items. No date cutoff here
+  // — a carry-over item can genuinely be a long-running, months-old piece of
+  // unresolved work (e.g. an annual budget item) and needs to stay visible
+  // and actionable until it's actually resolved, not silently disappear.
+  // (The 90-day decay window in swlScoreOneUser is a separate, deliberate
+  // rule that only affects *scoring* — it should never make an item
+  // invisible on this operational screen.)
   // Each query below uses only a single filter — combining an equality filter
-  // (owner/ownerName/branch) with a range filter (weekStart>=quarterAgo) in
-  // the same query needs a manual Firestore composite index we can't assume
-  // exists, so the weekStart cutoff is applied client-side instead.
+  // (owner/ownerName/branch) with anything else risks needing a manual
+  // Firestore composite index we can't assume exists.
   let priorSnap = null, priorSnapName = null, priorSnapBranch = null;
-  const quarterAgo = new Date(Date.now() - 90*86400000).toISOString().split('T')[0];
   if (!isMgr) {
     try {
-      const snap = await db.collection('weekly_items').where('owner','==',CU.uid).get();
-      priorSnap = { docs: snap.docs.filter(d => (d.data().weekStart||'') >= quarterAgo) };
+      priorSnap = await db.collection('weekly_items').where('owner','==',CU.uid).get();
     } catch(e) { priorSnap = null; }
     try {
-      const snap = await db.collection('weekly_items').where('ownerName','==',CD.name).get();
-      priorSnapName = { docs: snap.docs.filter(d => (d.data().weekStart||'') >= quarterAgo) };
+      priorSnapName = await db.collection('weekly_items').where('ownerName','==',CD.name).get();
     } catch(e) { priorSnapName = null; }
   } else {
     try {
-      if (branch) {
-        const snap = await db.collection('weekly_items').where('branch','==',branch).get();
-        priorSnapBranch = { docs: snap.docs.filter(d => (d.data().weekStart||'') >= quarterAgo) };
-      } else {
-        priorSnapBranch = await db.collection('weekly_items').where('weekStart','>=',quarterAgo).get();
-      }
+      priorSnapBranch = branch
+        ? await db.collection('weekly_items').where('branch','==',branch).get()
+        : await db.collection('weekly_items').get();
     } catch(e) { priorSnapBranch = null; }
   }
 
@@ -4121,6 +4172,9 @@ async function renderItems() {
           <div style="display:flex;gap:6px">
             ${['all','overdue','pending','not_completed'].map(f=>`<button class="btn sm" onclick="filterItems('${f}')">${f==='all'?'All':f==='overdue'?'⚠ Overdue':f==='pending'?'Pending':'Carry-over'}</button>`).join('')}
           </div>
+        </div>
+        <div style="padding:0 0 12px">
+          <input type="text" id="items-search" placeholder="Search by title or owner…" oninput="filterItemsBySearch(this.value)" style="width:100%;padding:8px 12px;border-radius:var(--r);border:1px solid var(--border2);font-size:13px;background:var(--surface);color:var(--text)">
         </div>
         <div id="items-list">
           ${items.length ? items.sort((a,b)=>priorities.indexOf(a.priority)-priorities.indexOf(b.priority)).map(renderItemCard).join('') : '<div class="empty"><span class="empty-icon">📋</span>No items this week.</div>'}
@@ -4205,7 +4259,8 @@ function renderItemCard(it) {
             : ' <span style="font-size:10px;background:rgba(251,191,36,.15);color:#FBBF24;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE LATE</span>')
       : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '');
 
-  return `<div class="item-row" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}">
+  const searchBlob = ((it.title||'') + ' ' + (it.ownerName||it.owner||'')).toLowerCase();
+  return `<div class="item-row" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}">
     <span class="priority-dot ${it.priority||'medium'}"></span>
     <div class="item-content">
       <div class="item-title">${esc(it.title)}${tag}</div>
@@ -4228,10 +4283,24 @@ function renderItemCard(it) {
   </div>`:''}`;
 }
 
+let _itemsCurrentFilter = 'all';
+
 function filterItems(f) {
+  _itemsCurrentFilter = f;
+  applyItemsFilters();
+}
+
+function filterItemsBySearch(query) {
+  applyItemsFilters(query);
+}
+
+function applyItemsFilters(searchOverride) {
+  const searchEl = document.getElementById('items-search');
+  const q = (searchOverride !== undefined ? searchOverride : (searchEl ? searchEl.value : '')).trim().toLowerCase();
   document.querySelectorAll('#items-list .item-row').forEach(row => {
-    const show = f==='all' || (f==='overdue' ? row.dataset.overdue==='1' : row.dataset.status===f);
-    row.style.display = show ? 'flex' : 'none';
+    const matchesFilter = _itemsCurrentFilter==='all' || (_itemsCurrentFilter==='overdue' ? row.dataset.overdue==='1' : row.dataset.status===_itemsCurrentFilter);
+    const matchesSearch = !q || (row.dataset.search||'').includes(q);
+    row.style.display = (matchesFilter && matchesSearch) ? 'flex' : 'none';
   });
 }
 
