@@ -4141,9 +4141,12 @@ async function renderItems() {
     if (priorSnap) addPrior(priorSnap.docs);
     if (priorSnapName) addPrior(priorSnapName.docs);
   } else if (priorSnapBranch) {
-    // Merge branch-wide backlog: items still open past their deadline, or items
-    // that WERE overdue and have since been resolved late / not completed / canceled.
-    // completed_on_time items from prior weeks are left out — nothing to follow up on.
+    // Merge every branch-wide prior-week item — including completed_on_time
+    // ones. They used to be excluded entirely ("nothing to follow up on"),
+    // but that made a finished item unfindable anywhere, even via search, once
+    // it dropped out of the current week. They're tagged _default_hidden so
+    // they stay out of the default view (no clutter) but still show up the
+    // moment someone searches for them.
     const currentIds = new Set(items.map(i=>i.id));
     priorSnapBranch.docs.forEach(d => {
       const it = {id:d.id,...d.data()};
@@ -4151,12 +4154,14 @@ async function renderItems() {
       const isPastDeadline = it.deadline && it.deadline < today;
       const isOpenOverdue = (it.status === 'pending' || it.status === 'in_progress') && isPastDeadline;
       const wasResolvedNotOnTime = ['completed_late','not_completed','canceled_by_client'].includes(it.status);
-      if (isOpenOverdue || wasResolvedNotOnTime) {
+      const wasCompletedOnTime = it.status === 'completed_on_time';
+      if (isOpenOverdue || wasResolvedNotOnTime || wasCompletedOnTime) {
         items.push({
           ...it,
           _prior_week: true,
           _overdue_prior: isOpenOverdue,
-          _resolved_late: wasResolvedNotOnTime
+          _resolved_late: wasResolvedNotOnTime,
+          _default_hidden: wasCompletedOnTime
         });
         currentIds.add(it.id);
       }
@@ -4260,7 +4265,7 @@ function renderItemCard(it) {
       : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '');
 
   const searchBlob = ((it.title||'') + ' ' + (it.ownerName||it.owner||'')).toLowerCase();
-  return `<div class="item-row" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}">
+  return `<div class="item-row" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}" data-default-hidden="${it._default_hidden?'1':'0'}">
     <span class="priority-dot ${it.priority||'medium'}"></span>
     <div class="item-content">
       <div class="item-title">${esc(it.title)}${tag}</div>
@@ -4300,7 +4305,11 @@ function applyItemsFilters(searchOverride) {
   document.querySelectorAll('#items-list .item-row').forEach(row => {
     const matchesFilter = _itemsCurrentFilter==='all' || (_itemsCurrentFilter==='overdue' ? row.dataset.overdue==='1' : row.dataset.status===_itemsCurrentFilter);
     const matchesSearch = !q || (row.dataset.search||'').includes(q);
-    row.style.display = (matchesFilter && matchesSearch) ? 'flex' : 'none';
+    // Completed items merged in purely so search can find them stay hidden
+    // by default (no clutter) — but the moment there's an active search,
+    // let them show like anything else.
+    const hiddenByDefault = row.dataset.defaultHidden === '1' && !q;
+    row.style.display = (matchesFilter && matchesSearch && !hiddenByDefault) ? 'flex' : 'none';
   });
 }
 
@@ -6621,7 +6630,7 @@ async function renderInbox() {
       if (!it.assignedBy || it.assignedBy === CU.uid) return; // skip self-assigned / legacy items
       feed.push({
         kind: 'assigned', ts: it.createdAt?.toMillis?.() || 0, unread: it.seen === false,
-        icon: '📌', color: '#60A5FA',
+        icon: '📌', color: '#60A5FA', itemId: d.id, filterBucket: 'all',
         kicker: 'New task · from ' + esc(it.assignedByName||'Manager'),
         msg: '<b>' + esc(it.title) + '</b> — due ' + fmtDate(it.deadline) + (it.priority ? ' · ' + it.priority.charAt(0).toUpperCase()+it.priority.slice(1) + ' priority' : ''),
         markSeen: () => db.collection('weekly_items').doc(d.id).update({seen: true})
@@ -6650,7 +6659,7 @@ async function renderInbox() {
         const daysOverdue = swlDaysBetween(it.deadline, today);
         feed.push({
           kind: 'overdue', ts: it.deadline ? Date.parse(it.deadline) : 0, unread: true,
-          icon: '⚠️', color: '#F87171', itemId: d.id,
+          icon: '⚠️', color: '#F87171', itemId: d.id, filterBucket: 'overdue',
           kicker: 'Overdue · ' + esc(it.ownerName||it.owner||''),
           msg: '<b>' + esc(it.title) + '</b> — was due ' + fmtDate(it.deadline) + ' (' + daysOverdue + ' day' + (daysOverdue!==1?'s':'') + ' overdue)',
           markSeen: () => Promise.resolve()
@@ -6689,7 +6698,7 @@ function renderInboxFeed(filter) {
     + filters.map(f => '<button class="btn sm' + (filter===f.k?' primary':'') + '" style="border-radius:20px" onclick="renderInboxFeed(\'' + f.k + '\')">' + f.l + '</button>').join('')
     + '</div>'
     + (shown.length ? shown.map(f =>
-        '<div ' + (f.itemId ? 'onclick="swlGoToScoredItem(\''+f.itemId+'\',\'overdue\')" title="Open in Weekly Items"' : '') + ' style="display:flex;gap:12px;padding:14px;border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px;' + (f.itemId ? 'cursor:pointer;' : '')
+        '<div ' + (f.itemId ? 'onclick="swlGoToScoredItem(\''+f.itemId+'\',\''+(f.filterBucket||'all')+'\')" title="Open in Weekly Items"' : '') + ' style="display:flex;gap:12px;padding:14px;border:1px solid var(--border);border-radius:var(--rl);margin-bottom:8px;' + (f.itemId ? 'cursor:pointer;' : '')
         + (f.unread ? 'border-left:3px solid ' + f.color + ';background:var(--surface2)' : 'background:var(--surface)') + '">'
         + '<span style="font-size:20px;flex-shrink:0">' + f.icon + '</span>'
         + '<div style="flex:1;min-width:0"><div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:' + f.color + ';margin-bottom:2px">' + f.kicker + '</div>'
