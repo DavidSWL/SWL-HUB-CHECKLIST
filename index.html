@@ -4123,10 +4123,13 @@ function renderItemCard(it) {
          ${it.status==='completed_on_time'||it.status==='completed_late'?'✓ Done — Update':'📝 Update Status'}
        </button>`
     : isMgr
-    ? `<select class="btn sm" style="cursor:pointer" onchange="updateItemStatusWithLog('${it.id}',this.value)">
+    ? `<button class="btn sm" onclick="openEmployeeUpdateModal('${it.id}','${esc(it.title)}','${it.deadline||''}','${it.status||'pending'}')" style="background:rgba(96,165,250,.12);color:#60A5FA;border-color:rgba(96,165,250,.25)">
+         ${it.status==='completed_on_time'||it.status==='completed_late'?'✓ Done — Update':'✅ Mark Complete'}
+       </button>
+       <select class="btn sm" style="cursor:pointer" title="Quick status change" onchange="updateItemStatusWithLog('${it.id}',this.value)">
         ${allStatuses.map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]||s}</option>`).join('')}
        </select>
-       <button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}')">Update</button>`
+       <button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}')">Note / Deadline</button>`
     : `${statusBadge}`;
 
   // Show deadline — employees cannot edit it after creation
