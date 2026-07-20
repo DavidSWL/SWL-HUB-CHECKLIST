@@ -935,18 +935,14 @@ function buildSidebar() {
 
   if (isManager || isExec) {
     more += '<div class="more-dd-label">Planning</div>';
+    more += navBtn('items','Weekly Items','✅');
     more += navBtn('monday-recap','Monday Planning Overview','📆');
     more += navBtn('my-history','My History','📚');
     more += navBtn('summary','Monday Recap','📄');
     more += navBtn('friday-summary','Friday Recap','📊');
   }
-  if (isExec) {
-    more += '<div class="more-dd-label">Executive</div>';
-    more += navBtn('items','Weekly Items','✅');
-  }
   if (role === 'admin') {
     more += '<div class="more-dd-label">Admin</div>';
-    more += navBtn('items','Weekly Items','✅');
     more += navBtn('admin','Admin Panel','⚙');
   }
 
@@ -1175,6 +1171,7 @@ async function renderDashboard() {
       + "<div class='ob-text' style='font-size:12px;color:var(--danger);font-weight:600;flex:1'>Loading…</div>"
       + "<span style='font-size:11px;color:var(--danger);font-weight:700;white-space:nowrap'>Review &#8594;</span>"
       + "</div>"
+      + "<div id='dash-overdue-list' style='margin-bottom:14px'></div>"
       + "<div class='stats-grid' style='margin-bottom:14px'>"
       + "<div class='stat-card " + (isOC?"oc-stat":isLA?"la-stat":"ok-stat") + "' style='border-top:2.5px solid " + accent + ";cursor:pointer' data-nav='reports' title='View team submission status'><div class='stat-num'>" + sc + "/" + tc + "</div><div class='stat-lbl'>Submitted</div></div>"
       + "<div class='stat-card warn-stat' style='cursor:pointer' data-nav='reports' title='View team submission status'><div class='stat-num'>" + pc + "</div><div class='stat-lbl'>Pending</div></div>"
@@ -1704,13 +1701,54 @@ async function loadOverdueBannerForDash(branch) {
       db.collection('weekly_items').where('status','==','in_progress').get()
     ]);
     const isOverdue = (d) => { const it = d.data(); return it.deadline && it.deadline < today && (!branch || it.branch === branch); };
-    const count = pendingSnap.docs.filter(isOverdue).length + progressSnap.docs.filter(isOverdue).length;
+    const overdueDocs = [...pendingSnap.docs, ...progressSnap.docs].filter(isOverdue);
+    const count = overdueDocs.length;
     if (count > 0) {
       el.style.display = 'flex';
       const textEl = el.querySelector('.ob-text');
       if (textEl) textEl.textContent = count + ' overdue item' + (count!==1?'s':'') + ' across your team — click to review and follow up.';
     } else {
       el.style.display = 'none';
+    }
+
+    // Inline preview, broken down by team member — a flat item list doesn't
+    // answer "who's behind," which is what a manager actually needs to act on.
+    const listEl = document.getElementById('dash-overdue-list');
+    if (listEl) {
+      if (!count) {
+        listEl.innerHTML = '';
+      } else {
+        const groups = {};
+        overdueDocs.forEach(d => {
+          const it = d.data();
+          const key = it.ownerName || it.owner || 'Unassigned';
+          if (!groups[key]) groups[key] = [];
+          groups[key].push({ id: d.id, ...it });
+        });
+        Object.values(groups).forEach(its => its.sort((a,b) => (a.deadline||'').localeCompare(b.deadline||'')));
+        const groupEntries = Object.entries(groups).sort((a,b) => b[1].length - a[1].length);
+
+        listEl.innerHTML = groupEntries.map(([name, its]) => {
+          const initials = esc((name||'?').trim().split(/\s+/).map(n=>n[0]||'').slice(0,2).join('').toUpperCase());
+          const itemsHtml = its.slice(0,3).map(it => {
+            const daysOverdue = swlDaysBetween(it.deadline, today);
+            return '<div onclick="event.stopPropagation();swlGoToScoredItem(\'' + it.id + '\',\'overdue\')" style="display:flex;align-items:center;gap:8px;padding:4px 0 4px 32px;cursor:pointer">'
+              + '<span style="font-size:12px;color:var(--text2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(it.title) + '</span>'
+              + '<span style="font-size:10.5px;font-weight:700;color:var(--danger);flex-shrink:0">' + daysOverdue + 'd</span>'
+              + '</div>';
+          }).join('');
+          const moreCount = its.length > 3 ? its.length - 3 : 0;
+          return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">'
+            + '<div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="swlGoToScoredItem(\'' + its[0].id + '\',\'overdue\')">'
+            + '<div style="width:22px;height:22px;border-radius:50%;background:var(--danger-l);color:var(--danger);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">' + initials + '</div>'
+            + '<span style="font-size:12.5px;font-weight:600;color:var(--text);flex:1">' + esc(name) + '</span>'
+            + '<span style="font-size:10.5px;font-weight:700;color:var(--danger);background:var(--danger-l);border-radius:10px;padding:1px 8px">' + its.length + '</span>'
+            + '</div>'
+            + itemsHtml
+            + (moreCount ? '<div style="font-size:10.5px;color:var(--text3);padding-left:32px">+' + moreCount + ' more</div>' : '')
+            + '</div>';
+        }).join('');
+      }
     }
   } catch(e) { el.style.display = 'none'; }
 }
