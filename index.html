@@ -4175,7 +4175,7 @@ async function renderItems() {
         <div class="card-header">
           <div class="card-title">Weekly Items — ${fmtWeek(CW)}</div>
           <div style="display:flex;gap:6px">
-            ${['all','overdue','pending','not_completed'].map(f=>`<button class="btn sm" onclick="filterItems('${f}')">${f==='all'?'All':f==='overdue'?'⚠ Overdue':f==='pending'?'Pending':'Carry-over'}</button>`).join('')}
+            ${['all','overdue','pending','completed','not_completed'].map(f=>`<button class="btn sm" onclick="filterItems('${f}')">${f==='all'?'All':f==='overdue'?'⚠ Overdue':f==='pending'?'Pending':f==='completed'?'✓ Completed':'Carry-over'}</button>`).join('')}
           </div>
         </div>
         <div style="padding:0 0 12px">
@@ -4303,12 +4303,17 @@ function applyItemsFilters(searchOverride) {
   const searchEl = document.getElementById('items-search');
   const q = (searchOverride !== undefined ? searchOverride : (searchEl ? searchEl.value : '')).trim().toLowerCase();
   document.querySelectorAll('#items-list .item-row').forEach(row => {
-    const matchesFilter = _itemsCurrentFilter==='all' || (_itemsCurrentFilter==='overdue' ? row.dataset.overdue==='1' : row.dataset.status===_itemsCurrentFilter);
+    const isCompletedStatus = row.dataset.status === 'completed_on_time' || row.dataset.status === 'completed_late';
+    const matchesFilter = _itemsCurrentFilter==='all' ? true
+      : _itemsCurrentFilter==='overdue' ? row.dataset.overdue==='1'
+      : _itemsCurrentFilter==='completed' ? isCompletedStatus
+      : row.dataset.status===_itemsCurrentFilter;
     const matchesSearch = !q || (row.dataset.search||'').includes(q);
-    // Completed items merged in purely so search can find them stay hidden
-    // by default (no clutter) — but the moment there's an active search,
-    // let them show like anything else.
-    const hiddenByDefault = row.dataset.defaultHidden === '1' && !q;
+    // Completed items merged in purely so search/audit can find them stay
+    // hidden by default (no clutter) — but showing once there's an active
+    // search, or the Completed filter itself is selected, which is exactly
+    // asking to review them (e.g. auditing what's really been followed up on).
+    const hiddenByDefault = row.dataset.defaultHidden === '1' && !q && _itemsCurrentFilter !== 'completed';
     row.style.display = (matchesFilter && matchesSearch && !hiddenByDefault) ? 'flex' : 'none';
   });
 }
