@@ -300,9 +300,17 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 ═══════════════════════════════════════ */
 .item-row{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
 .item-row:last-child{border:none;padding-bottom:0}
-.wi-item{border:1px solid var(--border);border-radius:var(--rl);background:var(--surface);padding:12px 14px;margin-bottom:10px}
+.wi-tray{background:var(--surface3);padding:14px;border-radius:var(--rxl);border:1px solid var(--border)}
+.wi-item{border:1px solid var(--border);border-left:4px solid var(--border2);border-radius:var(--r) var(--rl) var(--rl) var(--r);background:var(--surface);padding:12px 14px 12px 12px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.05)}
 .wi-item:last-child{margin-bottom:0}
-#items-list .wi-item:nth-child(even){background:var(--surface2)}
+.wi-item.pr-critical{border-left-color:var(--critical)}
+.wi-item.pr-high{border-left-color:var(--danger)}
+.wi-item.pr-medium{border-left-color:var(--warn)}
+.wi-item.pr-low{border-left-color:var(--success)}
+.wi-legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--rl);padding:8px 14px;margin-bottom:12px}
+.wi-legend-label{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)}
+.wi-legend-item{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text2)}
+.wi-legend-swatch{width:9px;height:14px;border-radius:2px;flex-shrink:0}
 .item-content{flex:1;min-width:0}
 .item-title{font-size:13px;font-weight:500;color:var(--text);margin-bottom:2px}
 .item-meta{font-size:11px;color:var(--text3)}
@@ -4265,7 +4273,14 @@ async function renderItems() {
         <div style="padding:0 0 12px">
           <input type="text" id="items-search" placeholder="Search by title or owner…" oninput="filterItemsBySearch(this.value)" style="width:100%;padding:8px 12px;border-radius:var(--r);border:1px solid var(--border2);font-size:13px;background:var(--surface);color:var(--text)">
         </div>
-        <div id="items-list">
+        <div class="wi-legend">
+          <span class="wi-legend-label">Priority</span>
+          <span class="wi-legend-item"><span class="wi-legend-swatch" style="background:var(--critical)"></span>Critical</span>
+          <span class="wi-legend-item"><span class="wi-legend-swatch" style="background:var(--danger)"></span>High</span>
+          <span class="wi-legend-item"><span class="wi-legend-swatch" style="background:var(--warn)"></span>Medium</span>
+          <span class="wi-legend-item"><span class="wi-legend-swatch" style="background:var(--success)"></span>Low</span>
+        </div>
+        <div id="items-list" class="wi-tray">
           ${items.length ? items.sort((a,b)=>priorities.indexOf(a.priority)-priorities.indexOf(b.priority)).map(renderItemCard).join('') : '<div class="empty"><span class="empty-icon">📋</span>No items this week.</div>'}
         </div>
       </div>
@@ -4350,9 +4365,8 @@ function renderItemCard(it) {
       : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '');
 
   const searchBlob = ((it.title||'') + ' ' + (it.ownerName||it.owner||'')).toLowerCase();
-  return `<div class="wi-item" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}" data-default-hidden="${it._default_hidden?'1':'0'}">
+  return `<div class="wi-item pr-${it.priority||'medium'}" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}" data-default-hidden="${it._default_hidden?'1':'0'}">
   <div class="item-row" style="border:none;padding:0">
-    <span class="priority-dot ${it.priority||'medium'}"></span>
     <div class="item-content">
       <div class="item-title">${esc(it.title)}${tag}</div>
       <div class="item-meta">${esc(it.ownerName||it.owner)} · ${deadlineDisplay}${isOverdueNow ? ' — <span style="color:var(--danger)">past deadline</span>' : (it._prior_week ? ' — <span style="color:var(--text3)">prior week</span>' : '')}</div>
