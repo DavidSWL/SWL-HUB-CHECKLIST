@@ -3346,6 +3346,7 @@ function buildScoreReportHtml(p, idPrefix) {
   const flagItems  = [...(p.overdueItems||[]), ...(p.missedItems||[])];
   const maxPushed  = flagItems.reduce((m,i) => Math.max(m, i.pushedBackCount||0), 0);
   const pushedItems = flagItems.filter(i => (i.pushedBackCount||0) >= 3);
+  const maxDaysOverdue = (p.overdueItems||[]).reduce((m,i) => Math.max(m, i.daysOverdue||0), 0);
 
   let mainConcern, concernLevel;
   if (p.noActivity) {
@@ -3359,6 +3360,14 @@ function buildScoreReportHtml(p, idPrefix) {
   } else if ((p.missRate||0) >= 30) {
     mainConcern = 'Misses '+p.missRate+'% of everything that’s ever been due (late, missed, or still overdue). That’s the biggest lever to improve right now.';
     concernLevel = 'high';
+  } else if ((p.overdue||0) > 0) {
+    // Score/reliability can look fine on paper (e.g. a few items overdue by only a day or two)
+    // while work is still visibly sitting open — the summary should never say "no concerns"
+    // in the same breath as an overdue-items list, even if the number itself is small.
+    mainConcern = p.overdue === 1
+      ? '1 item is currently overdue ('+maxDaysOverdue+'d past its deadline, see Overdue Items below). Worth confirming it gets closed out soon — the score isn’t dragged down much yet, but it will be the longer it sits.'
+      : p.overdue+' items are currently overdue (up to '+maxDaysOverdue+'d past deadline, see Overdue Items below). Worth confirming these get closed out soon — the score isn’t dragged down much yet, but it will be the longer they sit.';
+    concernLevel = 'medium';
   } else if (weakestPillar.pct < 60) {
     mainConcern = '“'+weakestPillar.label+'” is the weakest of the three at '+weakestPillar.pct+'%. That’s the best place to focus improvement.';
     concernLevel = 'medium';
