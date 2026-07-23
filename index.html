@@ -536,6 +536,23 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .content-area.theme-white .badge.success{background:#EAF3DE!important;color:#27500A!important;border-color:#C0DD97!important}
 .content-area.theme-white .badge.warn{background:#FFFBEB!important;color:#633806!important;border-color:#FCD34D!important}
 .content-area.theme-white .fg input,.content-area.theme-white .fg select,.content-area.theme-white .fg textarea{background:#fff!important;border-color:#ddd!important;color:#111!important}
+/* Dark-mode ("Grey") values for the token-based design system — everything
+   built since the light-default flip (Dashboard, Reports, My Grading,
+   Inbox, Weekly Items, audit trail, score summaries) reads --text/--surface/
+   --border directly with no dark variant, so Grey mode left it rendering
+   near-black text on a near-black background. This redefines those tokens
+   only when .theme-white is absent; the legacy hardcoded overrides above
+   are untouched. */
+.content-area:not(.theme-white){
+  --bg:#0F1512; --surface:#1B231D; --surface2:#212B22; --surface3:#26312A;
+  --border:#2E3A31; --border2:#3A4A3F;
+  --text:#EAF2EC; --text2:#B9CBC0; --text3:#7E9689; --text4:#5A6E63;
+  --success:#34D399; --success-l:rgba(52,211,153,.14);
+  --warn:#FBBF24; --warn-l:rgba(251,191,36,.14);
+  --danger:#F87171; --danger-l:rgba(248,113,113,.14);
+  --info:#60A5FA; --info-l:rgba(96,165,250,.14);
+  --critical:#A78BFA; --critical-l:rgba(167,139,250,.14);
+}
 /* Top nav bar structure (formerly a left sidebar — kept the class names
    so buildSidebar()/applySidebarTheme() didn't need a full rewrite) */
 .sidebar{position:relative!important;overflow:visible!important}
