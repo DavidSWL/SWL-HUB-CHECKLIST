@@ -300,6 +300,8 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 ═══════════════════════════════════════ */
 .item-row{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
 .item-row:last-child{border:none;padding-bottom:0}
+.wi-item{border:1px solid var(--border);border-radius:var(--rl);background:var(--surface);padding:12px 14px;margin-bottom:10px}
+.wi-item:last-child{margin-bottom:0}
 .item-content{flex:1;min-width:0}
 .item-title{font-size:13px;font-weight:500;color:var(--text);margin-bottom:2px}
 .item-meta{font-size:11px;color:var(--text3)}
@@ -4276,7 +4278,7 @@ async function renderItems() {
   if (window._pendingItemsHighlightId) {
     const hid = window._pendingItemsHighlightId;
     window._pendingItemsHighlightId = null;
-    const row = document.querySelector('#items-list .item-row[data-id="' + hid + '"]');
+    const row = document.querySelector('#items-list .wi-item[data-id="' + hid + '"]');
     if (row) {
       row.scrollIntoView({behavior:'smooth', block:'center'});
       row.style.transition = 'background-color .3s';
@@ -4330,7 +4332,8 @@ function renderItemCard(it) {
       : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '');
 
   const searchBlob = ((it.title||'') + ' ' + (it.ownerName||it.owner||'')).toLowerCase();
-  return `<div class="item-row" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}" data-default-hidden="${it._default_hidden?'1':'0'}">
+  return `<div class="wi-item" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}" data-default-hidden="${it._default_hidden?'1':'0'}">
+  <div class="item-row" style="border:none;padding:0">
     <span class="priority-dot ${it.priority||'medium'}"></span>
     <div class="item-content">
       <div class="item-title">${esc(it.title)}${tag}</div>
@@ -4348,7 +4351,8 @@ function renderItemCard(it) {
     ${it.managerUpdate.assistanceLevel&&it.managerUpdate.assistanceLevel!=='none'?` · <span style="color:var(--danger);font-weight:600">⚠ ${it.managerUpdate.assistanceLevel==='upper_management'?'Upper mgmt':'Branch mgr'} assistance needed</span>`:''}
     <span style="color:var(--text3);margin-left:6px">${it.managerUpdate.ts||''}</span>
   </div>`:''}
-  ${(isMgr||isExecViewer) ? buildAuditTrailHtml(it) : ''}`;
+  ${(isMgr||isExecViewer) ? buildAuditTrailHtml(it) : ''}
+  </div>`;
 }
 
 function swlOrdinal(n) {
@@ -4406,9 +4410,9 @@ function buildAuditTrailHtml(it) {
       + '</tr>';
   }).join('');
 
-  return '<div style="margin-top:8px">'
+  return '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">'
     + '<div onclick="var b=document.getElementById(\'' + boxId + '\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';" style="cursor:pointer;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">&#128203; Audit Trail (' + events.length + ') &#9662;</div>'
-    + '<div id="' + boxId + '" style="display:none;margin-top:6px;overflow-x:auto">'
+    + '<div id="' + boxId + '" style="display:none;margin-top:8px;overflow-x:auto;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r)">'
     + '<table style="width:100%;border-collapse:collapse"><tbody>' + rowsHtml + '</tbody></table>'
     + '</div>'
     + '</div>';
@@ -4428,7 +4432,7 @@ function filterItemsBySearch(query) {
 function applyItemsFilters(searchOverride) {
   const searchEl = document.getElementById('items-search');
   const q = (searchOverride !== undefined ? searchOverride : (searchEl ? searchEl.value : '')).trim().toLowerCase();
-  document.querySelectorAll('#items-list .item-row').forEach(row => {
+  document.querySelectorAll('#items-list .wi-item').forEach(row => {
     const isCompletedStatus = row.dataset.status === 'completed_on_time' || row.dataset.status === 'completed_late';
     const matchesFilter = _itemsCurrentFilter==='all' ? true
       : _itemsCurrentFilter==='overdue' ? row.dataset.overdue==='1'
