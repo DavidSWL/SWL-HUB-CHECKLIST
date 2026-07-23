@@ -311,6 +311,19 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .wi-legend-label{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)}
 .wi-legend-item{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text2)}
 .wi-legend-swatch{width:9px;height:14px;border-radius:2px;flex-shrink:0}
+.wi-roster-label{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px}
+.wi-roster{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.wi-roster-chip{display:flex;align-items:center;gap:6px;flex-shrink:0;padding:4px 10px 4px 4px;border-radius:20px;border:1px solid var(--border2);background:var(--surface);cursor:pointer;transition:.12s}
+.wi-roster-chip:hover{border-color:var(--text3)}
+.wi-roster-chip.active{background:var(--text);border-color:var(--text)}
+.wi-roster-chip.active .wi-roster-name{color:var(--surface)}
+.wi-roster-chip.active .wi-roster-count{color:var(--surface)}
+.wi-roster-avatar{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:700;color:#fff;flex-shrink:0}
+.wi-roster-name{font-size:10.5px;font-weight:600;color:var(--text);white-space:nowrap}
+.wi-roster-count{font-size:9px;color:var(--text3);margin-left:1px}
+.wi-roster-branch{font-size:7.5px;font-weight:700;padding:1px 4px;border-radius:5px;margin-left:3px;text-transform:uppercase}
+.wi-roster-branch.oc{background:var(--oc-l);color:var(--oc2)}
+.wi-roster-branch.la{background:var(--la-l);color:var(--la2)}
 .item-content{flex:1;min-width:0}
 .item-title{font-size:13px;font-weight:500;color:var(--text);margin-bottom:2px}
 .item-meta{font-size:11px;color:var(--text3)}
@@ -2430,6 +2443,47 @@ async function saveManagerCarryoverUpdate(id) {
   }
 }
 
+function openFollowUpModal(id, title, ownerName) {
+  const ex = document.getElementById('followup-modal');
+  if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'followup-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = `
+    <div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:440px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:14px;font-weight:700">🔔 Send Follow-Up</div>
+        <button onclick="document.getElementById('followup-modal').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button>
+      </div>
+      <div style="font-size:12px;padding:8px 10px;background:var(--warn-l);border-radius:var(--r);margin-bottom:14px;font-weight:500">${esc(title)}</div>
+      <div class="fg"><label>Message to ${esc(ownerName||'employee')}</label>
+        <textarea id="fu-note" rows="3">Follow-up needed on this — please update when you get a chance.</textarea></div>
+      <div style="font-size:11px;color:var(--text3);margin-top:6px">Shows up in their Inbox right away, and stays on this item's audit trail.</div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn primary" onclick="sendFollowUp('${id}')">Send</button>
+        <button class="btn" onclick="document.getElementById('followup-modal').remove()">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(m);
+}
+
+async function sendFollowUp(id) {
+  const noteEl = document.getElementById('fu-note');
+  const note = noteEl ? noteEl.value.trim() : '';
+  if (!note) { toast('Please add a message', 'err'); return; }
+  try {
+    await db.collection('weekly_items').doc(id).update({
+      followUp: { by: CD.name, byRole: CD.role, note, ts: new Date().toISOString(), seen: false }
+    });
+    const m = document.getElementById('followup-modal');
+    if (m) m.remove();
+    toast('✓ Follow-up sent');
+    renderItems();
+  } catch(e) {
+    toast('Could not send — ' + e.message, 'err');
+  }
+}
+
 // Monday Recap
 async function renderMondayRecap() {
   const ca = document.getElementById('content-area');
@@ -4171,6 +4225,7 @@ async function renderItems() {
   const isMgr = ROLES[CD.role]?.isManager || CD.role === 'admin';
   ca.innerHTML = '<div class="empty">Loading…</div>';
   _itemsCurrentFilter = 'all'; // reset on every fresh render — a prior visit's filter shouldn't silently persist
+  _itemsCurrentPerson = '';
 
   // For employees: also load their overdue/pending items from prior weeks
   // so they can actually mark them complete
@@ -4270,6 +4325,7 @@ async function renderItems() {
             ${['all','overdue','pending','completed','not_completed'].map(f=>`<button class="btn sm" onclick="filterItems('${f}')">${f==='all'?'All':f==='overdue'?'⚠ Overdue':f==='pending'?'Pending':f==='completed'?'✓ Completed':'Carry-over'}</button>`).join('')}
           </div>
         </div>
+        ${buildTeamRosterHtml(items, isMgr)}
         <div style="padding:0 0 12px">
           <input type="text" id="items-search" placeholder="Search by title or owner…" oninput="filterItemsBySearch(this.value)" style="width:100%;padding:8px 12px;border-radius:var(--r);border:1px solid var(--border2);font-size:13px;background:var(--surface);color:var(--text)">
         </div>
@@ -4343,7 +4399,8 @@ function renderItemCard(it) {
        <select class="btn sm" style="cursor:pointer" title="Quick status change" onchange="updateItemStatusWithLog('${it.id}',this.value)">
         ${allStatuses.map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]||s}</option>`).join('')}
        </select>
-       <button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}')">Note / Deadline</button>`
+       <button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}')">Note / Deadline</button>
+       <button class="btn sm" style="background:var(--warn-l);color:var(--warn);border-color:#FDE68A" onclick="openFollowUpModal('${it.id}','${esc(it.title)}','${esc(it.ownerName||it.owner||'')}')">🔔 Follow Up</button>`
     : `${statusBadge}`;
 
   // Show deadline — employees cannot edit it after creation
@@ -4365,7 +4422,7 @@ function renderItemCard(it) {
       : (it._prior_week && (it.status==='completed_on_time'||it.status==='completed_late') ? ' <span style="font-size:10px;background:rgba(34,197,94,.15);color:#4ade80;padding:1px 6px;border-radius:8px;font-weight:600;margin-left:4px">DONE</span>' : '');
 
   const searchBlob = ((it.title||'') + ' ' + (it.ownerName||it.owner||'')).toLowerCase();
-  return `<div class="wi-item pr-${it.priority||'medium'}" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}" data-default-hidden="${it._default_hidden?'1':'0'}">
+  return `<div class="wi-item pr-${it.priority||'medium'}" data-status="${it.status||'pending'}" data-overdue="${isOverdueNow?'1':'0'}" data-id="${it.id}" data-search="${esc(searchBlob)}" data-default-hidden="${it._default_hidden?'1':'0'}" data-owner-name="${esc((it.ownerName||it.owner||'').trim().toLowerCase())}">
   <div class="item-row" style="border:none;padding:0">
     <div class="item-content">
       <div class="item-title">${esc(it.title)}${tag}</div>
@@ -4382,6 +4439,10 @@ function renderItemCard(it) {
     ${it.managerUpdate.newDeadline?` · New deadline: <strong>${fmtDate(it.managerUpdate.newDeadline)}</strong>`:''}
     ${it.managerUpdate.assistanceLevel&&it.managerUpdate.assistanceLevel!=='none'?` · <span style="color:var(--danger);font-weight:600">⚠ ${it.managerUpdate.assistanceLevel==='upper_management'?'Upper mgmt':'Branch mgr'} assistance needed</span>`:''}
     <span style="color:var(--text3);margin-left:6px">${it.managerUpdate.ts||''}</span>
+  </div>`:''}
+  ${it.followUp?`<div style="margin-top:8px;padding:8px 10px;background:var(--warn-l);border-radius:var(--r);font-size:11px;border-left:3px solid var(--warn)">
+    <strong>🔔 Follow-up from ${esc(it.followUp.by||'')}:</strong> ${esc(it.followUp.note||'')}
+    <span style="color:var(--text3);margin-left:6px">${fmtDate(it.followUp.ts)}${it.followUp.seen===false?' · <span style="color:var(--warn);font-weight:700">unread</span>':''}</span>
   </div>`:''}
   ${(isMgr||isExecViewer) ? buildAuditTrailHtml(it) : ''}
   </div>`;
@@ -4426,11 +4487,18 @@ function buildAuditTrailHtml(it) {
       detail: esc(log.toLabel || log.to || '') + ' by ' + esc(log.by||'unknown') + (log.role ? ' (' + esc(ROLES[log.role]?.label || log.role) + ')' : '') + (log.note ? ' — ' + esc(log.note) : '')
     });
   });
+  if (it.followUp) {
+    const ms = it.followUp.ts ? Date.parse(it.followUp.ts) : 0;
+    events.push({
+      ts: ms || 0, type: 'followup', action: 'Follow-Up',
+      detail: esc(it.followUp.by||'unknown') + (it.followUp.byRole ? ' (' + esc(ROLES[it.followUp.byRole]?.label || it.followUp.byRole) + ')' : '') + ': ' + esc(it.followUp.note||'')
+    });
+  }
 
   if (!events.length) return '';
   events.sort((a,b) => b.ts - a.ts); // newest first
   const boxId = 'audit-' + it.id.replace(/[^a-zA-Z0-9]/g,'');
-  const dotColor = { create:'var(--info)', deadline:'var(--warn)', status:'var(--success)' };
+  const dotColor = { create:'var(--info)', deadline:'var(--warn)', status:'var(--success)', followup:'var(--warn)' };
   const rowsHtml = events.map(e => {
     const whenStr = e.ts
       ? new Date(e.ts).toLocaleDateString('en-US',{month:'short',day:'numeric'}) + '<br><span style="font-size:9.5px">' + new Date(e.ts).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) + '</span>'
@@ -4451,6 +4519,7 @@ function buildAuditTrailHtml(it) {
 }
 
 let _itemsCurrentFilter = 'all';
+let _itemsCurrentPerson = '';
 
 function filterItems(f) {
   _itemsCurrentFilter = f;
@@ -4476,8 +4545,41 @@ function applyItemsFilters(searchOverride) {
     // search, or the Completed filter itself is selected, which is exactly
     // asking to review them (e.g. auditing what's really been followed up on).
     const hiddenByDefault = row.dataset.defaultHidden === '1' && !q && _itemsCurrentFilter !== 'completed';
-    row.style.display = (matchesFilter && matchesSearch && !hiddenByDefault) ? 'flex' : 'none';
+    const matchesPerson = !_itemsCurrentPerson || row.dataset.ownerName === _itemsCurrentPerson;
+    row.style.display = (matchesFilter && matchesSearch && matchesPerson && !hiddenByDefault) ? 'block' : 'none';
   });
+}
+
+function filterItemsByPerson(name) {
+  _itemsCurrentPerson = (_itemsCurrentPerson === name) ? '' : name;
+  document.querySelectorAll('#wi-roster .wi-roster-chip').forEach(chip => {
+    chip.classList.toggle('active', chip.dataset.person === _itemsCurrentPerson);
+  });
+  applyItemsFilters();
+}
+
+function buildTeamRosterHtml(items, isMgr) {
+  const isAdminOrExec = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!isMgr && !isAdminOrExec) return '';
+  const branch = getUserBranch();
+  const people = TEAM.filter(t => t.role !== 'admin' && (isAdminOrExec ? true : t.branch === branch));
+  if (!people.length) return '';
+  const countFor = (name) => items.filter(it => (it.ownerName||it.owner||'').trim().toLowerCase() === name.trim().toLowerCase()).length;
+  const chips = ['<div class="wi-roster-chip active" data-person="" onclick="filterItemsByPerson(\'\')">'
+      + '<div class="wi-roster-avatar" style="background:var(--text3)">All</div>'
+      + '<span class="wi-roster-name">Everyone</span><span class="wi-roster-count">' + items.length + '</span>'
+      + '</div>']
+    .concat(people.map(p => {
+      const key = p.name.trim().toLowerCase();
+      const branchBadge = isAdminOrExec ? '<span class="wi-roster-branch ' + p.branch.toLowerCase() + '">' + p.branch + '</span>' : '';
+      return '<div class="wi-roster-chip" data-person="' + esc(key) + '" onclick="filterItemsByPerson(\'' + esc(key) + '\')">'
+        + '<div class="wi-roster-avatar" style="background:' + p.color + '">' + esc(p.initials) + '</div>'
+        + '<span class="wi-roster-name">' + esc(p.name) + '</span>' + branchBadge
+        + '<span class="wi-roster-count">' + countFor(p.name) + '</span>'
+        + '</div>';
+    })).join('');
+  return '<div class="wi-roster-label">' + (isAdminOrExec ? 'All Teams' : 'Your Team') + ' — click a name to filter</div>'
+    + '<div class="wi-roster" id="wi-roster">' + chips + '</div>';
 }
 
 async function populateOwnerDropdown() {
@@ -6804,6 +6906,15 @@ async function renderInbox() {
     });
     assignSnap.docs.forEach(d => {
       const it = d.data();
+      if (it.followUp && it.followUp.seen === false) {
+        feed.push({
+          kind: 'followup', ts: it.followUp.ts ? Date.parse(it.followUp.ts) : 0, unread: true,
+          icon: '🔔', color: '#FBBF24', itemId: d.id, filterBucket: 'all',
+          kicker: 'Follow-up · from ' + esc(it.followUp.by||'Manager'),
+          msg: '<b>' + esc(it.title) + '</b> — ' + esc(it.followUp.note||'Follow-up needed'),
+          markSeen: () => db.collection('weekly_items').doc(d.id).update({'followUp.seen': true})
+        });
+      }
       if (!it.assignedBy || it.assignedBy === CU.uid) return; // skip self-assigned / legacy items
       feed.push({
         kind: 'assigned', ts: it.createdAt?.toMillis?.() || 0, unread: it.seen === false,
@@ -6866,6 +6977,7 @@ function renderInboxFeed(filter) {
     {k:'all', l:'All'}, {k:'kudos', l:'Kudos'}, {k:'assigned', l:'Assigned to me'}, {k:'completed', l:'Completed'}
   ];
   if (feed.some(f => f.kind === 'overdue')) filters.push({k:'overdue', l:'⚠ Overdue'});
+  if (feed.some(f => f.kind === 'followup')) filters.push({k:'followup', l:'🔔 Follow-Up'});
 
   ca.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
     + '<div style="font-size:15px;font-weight:700">📥 Inbox</div>'
