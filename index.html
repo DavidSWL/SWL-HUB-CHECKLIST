@@ -2685,9 +2685,9 @@ function showScoreBreakdown(event, uid) {
   const rows = [
     ['Completion Quality (A)',     c.A,  50, 'Earned '+(c.earnedA||0)+'pts of '+(c.maxA||0)+'pts possible. Overdue items increase max, lowering the ratio without discounting completed work.'],
     ['On-Time Performance (B)',    c.B,  25, p.onTime+' on-time out of '+((p.onTime||0)+(p.late||0))+' completed items.'],
-    ['Submission Consistency (C)', c.C,  15, (p.streak||0)+'-week check-in streak. Earns 3pts (1wk), 6pts (2wk), 10pts (4wk), or 15pts (8wk).'],
     ['Trend Impact (D)',           c.D,  10, p.insufficientHistory ? 'Trend requires 30+ days of history and 4+ items each period.' : (p.trend==='improving'?'Score improving vs prior period.':p.trend==='declining'?'Score declining vs prior period.':'Stable vs prior period.')],
   ];
+  // Check-in streak is shown separately, not folded into the score — see swlScoreOneUser.
   const barRow = (label, val, max, tip) => {
     const pct = max > 0 ? Math.round(Math.max(0,val)/max*100) : 0;
     const col = pct >= 80 ? '#4CAF50' : pct >= 60 ? '#FBBF24' : '#EF4444';
@@ -2930,7 +2930,11 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
   const onTime = scoredItems.filter(i => i.status === 'completed_on_time').length;
   const rawB = completed.length > 0 ? (onTime / completed.length) * 25 : 0;
 
-  // Component C — Submission Consistency
+  // Check-in streak — tracked and shown (Item Summary "Streak" tile, tooltips)
+  // but no longer part of the score itself. Whether someone opens the app
+  // isn't the same thing as whether their work actually gets done, and
+  // folding it into the grade let a good streak paper over real backlog
+  // issues elsewhere. Kept as a pure informational stat.
   const streak = swlSubmissionStreak(submittedWeekStarts);
   const rawC = swlStreakScore(streak);
 
@@ -2958,12 +2962,14 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
   const volMod = swlVolumeModifier(scoredItems.length);
 
   // Final score — no-activity employees get null score (not 0)
-  // When trend history is insufficient, Component D is dropped from both the
-  // earned total AND the max possible (90 instead of 100) and the result is
+  // Component C (check-in streak) is deliberately excluded from the score —
+  // see note above — so the 100-point scale is really A(50)+B(25)+D(10)=85
+  // max. When trend history is insufficient, D is also dropped from both the
+  // earned total AND the max possible (75 instead of 85) and the result is
   // rescaled back to a 100-point score — this way lacking comparable prior-period
   // data is neutral rather than costing up to 10 points against a peer who has it.
-  const maxPossible = insufficientHistory ? 90 : 100;
-  const rawSum = rawA + rawB + rawC + rawD;
+  const maxPossible = insufficientHistory ? 75 : 85;
+  const rawSum = rawA + rawB + rawD;
   const rawTotal = noActivity ? null : Math.max(0, Math.min(maxPossible, rawSum));
   const finalScore = noActivity ? null : Math.round((rawTotal / maxPossible) * 100 * volMod);
   const grade = noActivity ? null : swlGrade(finalScore);
@@ -3447,12 +3453,13 @@ function buildScoreReportHtml(p, idPrefix) {
   const c = p.components || {};
 
   // ---- Cross-audience plain-language summary: strongest area + main concern ----
-  // Same 3 breakdown components, relabeled to what they actually measure day to day
-  // (a 4th, "how often they miss deadlines," already exists as the Miss Rate headline tile below).
+  // Relabeled breakdown components, what they actually measure day to day
+  // ("how often they miss deadlines" already exists as the Miss Rate headline
+  // tile below — app usage/check-in streak is shown as a raw stat only,
+  // deliberately not scored, so it's not a pillar here either).
   const pillarDefs = [
-    {label:'Getting Work Done',           v:Math.max(0,c.A||0), max:50},
-    {label:'Hitting Due Dates',           v:Math.max(0,c.B||0), max:25},
-    {label:'Staying Engaged (App Usage)', v:Math.max(0,c.C||0), max:15}
+    {label:'Getting Work Done', v:Math.max(0,c.A||0), max:50},
+    {label:'Hitting Due Dates', v:Math.max(0,c.B||0), max:25}
   ];
   const pillarPcts = pillarDefs.map(x => ({...x, pct: x.max>0 ? Math.round(x.v/x.max*100) : 0}));
   const strongestPillar = pillarPcts.reduce((a,b) => b.pct>a.pct ? b : a);
@@ -3533,7 +3540,7 @@ function buildScoreReportHtml(p, idPrefix) {
     + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:16px">'
     + [
         {id:px+'-score',   l:'Acct Score',    v: p.score===null?'\u2014':p.score, sub: p.gradeLabel, c: gc(p.grade),
-         expl:'Your overall grade out of 100, combining Getting Work Done, Hitting Due Dates, Staying Engaged, and Trend into one number (see breakdown below).'},
+         expl:'Your overall grade out of 100, combining Getting Work Done, Hitting Due Dates, and Trend into one number (see breakdown below). App usage/check-in streak is tracked separately but not part of this grade.'},
         {id:px+'-health',  l:'Acct Health',   v: p.healthRate===null?'\u2014':p.healthRate+'%', sub: p.healthLabel, c: p.healthColor,
          expl:'A read on how often work gets done on time vs. late vs. missed.'},
         {id:px+'-rel',     l:'Reliability',   v: p.reliabilityRate+'%', sub: (p.onTime+p.late)+' of '+(p.onTime+p.late+p.missed+p.overdue)+' due items finished'+(p.overdue>0?' &middot; '+p.overdue+' still open':''), c: p.reliabilityRate>=80?'var(--success)':p.reliabilityRate>=50?'#FBBF24':'var(--danger)',
@@ -3555,14 +3562,12 @@ function buildScoreReportHtml(p, idPrefix) {
     + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:10px">Score Breakdown</div>'
     + '<div class="g2" style="gap:14px">'
     + [
-        {id:px+'-a', l:'Getting Work Done',           v:c.A, max:50, note: (c.earnedA||0)+'pts earned of '+(c.maxA||0)+'pts possible',
-         expl:'Points earned from finished work, divided by everything that should count \u2014 including growing older overdue items, which increase the max more the longer they sit. The largest piece of the score (50 of 100 points).'},
-        {id:px+'-b', l:'Hitting Due Dates',           v:c.B, max:25, note: p.onTime+' on-time / '+(p.onTime+p.late)+' completed',
-         expl:'Of the items actually finished, what share were on time vs. late (25 of 100 points). This only looks at completed work \u2014 it can\u2019t see anything still open, which is why Reliability exists as a separate, backlog-aware number.'},
-        {id:px+'-c', l:'Staying Engaged (App Usage)', v:c.C, max:15, note: (p.streak||0)+'-week check-in streak',
-         expl:'Rewards a steady streak of weekly check-ins \u2014 a read on whether someone is actually using the app \u2014 separate from whether items are finished (15 of 100 points).'},
-        {id:px+'-d', l:'Trend',                       v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':'vs prior period',
-         expl:'Compares this period to the one before it \u2014 improving adds up to 10 points, declining subtracts up to 10. Needs 30+ days of history and 4+ scored items in both periods, otherwise it\u2019s dropped and the score is rescaled out of 90 instead of 100 so it\u2019s never held against you.'}
+        {id:px+'-a', l:'Getting Work Done', v:c.A, max:50, note: (c.earnedA||0)+'pts earned of '+(c.maxA||0)+'pts possible',
+         expl:'Points earned from finished work, divided by everything that should count \u2014 including growing older overdue items, which increase the max more the longer they sit. The largest piece of the score (50 of 85 points).'},
+        {id:px+'-b', l:'Hitting Due Dates', v:c.B, max:25, note: p.onTime+' on-time / '+(p.onTime+p.late)+' completed',
+         expl:'Of the items actually finished, what share were on time vs. late (25 of 85 points). This only looks at completed work \u2014 it can\u2019t see anything still open, which is why Reliability exists as a separate, backlog-aware number.'},
+        {id:px+'-d', l:'Trend', v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':'vs prior period',
+         expl:'Compares this period to the one before it \u2014 improving adds up to 10 points, declining subtracts up to 10 (10 of 85 points). Needs 30+ days of history and 4+ scored items in both periods, otherwise it\u2019s dropped and the score is rescaled out of 75 instead of 85 so it\u2019s never held against you.'}
       ].map(x=>{
         const pct = x.max>0?Math.round(Math.max(0,x.v)/x.max*100):0;
         const col = pct>=80?'var(--success)':pct>=60?'#FBBF24':'var(--danger)';
