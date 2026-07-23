@@ -2747,11 +2747,12 @@ function swlRiskLabel(risk) {
   return map[risk] || risk;
 }
 
-function swlHealthRate(onTime, late, missed) {
-  // Resolution Rate: % of decided items that were actually resolved (on time or late)
-  // Excludes overdue-pending (not yet decided) and future-pending
+function swlHealthRate(onTime, late, missed, overdue) {
+  // Resolution rate — backlog-aware: a still-open overdue item counts against
+  // this the same way a formally-missed one does, so a real backlog can't
+  // hide behind 100% just because nothing's been marked "missed" yet.
   const resolved = onTime + late;
-  const total = resolved + missed;
+  const total = resolved + missed + overdue;
   return total > 0 ? Math.round(resolved / total * 100) : null;
 }
 
@@ -2879,7 +2880,10 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
   // while a backlog is quietly growing.
   const backlogDenom = onTime + late + missed + overdue;
   const reliabilityRate = backlogDenom > 0 ? Math.round((onTime + late) / backlogDenom * 100) : 0;
-  const healthRate = swlHealthRate(onTime, late, missed);
+  // How often they miss, graded on its own instead of just a raw count —
+  // the direct complement of reliabilityRate over the same denominator.
+  const missRate = backlogDenom > 0 ? Math.round((missed + overdue) / backlogDenom * 100) : 0;
+  const healthRate = swlHealthRate(onTime, late, missed, overdue);
   const healthLabel = noActivity ? 'No Activity' : swlHealthLabel(healthRate);
   const healthColor = swlHealthColor(healthRate);
 
@@ -2906,7 +2910,7 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
     volMod,
     scoredItems: scoredItems.length,
     onTime, late, missed, overdue, futurePending,
-    completionRate, onTimeRate, reliabilityRate,
+    completionRate, onTimeRate, reliabilityRate, missRate,
     healthRate, healthLabel, healthColor,
     streak,
     overdueItems: scoredItems.filter(i => (i.status === 'pending' || i.status === 'in_progress') && i.deadline && i.deadline < today)
@@ -3324,6 +3328,66 @@ function buildScoreReportHtml(p, idPrefix) {
 
   const c = p.components || {};
 
+  // ---- Cross-audience plain-language summary: strongest area + main concern ----
+  // Same 3 breakdown components, relabeled to what they actually measure day to day
+  // (a 4th, "how often they miss deadlines," already exists as the Miss Rate headline tile below).
+  const pillarDefs = [
+    {label:'Getting Work Done',           v:Math.max(0,c.A||0), max:50},
+    {label:'Hitting Due Dates',           v:Math.max(0,c.B||0), max:25},
+    {label:'Staying Engaged (App Usage)', v:Math.max(0,c.C||0), max:15}
+  ];
+  const pillarPcts = pillarDefs.map(x => ({...x, pct: x.max>0 ? Math.round(x.v/x.max*100) : 0}));
+  const strongestPillar = pillarPcts.reduce((a,b) => b.pct>a.pct ? b : a);
+  const weakestPillar   = pillarPcts.reduce((a,b) => b.pct<a.pct ? b : a);
+
+  // Priority order for "main concern": a pattern of repeated pushbacks is worse than
+  // a raw miss rate, which is worse than just being weakest-of-three — each check only
+  // fires if the one before it didn't.
+  const flagItems  = [...(p.overdueItems||[]), ...(p.missedItems||[])];
+  const maxPushed  = flagItems.reduce((m,i) => Math.max(m, i.pushedBackCount||0), 0);
+  const pushedItems = flagItems.filter(i => (i.pushedBackCount||0) >= 3);
+
+  let mainConcern, concernLevel;
+  if (p.noActivity) {
+    mainConcern = 'No scored activity yet — this fills in once items are assigned and worked.';
+    concernLevel = 'none';
+  } else if (pushedItems.length > 0) {
+    mainConcern = pushedItems.length === 1
+      ? '“'+esc(pushedItems[0].title)+'” has had its deadline pushed back '+maxPushed+' times. Repeated pushbacks like this are the #1 thing to talk through — ask what’s actually blocking it before extending again.'
+      : pushedItems.length+' items have each been pushed back 3+ times (worst: '+maxPushed+'x). Repeated pushbacks are the #1 thing to talk through — ask what’s actually blocking these before extending again.';
+    concernLevel = 'high';
+  } else if ((p.missRate||0) >= 30) {
+    mainConcern = 'Misses '+p.missRate+'% of everything that’s ever been due (late, missed, or still overdue). That’s the biggest lever to improve right now.';
+    concernLevel = 'high';
+  } else if (weakestPillar.pct < 60) {
+    mainConcern = '“'+weakestPillar.label+'” is the weakest of the three at '+weakestPillar.pct+'%. That’s the best place to focus improvement.';
+    concernLevel = 'medium';
+  } else {
+    mainConcern = 'No major concerns right now — performance is solid across the board.';
+    concernLevel = 'good';
+  }
+  const concernColor = {high:'var(--danger)', medium:'#B45309', good:'var(--success)', none:'var(--info)'}[concernLevel];
+  const concernBg    = {high:'var(--danger-l)', medium:'rgba(251,191,36,.14)', good:'var(--success-l)', none:'var(--surface2)'}[concernLevel];
+  const concernLabel = concernLevel==='none' ? 'Status' : 'Main Concern';
+
+  const summaryCardHtml = p.noActivity ? ''
+    + '<div style="margin:4px 0 18px;padding:14px 16px;border-radius:var(--rl);background:'+concernBg+';border:1px solid var(--border)">'
+    + '<div style="font-size:12.5px;color:var(--text2)">'+mainConcern+'</div>'
+    + '</div>'
+    : ''
+    + '<div style="margin:4px 0 18px;padding:14px 16px;border-radius:var(--rl);background:'+concernBg+';border:1px solid '+concernColor+'">'
+    + '<div style="display:flex;gap:20px;flex-wrap:wrap">'
+    + '<div style="flex:2;min-width:220px">'
+    + '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:'+concernColor+';margin-bottom:4px">&#9873; '+concernLabel+'</div>'
+    + '<div style="font-size:12.5px;color:var(--text);line-height:1.5">'+mainConcern+'</div>'
+    + '</div>'
+    + '<div style="flex:1;min-width:160px">'
+    + '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:4px">Strongest Area</div>'
+    + '<div style="font-size:12.5px;color:var(--text)">'+strongestPillar.label+' <span style="color:var(--success);font-weight:700">('+strongestPillar.pct+'%)</span></div>'
+    + '</div>'
+    + '</div>'
+    + '</div>';
+
   return ''
     // Range + backlog strip \u2014 a score is never shown without saying what it's measuring against
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 0;margin-bottom:4px">'
@@ -3332,15 +3396,19 @@ function buildScoreReportHtml(p, idPrefix) {
     + '<span style="font-size:10px;color:var(--text3)">Items more than 90 days past their deadline no longer affect this score.</span>'
     + '</div>'
 
+    + summaryCardHtml
+
     // Score summary row
-    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:16px">'
+    + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:16px">'
     + [
         {id:px+'-score',   l:'Acct Score',    v: p.score===null?'\u2014':p.score, sub: p.gradeLabel, c: gc(p.grade),
-         expl:'Your overall grade out of 100, combining Completion Quality, On-Time Performance, Submission Consistency, and Trend into one number (see breakdown below).'},
+         expl:'Your overall grade out of 100, combining Getting Work Done, Hitting Due Dates, Staying Engaged, and Trend into one number (see breakdown below).'},
         {id:px+'-health',  l:'Acct Health',   v: p.healthRate===null?'\u2014':p.healthRate+'%', sub: p.healthLabel, c: p.healthColor,
          expl:'A read on how often work gets done on time vs. late vs. missed.'},
         {id:px+'-rel',     l:'Reliability',   v: p.reliabilityRate+'%', sub: (p.onTime+p.late)+' of '+(p.onTime+p.late+p.missed+p.overdue)+' due items finished'+(p.overdue>0?' &middot; '+p.overdue+' still open':''), c: p.reliabilityRate>=80?'var(--success)':p.reliabilityRate>=50?'#FBBF24':'var(--danger)',
          expl:'Every item that\u2019s ever been due, on time or late, finished or still open \u2014 divided into what actually got finished. Unlike a simple on-time rate, a growing backlog of open overdue items can\u2019t hide behind a good finish record here.'},
+        {id:px+'-miss',    l:'Miss Rate',     v: (p.missRate||0)+'%', sub: (p.missed+p.overdue)+' of '+(p.onTime+p.late+p.missed+p.overdue)+' due items late/missed/open', c: (p.missRate||0)<=20?'var(--success)':(p.missRate||0)<=40?'#FBBF24':'var(--danger)',
+         expl:'How often deadlines get missed, graded as its own number instead of a raw count \u2014 the direct flip side of Reliability. Lower is better.'},
         {id:px+'-risk',    l:'Risk Level',    v: p.riskLabel, sub: p.trend+' trend', c: rc(p.risk),
          expl:'How likely a coaching conversation is needed soon, based on the score trend direction plus overdue/missed backlog.'}
       ].map(x=>'<div style="padding:14px 18px;border-right:1px solid var(--border);background:var(--surface)">'
@@ -3356,13 +3424,13 @@ function buildScoreReportHtml(p, idPrefix) {
     + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:10px">Score Breakdown</div>'
     + '<div class="g2" style="gap:14px">'
     + [
-        {id:px+'-a', l:'A \u2014 Completion Quality',     v:c.A, max:50, note: (c.earnedA||0)+'pts earned of '+(c.maxA||0)+'pts possible',
+        {id:px+'-a', l:'Getting Work Done',           v:c.A, max:50, note: (c.earnedA||0)+'pts earned of '+(c.maxA||0)+'pts possible',
          expl:'Points earned from finished work, divided by everything that should count \u2014 including growing older overdue items, which increase the max more the longer they sit. The largest piece of the score (50 of 100 points).'},
-        {id:px+'-b', l:'B \u2014 On-Time Performance',    v:c.B, max:25, note: p.onTime+' on-time / '+(p.onTime+p.late)+' completed',
+        {id:px+'-b', l:'Hitting Due Dates',           v:c.B, max:25, note: p.onTime+' on-time / '+(p.onTime+p.late)+' completed',
          expl:'Of the items actually finished, what share were on time vs. late (25 of 100 points). This only looks at completed work \u2014 it can\u2019t see anything still open, which is why Reliability exists as a separate, backlog-aware number.'},
-        {id:px+'-c', l:'C \u2014 Submission Consistency', v:c.C, max:15, note: (p.streak||0)+'-week check-in streak',
-         expl:'Rewards a steady streak of weekly check-ins, separate from whether items are finished (15 of 100 points).'},
-        {id:px+'-d', l:'D \u2014 Trend Impact',           v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':'vs prior period',
+        {id:px+'-c', l:'Staying Engaged (App Usage)', v:c.C, max:15, note: (p.streak||0)+'-week check-in streak',
+         expl:'Rewards a steady streak of weekly check-ins \u2014 a read on whether someone is actually using the app \u2014 separate from whether items are finished (15 of 100 points).'},
+        {id:px+'-d', l:'Trend',                       v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':'vs prior period',
          expl:'Compares this period to the one before it \u2014 improving adds up to 10 points, declining subtracts up to 10. Needs 30+ days of history and 4+ scored items in both periods, otherwise it\u2019s dropped and the score is rescaled out of 90 instead of 100 so it\u2019s never held against you.'}
       ].map(x=>{
         const pct = x.max>0?Math.round(Math.max(0,x.v)/x.max*100):0;
@@ -3418,7 +3486,7 @@ function showEmployeeDrilldown(uid) {
   const modal = document.createElement('div');
   modal.id = 'swl-drilldown-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:800;display:flex;align-items:center;justify-content:center;padding:16px';
-  modal.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);width:100%;max-width:640px;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">'
+  modal.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);width:100%;max-width:720px;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">'
     + '<div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between">'
     + '<div>'
     + '<div style="font-size:16px;font-weight:700;color:var(--text)">'+esc(p.name)+'</div>'
@@ -3673,25 +3741,11 @@ async function renderMyGrading() {
       ca.innerHTML = '<div class="empty">No scoring data yet — grading starts once you have weekly items assigned to you.</div>';
       return;
     }
-    const avgAge = (p.overdueItems||[]).length
-      ? Math.round(p.overdueItems.reduce((s,i)=>s+(i.daysOverdue||0),0) / p.overdueItems.length)
-      : 0;
-
-    const strengths = [];
-    const focus = [];
-    if ((p.onTime+p.late) > 0 && p.onTimeRate >= 90) strengths.push("you finish what you start — every completed item was on time");
-    if (p.streak >= 4) strengths.push(p.streak + '-week check-in streak');
-    if (p.overdue >= 3) focus.push(p.overdue + ' open item' + (p.overdue!==1?'s':'') + (avgAge?' (avg ' + avgAge + ' days old)':'') + ' holding your score back');
-    else if (p.missed > 0) focus.push(p.missed + ' missed item' + (p.missed!==1?'s':'') + ' from past weeks');
-    const encourage = (strengths.length ? "You're doing well: " + strengths.join('; ') + '.' : '')
-      + (focus.length ? ' Focus area: ' + focus.join('; ') + '.' : '')
-      || "Keep submitting and finishing items on time — your grading fills in as you build history.";
-
     // Same full score report shown to admin/exec in Reports → Accountability —
-    // one report, two places, so an employee sees exactly what their manager sees.
-    ca.innerHTML = '<div style="max-width:680px">'
+    // one report, two places (including the Main Concern / Strongest Area summary),
+    // so an employee sees exactly what their manager and execs see.
+    ca.innerHTML = '<div style="max-width:720px">'
       + '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:10px">My Grading</div>'
-      + '<div style="background:var(--success-l);border-radius:var(--r);padding:14px 16px;font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:6px">' + encourage + '</div>'
       + buildScoreReportHtml(p, 'my')
       + '</div>';
   } catch(e) {
@@ -3989,10 +4043,11 @@ async function renderAccountability() {
             + ' &middot; <span style="color:var(--danger)">'+( er.originalDeadline||'\u2014')+'</span>'
             + ' \u2192 <span style="color:var(--success)">'+(er.proposedDeadline||'\u2014')+'</span></div>'
             + '<div style="font-size:12px;color:var(--text2);background:var(--surface2);border-radius:5px;padding:6px 10px;border-left:3px solid #FBBF24">&ldquo;'+esc(er.reason)+'&rdquo;</div>'
+            + (er.patternReason ? '<div style="font-size:11px;color:var(--danger);background:var(--danger-l);border-radius:5px;padding:6px 10px;margin-top:4px;border-left:3px solid var(--danger)"><strong>\u26a0 Repeated push-back \u2014 their explanation:</strong> &ldquo;'+esc(er.patternReason)+'&rdquo;</div>' : '')
             + '</div>'
             + '<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">'
             + '<button class="btn sm" style="color:var(--success);border-color:rgba(5,150,105,.3);background:rgba(5,150,105,.08)" '
-            + 'onclick="approveExtension(\''+er.id+'\',\''+er.itemId+'\',\''+er.proposedDeadline+'\',\''+esc(er.requestedByName)+'\',\''+(er.reason||'').replace(/'/g,"\'")+'\',\''+(er.originalDeadline||'')+'\')">\u2713 Approve</button>'
+            + 'onclick="approveExtension(\''+er.id+'\',\''+er.itemId+'\',\''+er.proposedDeadline+'\',\''+esc(er.requestedByName)+'\',\''+(er.reason||'').replace(/'/g,"\'")+'\',\''+(er.originalDeadline||'')+'\',\''+(er.patternReason||'').replace(/'/g,"\'")+'\')">\u2713 Approve</button>'
             + '<button class="btn sm" style="color:var(--danger);border-color:rgba(220,38,38,.25);background:rgba(220,38,38,.08)" '
             + 'onclick="denyExtension(\''+er.id+'\',\''+er.itemId+'\',\''+esc(er.requestedByName)+'\')">\u2715 Deny</button>'
             + '</div></div></div>'
@@ -4224,6 +4279,7 @@ async function renderItems() {
 
 function renderItemCard(it) {
   const isMgr = ROLES[CD.role]?.isManager || CD.role==='admin';
+  const isExecViewer = CD.role === 'exec_viewer';
   const statusColors = { pending:'warn', in_progress:'info', completed_on_time:'success', completed_late:'info', not_completed:'danger', canceled_by_client:'neutral' };
   const statusLabels = { pending:'Pending', in_progress:'In Progress', completed_on_time:'✓ On Time', completed_late:'⚠ Late', not_completed:'✗ Not Complete', canceled_by_client:'🚫 Canceled by Client' };
   const statusBadge = `<span class="badge ${statusColors[it.status||'pending']}">${statusLabels[it.status||it.status]||it.status}</span>`;
@@ -4283,9 +4339,70 @@ function renderItemCard(it) {
     ${it.managerUpdate.assistanceLevel&&it.managerUpdate.assistanceLevel!=='none'?` · <span style="color:var(--danger);font-weight:600">⚠ ${it.managerUpdate.assistanceLevel==='upper_management'?'Upper mgmt':'Branch mgr'} assistance needed</span>`:''}
     <span style="color:var(--text3);margin-left:6px">${it.managerUpdate.ts||''}</span>
   </div>`:''}
-  ${it.changeLog?.length?`<div style="margin-top:6px;font-size:10px;color:var(--text3);padding:4px 8px;border-left:2px solid var(--border)">
-    Last changed by ${esc(it.changeLog[it.changeLog.length-1]?.by||'')} · ${esc(it.changeLog[it.changeLog.length-1]?.ts||'')}
-  </div>`:''}`;
+  ${(isMgr||isExecViewer) ? buildAuditTrailHtml(it) : ''}`;
+}
+
+function swlOrdinal(n) {
+  const s = ['th','st','nd','rd'], v = n % 100;
+  return n + (s[(v-20)%10] || s[v] || s[0]);
+}
+
+function buildAuditTrailHtml(it) {
+  // Managers/execs only — a truthfulness check: when was this actually
+  // created, what was the original due date, and every deadline/status
+  // change since, with who made it and when. Never shown to the item's
+  // own employee owner. A 3rd+ deadline push on the same item is flagged —
+  // not a judgment, just where to look before a conversation.
+  const events = [];
+  if (it.createdAt || it.deadlineLockedAt) {
+    const createdMs = it.createdAt?.toDate ? it.createdAt.toDate().getTime() : (it.deadlineLockedAt ? Date.parse(it.deadlineLockedAt) : 0);
+    const originalDeadline = (it.extensionHistory && it.extensionHistory[0] && it.extensionHistory[0].originalDeadline) || it.deadline;
+    events.push({
+      ts: createdMs || 0, type: 'create', action: 'Created',
+      detail: esc(it.assignedByName || it.deadlineLockedBy || it.ownerName || 'unknown') + ' — due date set: ' + fmtDate(originalDeadline)
+    });
+  }
+  (it.extensionHistory || []).forEach((ext, i) => {
+    const tsStr = ext.changedAt || ext.approvedAt || '';
+    const ms = tsStr ? Date.parse(tsStr) : 0;
+    const pushNum = i + 1;
+    let detail = esc(ext.by||'unknown') + (ext.byRole ? ' (' + esc(ROLES[ext.byRole]?.label || ext.byRole) + ')' : '') + ': '
+      + fmtDate(ext.originalDeadline) + ' &#8594; ' + fmtDate(ext.newDeadline)
+      + (ext.reason ? ' — ' + esc(ext.reason) : '');
+    if (ext.patternReason) {
+      detail += '<div style="margin-top:3px;color:var(--danger)"><b>Why this keeps happening:</b> ' + esc(ext.patternReason) + '</div>';
+    }
+    events.push({ ts: ms || 0, type: 'deadline', action: 'Deadline', detail, flagLabel: pushNum >= 3 ? swlOrdinal(pushNum) + ' push' : null });
+  });
+  (it.changeLog || []).forEach(log => {
+    const ms = log.ts ? Date.parse(log.ts) : 0;
+    events.push({
+      ts: ms || 0, type: 'status', action: 'Status',
+      detail: esc(log.toLabel || log.to || '') + ' by ' + esc(log.by||'unknown') + (log.role ? ' (' + esc(ROLES[log.role]?.label || log.role) + ')' : '') + (log.note ? ' — ' + esc(log.note) : '')
+    });
+  });
+
+  if (!events.length) return '';
+  events.sort((a,b) => b.ts - a.ts); // newest first
+  const boxId = 'audit-' + it.id.replace(/[^a-zA-Z0-9]/g,'');
+  const dotColor = { create:'var(--info)', deadline:'var(--warn)', status:'var(--success)' };
+  const rowsHtml = events.map(e => {
+    const whenStr = e.ts
+      ? new Date(e.ts).toLocaleDateString('en-US',{month:'short',day:'numeric'}) + '<br><span style="font-size:9.5px">' + new Date(e.ts).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) + '</span>'
+      : '—';
+    return '<tr' + (e.flagLabel ? ' style="background:var(--danger-l)"' : '') + '>'
+      + '<td style="padding:6px 8px;font-size:10.5px;color:var(--text3);white-space:nowrap;vertical-align:top">' + whenStr + '</td>'
+      + '<td style="padding:6px 8px;white-space:nowrap;vertical-align:top"><span style="display:inline-flex;align-items:center;gap:5px;font-weight:700;font-size:11px"><span style="width:7px;height:7px;border-radius:50%;background:' + dotColor[e.type] + ';flex-shrink:0"></span>' + e.action + '</span></td>'
+      + '<td style="padding:6px 8px;font-size:11px;color:var(--text2);vertical-align:top">' + e.detail + (e.flagLabel ? ' <span style="font-size:9.5px;font-weight:700;color:var(--danger);white-space:nowrap">&#9888; ' + e.flagLabel + '</span>' : '') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return '<div style="margin-top:8px">'
+    + '<div onclick="var b=document.getElementById(\'' + boxId + '\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';" style="cursor:pointer;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">&#128203; Audit Trail (' + events.length + ') &#9662;</div>'
+    + '<div id="' + boxId + '" style="display:none;margin-top:6px;overflow-x:auto">'
+    + '<table style="width:100%;border-collapse:collapse"><tbody>' + rowsHtml + '</tbody></table>'
+    + '</div>'
+    + '</div>';
 }
 
 let _itemsCurrentFilter = 'all';
@@ -6243,7 +6360,7 @@ async function loadInlineWeeklyItems() {
       const canRequestExt = !isDone && item.status !== 'not_completed' && !hasPendingExt;
       const safeTitle = esc(item.title).replace(/'/g,"\'");
       const extBtn = canRequestExt
-        ? '<button onclick="openExtensionModal(\'' + d.id + '\',\'' + safeTitle + '\',\'' + (item.deadline||'') + '\')" style="padding:3px 9px;font-size:10px;font-weight:600;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.25);border-radius:5px;cursor:pointer">' + (isPastDue?'\u26a0 Request Extension':'\ud83d\udcc5 Extend') + '</button>' : '';
+        ? '<button onclick="openExtensionModal(\'' + d.id + '\',\'' + safeTitle + '\',\'' + (item.deadline||'') + '\',' + (item.extensionHistory||[]).length + ')" style="padding:3px 9px;font-size:10px;font-weight:600;background:rgba(251,191,36,.12);color:#FBBF24;border:1px solid rgba(251,191,36,.25);border-radius:5px;cursor:pointer">' + (isPastDue?'\u26a0 Request Extension':'\ud83d\udcc5 Extend') + '</button>' : '';
       const borderColor = isCanceled?'rgba(148,163,184,.25)':isPastDue?'rgba(248,113,113,.35)':hasPendingExt?'rgba(251,191,36,.3)':'#2E2E2E';
       return '<div style="background:#1E1E1E;border:1px solid ' + borderColor + ';border-radius:6px;padding:10px 12px;margin-bottom:6px' + (isCanceled?';opacity:.7':'') + '">'
         + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
@@ -6438,8 +6555,9 @@ async function saveEmployeeUpdateNotDone(itemId) {
 }
 
 // ══ EXTENSION REQUEST SYSTEM ══
-function openExtensionModal(itemId, itemTitle, currentDeadline) {
+function openExtensionModal(itemId, itemTitle, currentDeadline, pushedBackCount) {
   const ex = document.getElementById('ext-req-modal'); if (ex) ex.remove();
+  const count = pushedBackCount || 0;
   const modal = document.createElement('div');
   modal.id = 'ext-req-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -6447,6 +6565,11 @@ function openExtensionModal(itemId, itemTitle, currentDeadline) {
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><div style="font-size:14px;font-weight:700;color:#F0F0F0">Request Deadline Extension</div><button id="ext-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">&#10005;</button></div>'
     +'<div style="font-size:12px;padding:8px 11px;background:#2A2A2A;border-radius:6px;margin-bottom:12px;color:#D0D0D0;font-weight:500;border-left:3px solid #FBBF24">'+itemTitle+'</div>'
     +'<div style="font-size:11px;color:#777;margin-bottom:14px">Current deadline: <strong style="color:#F87171">'+(currentDeadline||'—')+'</strong></div>'
+    + (count >= 2 ? '<div style="background:rgba(220,38,38,.1);border:1px solid rgba(220,38,38,.25);border-radius:6px;padding:10px 11px;margin-bottom:14px">'
+        + '<div style="font-size:11px;font-weight:700;color:#F87171;margin-bottom:6px">⚠ This item has already been pushed back ' + count + ' time' + (count!==1?'s':'') + '.</div>'
+        + '<label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Why does this keep happening? <span style="color:#F87171">*</span></label>'
+        + '<textarea id="ext-pattern-reason" rows="2" placeholder="Help your manager see the bigger picture — a recurring blocker, a dependency, something else?" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:12px;font-family:inherit;resize:vertical"></textarea>'
+        + '</div>' : '')
     +'<div style="margin-bottom:12px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Why do you need more time? <span style="color:#F87171">*</span></label>'
     +'<textarea id="ext-reason" rows="3" placeholder="Be specific — what happened, what is blocking you?" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #383838;background:#2A2A2A;color:#E0E0E0;font-size:12px;font-family:inherit;resize:vertical"></textarea></div>'
     +'<div style="margin-bottom:16px"><label style="font-size:11px;font-weight:600;color:#999;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em">Proposed new deadline <span style="color:#F87171">*</span></label>'
@@ -6462,6 +6585,9 @@ function openExtensionModal(itemId, itemTitle, currentDeadline) {
 async function saveExtensionRequest(itemId, itemTitle, currentDeadline) {
   const reason = document.getElementById('ext-reason')?.value?.trim();
   const proposedDeadline = document.getElementById('ext-new-deadline')?.value;
+  const patternReasonEl = document.getElementById('ext-pattern-reason');
+  const patternReason = patternReasonEl?.value?.trim();
+  if (patternReasonEl && !patternReason) { toast('Please explain why this keeps getting pushed back','warn'); return; }
   if (!reason) { toast('Please explain why you need an extension','warn'); return; }
   if (!proposedDeadline) { toast('Please select a proposed new deadline','warn'); return; }
   if (proposedDeadline <= (currentDeadline||'')) { toast('New deadline must be after current deadline','warn'); return; }
@@ -6477,6 +6603,7 @@ async function saveExtensionRequest(itemId, itemTitle, currentDeadline) {
       itemId, itemTitle,
       originalDeadline:item.originalDeadline||item.deadline||currentDeadline,
       proposedDeadline, reason,
+      patternReason: patternReason || null,
       requestedBy:CU.uid, requestedByName:CD.name, requestedByRole:CD.role,
       branch:item.branch||CD.branch, weekStart:item.weekStart||weekKey(CW),
       status:'pending', createdAt:firebase.firestore.FieldValue.serverTimestamp()
@@ -6492,9 +6619,9 @@ async function saveExtensionRequest(itemId, itemTitle, currentDeadline) {
   }
 }
 
-async function approveExtension(requestId, itemId, proposedDeadline, requestedByName, reason, originalDeadline) {
+async function approveExtension(requestId, itemId, proposedDeadline, requestedByName, reason, originalDeadline, patternReason) {
   try {
-    const logEntry = {type:'extension_approved',by:CD.name,byRole:CD.role,requestedBy:requestedByName,reason,originalDeadline,newDeadline:proposedDeadline,approvedAt:new Date().toISOString()};
+    const logEntry = {type:'extension_approved',by:CD.name,byRole:CD.role,requestedBy:requestedByName,reason,patternReason:patternReason||null,originalDeadline,newDeadline:proposedDeadline,approvedAt:new Date().toISOString()};
     await db.collection('extension_requests').doc(requestId).update({status:'approved',approvedBy:CU.uid,approvedByName:CD.name,approvedAt:firebase.firestore.FieldValue.serverTimestamp()});
     await db.collection('weekly_items').doc(itemId).update({deadline:proposedDeadline,hasPendingExtension:false,extensionHistory:firebase.firestore.FieldValue.arrayUnion(logEntry),updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
     toast('✓ Extension approved — deadline updated to '+proposedDeadline);
