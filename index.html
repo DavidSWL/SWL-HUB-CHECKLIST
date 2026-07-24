@@ -2901,7 +2901,7 @@ function showScoreBreakdown(event, uid) {
   const rows = [
     ['Completion Quality (A)',     c.A,  50, 'Earned '+(c.earnedA||0)+'pts of '+(c.maxA||0)+'pts possible. Overdue items increase max, lowering the ratio without discounting completed work.'],
     ['On-Time Performance (B)',    c.B,  25, p.onTime+' on-time out of '+((p.onTime||0)+(p.late||0))+' completed items.'],
-    ['Trend Impact (D)',           c.D,  10, p.insufficientHistory ? 'Trend requires 30+ days of history and 4+ items each period.' : (p.trend==='improving'?'Score improving vs prior period.':p.trend==='declining'?'Score declining vs prior period.':'Stable vs prior period.')],
+    ['Trend Impact (D)',           c.D,  10, p.insufficientHistory ? 'Trend requires 30+ days of history and 4+ items each period.' : p.trendCappedByBacklog ? 'On-time rate on completed work is improving, but capped at 0 — items are still open overdue right now.' : (p.trend==='improving'?'Score improving vs prior period.':p.trend==='declining'?'Score declining vs prior period.':'Stable vs prior period.')],
   ];
   // Check-in streak is shown separately, not folded into the score — see swlScoreOneUser.
   const barRow = (label, val, max, tip) => {
@@ -3110,6 +3110,11 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
   // No-activity case: employee has no scoreable items at all
   const noActivity = scoredItems.length === 0;
 
+  // Computed early so both Component A's age-weighting and Component D's
+  // trend cap (below) can use it without re-filtering scoredItems twice.
+  const openOverdueItems = scoredItems.filter(i => (i.status === 'pending' || i.status === 'in_progress')
+    && ((i.deadline && i.deadline < today) || wasPushedWhileOverdue(i)));
+
   // Component A — Item Completion Quality (DENOMINATOR MODEL)
   // Completed work earns full points. Overdue items are NOT subtracted from earned —
   // instead they increase the denominator (max possible), lowering the ratio.
@@ -3173,6 +3178,12 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
     else if (delta >= -9) rawD = -5;
     else                  rawD = -10;
   }
+  // A rising on-time rate on the items that DID get finished doesn't mean much
+  // if there's a backlog sitting open right now — don't let Trend hand out a
+  // positive "improving" bonus while that's true. A decline still counts
+  // against them; only the reward side is blocked.
+  const trendCappedByBacklog = openOverdueItems.length > 0 && rawD > 0;
+  if (trendCappedByBacklog) rawD = 0;
 
   // Volume Confidence Modifier
   const volMod = swlVolumeModifier(scoredItems.length);
@@ -3200,8 +3211,7 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
   // deadline into the future — because it was overdue when that push happened.
   // Otherwise the backlog it represents would just disappear the moment a
   // manager approves an extension, before the new deadline even arrives.
-  const overdue = scoredItems.filter(i => (i.status === 'pending' || i.status === 'in_progress')
-    && ((i.deadline && i.deadline < today) || wasPushedWhileOverdue(i))).length;
+  const overdue = openOverdueItems.length;
   const futurePending = userItems.filter(i => (i.status === 'pending' || i.status === 'in_progress') && i.deadline && i.deadline >= today && !wasPushedWhileOverdue(i)).length;
   const completionRate = scoredItems.length > 0 ? Math.round((onTime + late) / scoredItems.length * 100) : 0;
   const onTimeRate = completed.length > 0 ? Math.round(onTime / completed.length * 100) : 0;
@@ -3226,6 +3236,7 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
     riskLabel: noActivity ? 'No Data' : swlRiskLabel(swlRiskLevel(finalScore)),
     trend: noActivity ? 'none' : (rawD > 0 ? 'improving' : rawD < 0 ? 'declining' : 'stable'),
     trendDelta: rawD,
+    trendCappedByBacklog,
     insufficientHistory,
     newHireProtection,
     components: {
@@ -3243,8 +3254,7 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
     completionRate, onTimeRate, reliabilityRate, missRate,
     healthRate, healthLabel, healthColor,
     streak,
-    overdueItems: scoredItems.filter(i => (i.status === 'pending' || i.status === 'in_progress')
-        && ((i.deadline && i.deadline < today) || wasPushedWhileOverdue(i)))
+    overdueItems: openOverdueItems
       .map(i => {
         const stillOverdueNow = i.deadline && i.deadline < today;
         return { id: i.id, title: i.title, priority: i.priority,
@@ -3710,8 +3720,8 @@ function buildScoreReportHtml(p, idPrefix) {
     const daysPhrase = maxDaysOverdue !== null ? (p.overdue === 1 ? maxDaysOverdue+'d past its deadline' : 'up to '+maxDaysOverdue+'d past deadline') : null;
     const pushedPhrase = anyPushedWhileOverdue ? (daysPhrase ? ' — some pushed back while already overdue' : ' — pushed back while already overdue, new deadline hasn’t arrived yet') : '';
     mainConcern = p.overdue === 1
-      ? '1 item is currently overdue'+(daysPhrase?' ('+daysPhrase+')':'')+pushedPhrase+', see Overdue Items below. Worth confirming it gets closed out soon — the score isn’t dragged down much yet, but it will be the longer it sits.'
-      : p.overdue+' items are currently overdue'+(daysPhrase?' ('+daysPhrase+')':'')+pushedPhrase+', see Overdue Items below. Worth confirming these get closed out soon — the score isn’t dragged down much yet, but it will be the longer they sit.';
+      ? '1 item is currently overdue'+(daysPhrase?' ('+daysPhrase+')':'')+pushedPhrase+', see Overdue Items below. Worth confirming it gets closed out soon — it’s already holding the score back, and will further the longer it sits.'
+      : p.overdue+' items are currently overdue'+(daysPhrase?' ('+daysPhrase+')':'')+pushedPhrase+', see Overdue Items below. Worth confirming these get closed out soon — they’re already holding the score back, and will further the longer they sit.';
     concernLevel = 'medium';
   } else if (weakestPillar.pct < 60) {
     mainConcern = '“'+weakestPillar.label+'” is the weakest of the three at '+weakestPillar.pct+'%. That’s the best place to focus improvement.';
@@ -3782,8 +3792,8 @@ function buildScoreReportHtml(p, idPrefix) {
          expl:'Points earned from finished work, divided by everything that should count \u2014 including growing older overdue items, which increase the max more the longer they sit. The largest piece of the score (50 of 85 points).'},
         {id:px+'-b', l:'Hitting Due Dates', v:c.B, max:25, note: p.onTime+' on-time / '+(p.onTime+p.late)+' completed',
          expl:'Of the items actually finished, what share were on time vs. late (25 of 85 points). This only looks at completed work \u2014 it can\u2019t see anything still open, which is why Reliability exists as a separate, backlog-aware number.'},
-        {id:px+'-d', l:'Trend', v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':'vs prior period',
-         expl:'Compares this period to the one before it \u2014 improving adds up to 10 points, declining subtracts up to 10 (10 of 85 points). Needs 30+ days of history and 4+ scored items in both periods, otherwise it\u2019s dropped and the score is rescaled out of 75 instead of 85 so it\u2019s never held against you.'}
+        {id:px+'-d', l:'Trend', v:c.D, max:10, note: p.insufficientHistory?'Insufficient history':p.trendCappedByBacklog?'Capped \u2014 backlog open':'vs prior period',
+         expl:'Compares this period to the one before it \u2014 improving adds up to 10 points, declining subtracts up to 10 (10 of 85 points). Needs 30+ days of history and 4+ scored items in both periods, otherwise it\u2019s dropped and the score is rescaled out of 75 instead of 85 so it\u2019s never held against you.'+(p.trendCappedByBacklog?' The on-time rate on completed work is up, but that bonus is blocked while items are still open overdue \u2014 an improving rate on finished work doesn\u2019t offset a live backlog.':'')}
       ].map(x=>{
         const pct = x.max>0?Math.round(Math.max(0,x.v)/x.max*100):0;
         const col = pct>=80?'var(--success)':pct>=60?'#FBBF24':'var(--danger)';
