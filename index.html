@@ -7145,9 +7145,63 @@ function renderSaturdayRosterTable() {
       + '<label style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--text3);white-space:nowrap;cursor:' + (disabled ? 'default' : 'pointer') + '">'
       + '<input type="checkbox" ' + (checked ? 'checked' : '') + (disabled ? ' disabled' : '') + ' onchange="satToggleAvailability(\'' + esc(p.name).replace(/'/g, "\\'") + '\',this.checked)">Available'
       + '</label>'
+      + '<button style="background:var(--surface2);color:var(--text2);border:1px solid var(--border2);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayEditModal(\'' + p.id + '\')" title="Edit role/position">✏️ Edit</button>'
       + '<button style="background:var(--danger-l);color:var(--danger);border:1px solid rgba(220,38,38,.25);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayIncidentModal(\'' + esc(p.name).replace(/'/g, "\\'") + '\')" title="Log a no-call/no-show">' + (noShowCount ? '⚠ ' + noShowCount : 'Log Incident') + '</button>'
       + '</div>';
   }).join('');
+}
+
+function openSaturdayEditModal(crewId) {
+  const person = (window._satCrew || []).find(p => p.id === crewId);
+  if (!person) return;
+  const ex = document.getElementById('sat-edit-modal');
+  if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'sat-edit-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px';
+  const posDisabled = person.role === 'Fixed';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:380px;max-width:100%;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">Edit Crew Position</div>'
+    + '<button onclick="document.getElementById(\'sat-edit-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div>'
+    + '<div style="font-size:12px;padding:8px 10px;background:var(--surface2);border-radius:var(--r);margin-bottom:14px;font-weight:600">' + esc(person.name) + '</div>'
+    + '<div class="fg"><label>Role</label><select id="sat-edit-role" onchange="satEditRoleChanged(this)">'
+    + '<option value="Fixed"' + (person.role === 'Fixed' ? ' selected' : '') + '>Fixed (always scheduled)</option>'
+    + '<option value="Rotating"' + (person.role === 'Rotating' ? ' selected' : '') + '>Rotating</option>'
+    + '</select></div>'
+    + '<div class="fg"><label>Position</label><select id="sat-edit-position"' + (posDisabled ? ' disabled' : '') + '>'
+    + '<option value="N/A"' + (person.position === 'N/A' ? ' selected' : '') + '>N/A</option>'
+    + '<option value="Foreman"' + (person.position === 'Foreman' ? ' selected' : '') + '>Foreman</option>'
+    + '<option value="Laborer"' + (person.position === 'Laborer' ? ' selected' : '') + '>Laborer</option>'
+    + '</select></div>'
+    + '<div style="font-size:11px;color:var(--text3);margin:6px 0 14px">Changes apply the next time a month is generated — already-generated Saturdays keep their existing picks.</div>'
+    + '<div style="display:flex;gap:8px">'
+    + '<button class="btn primary" onclick="saveSaturdayEdit(\'' + crewId + '\')">Save</button>'
+    + '<button class="btn" onclick="document.getElementById(\'sat-edit-modal\').remove()">Cancel</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+function satEditRoleChanged(el) {
+  const posSel = document.getElementById('sat-edit-position');
+  if (!posSel) return;
+  if (el.value === 'Fixed') { posSel.value = 'N/A'; posSel.disabled = true; }
+  else { posSel.disabled = false; if (posSel.value === 'N/A') posSel.value = 'Laborer'; }
+}
+
+async function saveSaturdayEdit(crewId) {
+  const role = document.getElementById('sat-edit-role').value;
+  const position = document.getElementById('sat-edit-position').value;
+  try {
+    await db.collection('saturday_crew').doc(crewId).update({ role, position });
+    const idx = (window._satCrew || []).findIndex(p => p.id === crewId);
+    if (idx > -1) { window._satCrew[idx].role = role; window._satCrew[idx].position = position; }
+    document.getElementById('sat-edit-modal').remove();
+    toast('✓ Updated');
+    renderSaturdayRosterTable();
+    renderSaturdayBoard();
+  } catch (e) { toast('Could not save — ' + e.message, 'err'); }
 }
 
 async function satToggleAvailability(name, isAvailable) {
