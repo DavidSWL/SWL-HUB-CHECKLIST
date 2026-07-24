@@ -1214,7 +1214,10 @@ async function renderDashboard() {
       + "</div>"
       + "<div id='dash-overdue-list' style='margin-bottom:14px'></div>"
       + "<div class='stats-grid' style='margin-bottom:14px'>"
-      + "<div class='stat-card " + (isOC?"oc-stat":isLA?"la-stat":"ok-stat") + "' style='border-top:2.5px solid " + accent + ";cursor:pointer' data-nav='reports' title='View team submission status'><div class='stat-num'>" + sc + "/" + tc + "</div><div class='stat-lbl'>Submitted</div></div>"
+      + "<div class='stat-card " + (isOC?"oc-stat":isLA?"la-stat":"ok-stat") + "' style='border-top:2.5px solid " + accent + ";cursor:pointer;display:flex;align-items:center;gap:10px' data-nav='reports' title='View team submission status'>"
+      + "<svg width='38' height='38' viewBox='0 0 40 40' style='flex-shrink:0'><circle cx='20' cy='20' r='16' fill='none' stroke='var(--border)' stroke-width='5'/><circle cx='20' cy='20' r='16' fill='none' stroke='var(--success)' stroke-width='5' stroke-linecap='round' stroke-dasharray='" + (100.53*pct/100).toFixed(1) + " 100.53' transform='rotate(-90 20 20)'/></svg>"
+      + "<div><div class='stat-num' style='font-size:17px'>" + sc + "/" + tc + "</div><div class='stat-lbl'>Submitted</div></div>"
+      + "</div>"
       + "<div class='stat-card warn-stat' style='cursor:pointer' data-nav='reports' title='View team submission status'><div class='stat-num'>" + pc + "</div><div class='stat-lbl'>Pending</div></div>"
       + "<div class='stat-card' style='border-top:2.5px solid #C84B00;cursor:pointer' data-nav='items' data-filter='not_completed' title='View carry-over items'><div class='stat-num' id='ds-carryover'>&#8212;</div><div class='stat-lbl'>Carry-overs</div></div>"
       + "<div class='stat-card' style='border-top:2.5px solid #185FA5'><div class='stat-num'>W" + getWeekNum(CW) + "</div><div class='stat-lbl'>Work week</div></div>"
@@ -1432,7 +1435,7 @@ function buildScoreTrendHtml(points) {
     + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + rangeLabel + '</div></div>'
     + '<div style="text-align:right">' + rightHtml + '</div>'
     + '</div>';
-  const wrap = (inner) => '<div style="border:1px solid var(--border);border-radius:var(--rl);padding:16px;background:var(--surface);margin-bottom:14px">' + inner + '</div>';
+  const wrap = (inner) => '<div style="border:1px solid rgba(5,150,105,.18);border-radius:var(--rl);padding:16px;background:var(--success-l);margin-bottom:14px">' + inner + '</div>';
 
   if (points.length === 0) {
     return wrap(header('No history yet', '')
@@ -1774,7 +1777,20 @@ async function loadOverdueBannerForDash(branch) {
         Object.values(groups).forEach(its => its.sort((a,b) => (a.deadline||'').localeCompare(b.deadline||'')));
         const groupEntries = Object.entries(groups).sort((a,b) => b[1].length - a[1].length);
 
-        listEl.innerHTML = groupEntries.map(([name, its]) => {
+        // Severity breakdown — a raw overdue count doesn't say how bad it is;
+        // this shows the mix without having to open each person's list.
+        const sevCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+        overdueDocs.forEach(d => { const p = d.data().priority || 'medium'; if (sevCounts[p] !== undefined) sevCounts[p]++; else sevCounts.medium++; });
+        const sevColors = { critical: 'var(--critical)', high: 'var(--danger)', medium: 'var(--warn)', low: 'var(--success)' };
+        const sevBarHtml = '<div style="margin-bottom:12px">'
+          + '<div style="display:flex;height:12px;border-radius:7px;overflow:hidden;margin-bottom:8px">'
+          + ['critical','high','medium','low'].map(k => sevCounts[k] ? '<div style="width:' + (sevCounts[k]/count*100) + '%;background:' + sevColors[k] + '"></div>' : '').join('')
+          + '</div>'
+          + '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10.5px;color:var(--text2)">'
+          + ['critical','high','medium','low'].map(k => sevCounts[k] ? '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:2px;background:' + sevColors[k] + '"></span>' + k.charAt(0).toUpperCase()+k.slice(1) + ' · ' + sevCounts[k] + '</span>' : '').join('')
+          + '</div></div>';
+
+        listEl.innerHTML = sevBarHtml + groupEntries.map(([name, its]) => {
           const initials = esc((name||'?').trim().split(/\s+/).map(n=>n[0]||'').slice(0,2).join('').toUpperCase());
           const itemsHtml = its.slice(0,3).map(it => {
             const daysOverdue = swlDaysBetween(it.deadline, today);
