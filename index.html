@@ -7075,9 +7075,11 @@ async function renderSaturdaySchedule() {
       + '</div>'
       + '<div class="card" style="margin-bottom:16px">'
       + '<div class="card-header"><div class="card-title">Crew Roster &amp; Availability</div>'
+      + '<div style="display:flex;align-items:center;gap:8px">'
+      + '<button class="btn" onclick="openSaturdayAddModal()">+ Add Crew Member</button>'
       + '<select id="sat-week-select" onchange="satSelectWeek(this.value)" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
       + saturdays.map(s => '<option value="' + s + '"' + (s === window._satSelectedWeek ? ' selected' : '') + '>' + fmtDate(s) + '</option>').join('')
-      + '</select></div>'
+      + '</select></div></div>'
       + '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Uncheck anyone who is out on <b>' + fmtDate(window._satSelectedWeek) + '</b> — they will be skipped that week only and prioritized the next time they are available.</div>'
       + '<div id="sat-roster-table"></div>'
       + '</div>';
@@ -7199,6 +7201,62 @@ async function saveSaturdayEdit(crewId) {
     if (idx > -1) { window._satCrew[idx].role = role; window._satCrew[idx].position = position; }
     document.getElementById('sat-edit-modal').remove();
     toast('✓ Updated');
+    renderSaturdayRosterTable();
+    renderSaturdayBoard();
+  } catch (e) { toast('Could not save — ' + e.message, 'err'); }
+}
+
+function openSaturdayAddModal() {
+  const ex = document.getElementById('sat-add-modal');
+  if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'sat-add-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:380px;max-width:100%;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">Add Crew Member</div>'
+    + '<button onclick="document.getElementById(\'sat-add-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div>'
+    + '<div class="fg"><label>Full Name</label><input type="text" id="sat-add-name" placeholder="e.g. Miguel Torres"></div>'
+    + '<div class="fg"><label>Role</label><select id="sat-add-role" onchange="satAddRoleChanged(this)">'
+    + '<option value="Rotating" selected>Rotating</option>'
+    + '<option value="Fixed">Fixed (always scheduled)</option>'
+    + '</select></div>'
+    + '<div class="fg"><label>Position</label><select id="sat-add-position">'
+    + '<option value="Laborer" selected>Laborer</option>'
+    + '<option value="Foreman">Foreman</option>'
+    + '<option value="N/A">N/A</option>'
+    + '</select></div>'
+    + '<div style="font-size:11px;color:var(--text3);margin:6px 0 14px">New Rotating members join the round-robin the next time a month is generated.</div>'
+    + '<div style="display:flex;gap:8px">'
+    + '<button class="btn primary" onclick="saveSaturdayAdd()">Add</button>'
+    + '<button class="btn" onclick="document.getElementById(\'sat-add-modal\').remove()">Cancel</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+function satAddRoleChanged(el) {
+  const posSel = document.getElementById('sat-add-position');
+  if (!posSel) return;
+  if (el.value === 'Fixed') { posSel.value = 'N/A'; posSel.disabled = true; }
+  else { posSel.disabled = false; if (posSel.value === 'N/A') posSel.value = 'Laborer'; }
+}
+
+async function saveSaturdayAdd() {
+  const name = document.getElementById('sat-add-name').value.trim();
+  const role = document.getElementById('sat-add-role').value;
+  const position = document.getElementById('sat-add-position').value;
+  if (!name) { toast('Please enter a name', 'err'); return; }
+  const dupe = (window._satCrew || []).some(p => p.name.toLowerCase() === name.toLowerCase());
+  if (dupe) { toast(name + ' is already on the roster', 'err'); return; }
+  try {
+    const ref = await db.collection('saturday_crew').add({
+      name, role, position, rotationEligible: true, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    window._satCrew = window._satCrew || [];
+    window._satCrew.push({ id: ref.id, name, role, position, rotationEligible: true });
+    document.getElementById('sat-add-modal').remove();
+    toast('✓ ' + name + ' added to the roster');
     renderSaturdayRosterTable();
     renderSaturdayBoard();
   } catch (e) { toast('Could not save — ' + e.message, 'err'); }
