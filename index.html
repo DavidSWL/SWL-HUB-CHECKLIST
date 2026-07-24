@@ -3640,233 +3640,6 @@ function showEmployeeDrilldown(uid) {
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
-// ══════════════════════════════════════════════════
-// AI ANALYZER — Individual + Team
-// ══════════════════════════════════════════════════
-// Calling the Anthropic API directly from the browser cannot work: it has
-// no API key attached and would be blocked by CORS even with one (which
-// would also mean shipping the key publicly). This needs a server-side
-// proxy (e.g. a Firebase Cloud Function) that isn't deployed yet — flip
-// AI_ENABLED once one exists and point the fetch calls below at it.
-const AI_ENABLED = false;
-function aiNotConfiguredHtml() {
-  return '<div style="color:var(--text3);font-size:12px;padding:14px;text-align:center;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">'
-    + '✨ AI Analysis isn’t available yet — it needs a secure backend to call the AI service, which hasn’t been set up. Contact your developer to enable it.'
-    + '</div>';
-}
-
-async function runIndividualAI(uid, rangeLabel) {
-  const p = swl_scores_cache[uid];
-  if (!p) return;
-
-  // Check cache first
-  const cacheId = uid + '_individual';
-  let cached = null;
-  try {
-    const cSnap = await db.collection('ai_summaries').doc(cacheId).get();
-    if (cSnap.exists) {
-      const cd = cSnap.data();
-      const ageHrs = (Date.now() - cd.generatedAt.toMillis()) / 3600000;
-      const scoreDelta = Math.abs((cd.scoreAtGeneration || 0) - (p.score || 0));
-      if (ageHrs < 168 && scoreDelta < 5) cached = cd.content;
-    }
-  } catch(e) {}
-
-  const outId = 'ai-out-' + uid;
-  const btnId = 'ai-btn-' + uid;
-  const outEl = document.getElementById(outId);
-  const btnEl = document.getElementById(btnId);
-  if (!outEl) return;
-
-  if (!AI_ENABLED && !cached) {
-    outEl.style.display = 'block';
-    outEl.innerHTML = aiNotConfiguredHtml();
-    if (btnEl) { btnEl.disabled = false; btnEl.textContent = '✨ AI Analysis'; }
-    return;
-  }
-
-  if (cached) {
-    renderAIOutput(outEl, cached, true);
-    return;
-  }
-
-  if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Analyzing\u2026'; }
-  outEl.style.display = 'block';
-  outEl.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:14px;text-align:center">\u2728 AI is analyzing ' + esc(p.name) + '\u2019s performance\u2026</div>';
-
-  const payload = {
-    scope: 'individual', rangeLabel: rangeLabel || 'All Time',
-    employee: {
-      name: p.name, role: p.role, branch: p.branch,
-      score: p.score, grade: p.grade, gradeLabel: p.gradeLabel,
-      risk: p.risk, trend: p.trend, trendDelta: p.trendDelta,
-      healthRate: p.healthRate, healthLabel: p.healthLabel,
-      onTime: p.onTime, late: p.late, missed: p.missed,
-      overdue: p.overdue, futurePending: p.futurePending,
-      onTimeRate: p.onTimeRate, completionRate: p.completionRate,
-      streak: p.streak, scoredItems: p.scoredItems,
-      newHireProtection: p.newHireProtection,
-      insufficientHistory: p.insufficientHistory,
-      components: p.components,
-      overdueItems: (p.overdueItems || []).slice(0, 10),
-      missedItems: (p.missedItems || []).slice(0, 5)
-    }
-  };
-
-  const systemPrompt = 'You are an accountability analyst for SouthWest Landscape Inc. Analyze the provided employee performance data and return a JSON object with exactly these keys: summary (string), score_explanation (string), strengths (array of strings), concerns (array of strings), recommendations (array of strings), patterns (array of strings), predictions (array of strings). Rules: Only reference data explicitly provided. Never invent metrics not in the input. Each array has 2-3 items of 1-2 sentences each. If newHireProtection is true, note limited history and omit trend claims. Tone: professional, coaching-focused, actionable. Output valid JSON only, no markdown, no preamble.';
-
-  try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6', max_tokens: 900,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: JSON.stringify(payload) }]
-      })
-    });
-    if (!resp.ok) throw new Error('API error ' + resp.status);
-    const data = await resp.json();
-    const raw = (data.content && data.content[0] && data.content[0].text) || '';
-    const clean = raw.replace(/```json|```/g, '').trim();
-    const result = JSON.parse(clean);
-
-    // Cache to Firestore
-    try {
-      await db.collection('ai_summaries').doc(cacheId).set({
-        content: result, generatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        scoreAtGeneration: p.score, uid: uid, scope: 'individual'
-      });
-    } catch(e) {}
-
-    renderAIOutput(outEl, result, false);
-    if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '\u2728 Regenerate Analysis'; }
-  } catch(e) {
-    outEl.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:12px;background:rgba(220,38,38,.08);border-radius:8px;border:1px solid rgba(220,38,38,.2)">AI analysis failed: ' + esc(e.message) + '</div>';
-    if (btnEl) { btnEl.disabled = false; btnEl.textContent = '\u2728 AI Analysis'; }
-  }
-}
-
-async function runTeamAI(branch, rangeLabel) {
-  const el = document.getElementById('ai-team-out');
-  const btn = document.getElementById('ai-team-btn');
-  if (!el) return;
-
-  const cacheId = (branch || 'ALL') + '_team';
-  let cached = null;
-  try {
-    const cSnap = await db.collection('ai_summaries').doc(cacheId).get();
-    if (cSnap.exists) {
-      const cd = cSnap.data();
-      const ageHrs = (Date.now() - cd.generatedAt.toMillis()) / 3600000;
-      if (ageHrs < 168) cached = cd.content;
-    }
-  } catch(e) {}
-
-  if (!AI_ENABLED && !cached) {
-    el.style.display = 'block';
-    el.innerHTML = aiNotConfiguredHtml();
-    if (btn) { btn.disabled = false; btn.textContent = '\u2728 Team AI Analysis'; }
-    return;
-  }
-
-  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing\u2026'; }
-  el.style.display = 'block';
-  el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:14px;text-align:center">\u2728 AI is analyzing team performance\u2026</div>';
-
-  if (cached) { renderAITeamOutput(el, cached, true); if (btn) { btn.disabled=false; btn.innerHTML='\u2728 Regenerate Team Analysis'; } return; }
-
-  const allScores = Object.values(swl_scores_cache);
-  const members = allScores.filter(p => !p.noActivity && (branch === 'ALL' || !branch || p.branch === branch || p.branch === 'ALL'));
-
-  const payload = {
-    scope: 'team', branch: branch || 'ALL', rangeLabel: rangeLabel || 'All Time',
-    branchScore: members.length ? Math.round(members.reduce((s,p)=>s+(p.score||0),0)/members.length) : null,
-    employees: members.map(p => ({
-      name: p.name, role: p.role, score: p.score, grade: p.grade,
-      healthRate: p.healthRate, healthLabel: p.healthLabel,
-      onTime: p.onTime, missed: p.missed, overdue: p.overdue,
-      trend: p.trend, streak: p.streak,
-      topOverdue: (p.overdueItems||[]).slice(0,2).map(i=>i.title)
-    })),
-    topPerformers:   members.filter(p=>p.grade==='A'||p.grade==='B').map(p=>p.name+' ('+p.score+')'),
-    needsCoaching:   members.filter(p=>p.grade==='D'||p.grade==='F').map(p=>p.name+' ('+p.grade+', '+p.overdue+' overdue)'),
-    excessiveOverdue:members.filter(p=>p.overdue>=3).map(p=>p.name+' ('+p.overdue+' overdue)')
-  };
-
-  const systemPrompt = 'You are an operations manager analyst for SouthWest Landscape Inc. Analyze the provided branch team data and return a JSON object with exactly these keys: branch_summary (string), health_overview (string), top_performers (array), coaching_needed (array), overdue_risks (array), trend_analysis (string), recommended_actions (array). Rules: Only reference data explicitly provided. Never invent employees or metrics not in the input. Each array has 2-3 items of 1-2 sentences. Tone: management-focused, action-oriented. Output valid JSON only, no markdown, no preamble.';
-
-  try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 900, system: systemPrompt, messages: [{ role: 'user', content: JSON.stringify(payload) }] })
-    });
-    if (!resp.ok) throw new Error('API error ' + resp.status);
-    const data = await resp.json();
-    const raw = (data.content && data.content[0] && data.content[0].text) || '';
-    const result = JSON.parse(raw.replace(/```json|```/g,'').trim());
-    try {
-      await db.collection('ai_summaries').doc(cacheId).set({
-        content: result, generatedAt: firebase.firestore.FieldValue.serverTimestamp(), scope: 'team', branch: branch || 'ALL'
-      });
-    } catch(e) {}
-    renderAITeamOutput(el, result, false);
-    if (btn) { btn.disabled=false; btn.innerHTML='\u2728 Regenerate Team Analysis'; }
-  } catch(e) {
-    el.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:12px;background:rgba(220,38,38,.08);border-radius:8px">Team AI analysis failed: ' + esc(e.message) + '</div>';
-    if (btn) { btn.disabled=false; btn.textContent='\u2728 Team AI Analysis'; }
-  }
-}
-
-function renderAIOutput(el, r, fromCache) {
-  function section(icon, title, items, color) {
-    if (!items || !items.length) return '';
-    return '<div style="margin-bottom:12px">'
-      + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:'+color+';margin-bottom:6px">'+icon+' '+title+'</div>'
-      + items.map(s=>'<div style="font-size:12px;color:var(--text2);line-height:1.65;padding:4px 0 4px 10px;border-left:2px solid '+color+'22;margin-bottom:4px">'+esc(s)+'</div>').join('')
-      + '</div>';
-  }
-  el.style.display = 'block';
-  el.innerHTML = '<div style="background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.2);border-radius:10px;padding:16px;margin-top:12px">'
-    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
-    + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#A78BFA">\u2728 AI Analysis</div>'
-    + '<div style="font-size:10px;color:var(--text3)">'+(fromCache?'\ud83d\udcbe Cached result':'\ud83d\udfe2 Live')+'</div>'
-    + '</div>'
-    + (r.summary ? '<div style="font-size:13px;color:var(--text);line-height:1.65;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">'+esc(r.summary)+'</div>' : '')
-    + (r.score_explanation ? '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:12px;font-style:italic">'+esc(r.score_explanation)+'</div>' : '')
-    + section('\u2705','Strengths',         r.strengths,        '#4ADE80')
-    + section('\u26a0\ufe0f','Concerns',    r.concerns,         '#FB923C')
-    + section('\ud83d\udca1','Recommendations', r.recommendations, '#60A5FA')
-    + section('\ud83d\udd04','Patterns Detected', r.patterns,    '#FBBF24')
-    + section('\ud83d\udd2e','Predictive Risks',  r.predictions, '#F472B6')
-    + '</div>';
-}
-
-function renderAITeamOutput(el, r, fromCache) {
-  function section(icon, title, items, color) {
-    if (!items || !items.length) return '';
-    return '<div style="margin-bottom:12px">'
-      + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:'+color+';margin-bottom:6px">'+icon+' '+title+'</div>'
-      + items.map(s=>'<div style="font-size:12px;color:var(--text2);line-height:1.65;padding:4px 0 4px 10px;border-left:2px solid '+color+'22;margin-bottom:4px">'+esc(s)+'</div>').join('')
-      + '</div>';
-  }
-  el.style.display = 'block';
-  el.innerHTML = '<div style="background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.2);border-radius:10px;padding:16px">'
-    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
-    + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#A78BFA">\u2728 Team AI Analysis</div>'
-    + '<div style="font-size:10px;color:var(--text3)">'+(fromCache?'\ud83d\udcbe Cached':'\ud83d\udfe2 Live')+'</div>'
-    + '</div>'
-    + (r.branch_summary ? '<div style="font-size:13px;color:var(--text);line-height:1.65;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">'+esc(r.branch_summary)+'</div>' : '')
-    + (r.health_overview ? '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:12px;font-style:italic">'+esc(r.health_overview)+'</div>' : '')
-    + section('\ud83c\udfc6','Top Performers',     r.top_performers,    '#4ADE80')
-    + section('\ud83d\udcde','Coaching Needed',    r.coaching_needed,   '#FB923C')
-    + section('\u23f0','Overdue Risk Areas',   r.overdue_risks,     '#F87171')
-    + (r.trend_analysis ? '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#60A5FA;margin-bottom:6px">\ud83d\udcc8 Trend Analysis</div><div style="font-size:12px;color:var(--text2);line-height:1.65;padding:4px 0 4px 10px;border-left:2px solid rgba(96,165,250,.25)">'+esc(r.trend_analysis)+'</div></div>' : '')
-    + section('\u2705','Recommended Actions', r.recommended_actions,'#60A5FA')
-    + '</div>';
-}
-
 async function renderMyGrading() {
   const ca = document.getElementById('content-area');
   ca.innerHTML = '<div class="empty">Loading your grading…</div>';
@@ -4109,12 +3882,6 @@ async function renderAccountability() {
         + '</div></td>'
       + '<td style="padding:8px 10px;color:'+tc(p.trend)+'">'+ti(p.trend)+'<span style="font-size:10px;margin-left:2px">'+(p.insufficientHistory?'\u2014':p.trend)+'</span></td>'
       + '<td style="padding:8px 10px"><span style="font-size:10px;font-weight:700;color:'+rc(p.risk)+'">'+p.riskLabel+'</span></td>'
-      + '<td style="padding:8px 10px">'
-        + '<div id="ai-out-'+p.uid+'" style="display:none"></div>'
-        + '<button id="ai-btn-'+p.uid+'" onclick="event.stopPropagation();runIndividualAI(\''+p.uid+'\',\''+rangeKey+'\')" '
-        + 'style="background:rgba(139,92,246,.12);color:#A78BFA;border:1px solid rgba(139,92,246,.3);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">'
-        + '\u2728 AI</button>'
-        + '</td>'
       + '</tr>';
   }
 
@@ -4204,21 +3971,19 @@ async function renderAccountability() {
     + '</div>'
     + '<div style="overflow-x:auto">'
     + '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:900px"><thead><tr>'
-    + ['Employee','Branch','Score','Grade','Acct Health','On Time','Late','Missed','Overdue','Reliability','Trend','Risk','AI']
+    + ['Employee','Branch','Score','Grade','Acct Health','On Time','Late','Missed','Overdue','Reliability','Trend','Risk']
         .map(h=>'<th style="text-align:left;padding:6px 10px;border-bottom:2px solid var(--border);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);white-space:nowrap">'+h+'</th>').join('')
     + '</tr></thead><tbody>'
     + active.map(buildRow).join('')
     + (inactive.length ? '<tr><td colspan="12" style="padding:6px 10px;font-size:10px;color:var(--text3);font-style:italic;border-top:1px dashed var(--border)">No-activity employees ('+inactive.length+')</td></tr>' + inactive.map(buildRow).join('') : '')
     + '</tbody></table></div>'
 
-    // Branch scores bar + Team AI button
+    // Branch scores bar
     + '<div style="display:flex;align-items:center;gap:16px;padding:10px 0 2px;border-top:1px solid var(--border);margin-top:6px;font-size:11px;flex-wrap:wrap">'
     + (scoreData.branchScores.OC  !==null ? '<span style="color:var(--text3)">OC Score: <strong style="color:var(--oc)">'+scoreData.branchScores.OC+'</strong></span>' : '')
     + (scoreData.branchScores.LA  !==null ? '<span style="color:var(--text3)">LA Score: <strong style="color:var(--la)">'+scoreData.branchScores.LA+'</strong></span>' : '')
     + (scoreData.companyScore     !==null ? '<span style="color:var(--text3)">Company: <strong style="color:var(--swl-green)">'+scoreData.companyScore+'</strong></span>' : '')
-    + '<button id="ai-team-btn" onclick="runTeamAI(\''+branchKey+'\',\''+rangeKey+'\')" style="margin-left:auto;background:rgba(139,92,246,.12);color:#A78BFA;border:1px solid rgba(139,92,246,.3);border-radius:6px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer">\u2728 Team AI Analysis</button>'
     + '</div>'
-    + '<div id="ai-team-out" style="display:none;margin-top:10px"></div>'
     + '</div>'
 
     // ── QUICK VIEW INDICATOR CARDS (2-col grid) ───────────────────────
@@ -4572,6 +4337,16 @@ function filterItems(f) {
 }
 
 function filterItemsBySearch(query) {
+  // A search is a request to look across everyone, not just whoever's roster
+  // chip happens to still be selected — otherwise typing a name/title while a
+  // teammate's chip is active silently ANDs the two together and can hide
+  // items that obviously match, including someone's own.
+  if (query && query.trim() && _itemsCurrentPerson) {
+    _itemsCurrentPerson = '';
+    document.querySelectorAll('#wi-roster .wi-roster-chip').forEach(chip => {
+      chip.classList.toggle('active', chip.dataset.person === '');
+    });
+  }
   applyItemsFilters(query);
 }
 
@@ -4590,7 +4365,12 @@ function applyItemsFilters(searchOverride) {
     // search, or the Completed filter itself is selected, which is exactly
     // asking to review them (e.g. auditing what's really been followed up on).
     const hiddenByDefault = row.dataset.defaultHidden === '1' && !q && _itemsCurrentFilter !== 'completed';
-    const matchesPerson = !_itemsCurrentPerson || row.dataset.ownerName === _itemsCurrentPerson;
+    // Substring match, not exact equality — the roster's name comes from the
+    // hardcoded TEAM list while an item's ownerName comes from whatever was
+    // actually typed/stored on it; a minor spelling/format difference between
+    // the two shouldn't make someone's own items look like they don't exist.
+    const ownerNameVal = row.dataset.ownerName || '';
+    const matchesPerson = !_itemsCurrentPerson || ownerNameVal.includes(_itemsCurrentPerson) || _itemsCurrentPerson.includes(ownerNameVal);
     row.style.display = (matchesFilter && matchesSearch && matchesPerson && !hiddenByDefault) ? 'block' : 'none';
   });
 }
@@ -5462,29 +5242,6 @@ async function renderAdmin() {
       <div id="badge-admin-content"></div>
     </div>
 
-    <div class="card" style="margin-top:16px;border-top:3px solid #A78BFA">
-      <div class="card-header">
-        <div class="card-title">&#10024; AI Accountability Analyzer</div>
-        <span class="badge" style="background:rgba(167,139,250,.15);color:#A78BFA;border-color:rgba(167,139,250,.3)">Admin only</span>
-      </div>
-      <p style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:14px">
-        Run AI analysis on any employee or the full team. Results are cached for 7 days and invalidated when scores change by 5+ points.
-      </p>
-      <div style="margin-bottom:12px">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:8px">Team Analysis</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-          <button class="btn" onclick="runTeamAIAdmin('ALL')" style="background:rgba(139,92,246,.1);color:#A78BFA;border-color:rgba(139,92,246,.3)">&#10024; All Branches</button>
-          <button class="btn" onclick="runTeamAIAdmin('OC')" style="background:rgba(139,92,246,.1);color:#A78BFA;border-color:rgba(139,92,246,.3)">&#10024; OC Branch</button>
-          <button class="btn" onclick="runTeamAIAdmin('LA')" style="background:rgba(139,92,246,.1);color:#A78BFA;border-color:rgba(139,92,246,.3)">&#10024; LA Branch</button>
-        </div>
-        <div id="ai-admin-team-out" style="margin-top:10px"></div>
-      </div>
-      <div>
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:8px">Individual Employee Analysis</div>
-        <div id="ai-admin-employee-list" style="display:flex;flex-direction:column;gap:8px"></div>
-      </div>
-    </div>
-
     <div class="card" style="margin-top:16px;border-top:3px solid #FBBF24">
       <div class="card-header">
         <div class="card-title">&#128202; Data Integrity Report</div>
@@ -5569,8 +5326,6 @@ async function renderAdmin() {
       <button class="btn primary" style="background:#7C3AED;border-color:#7C3AED" onclick="sendAppreciation()">&#128156; Send Appreciation</button>
       <div id="app-result" style="margin-top:10px;display:none"></div>
     </div>`;
-  // Populate the AI employee list if scores are already cached
-  populateAdminAIEmployeeList();
 }
 
 async function uploadUserPhoto(uid, input) {
@@ -6308,114 +6063,6 @@ async function revokeBadge(awardId, userName, badgeName) {
     toast('Badge removed from '+userName);
     showBadgeHistory();
   } catch(e) { toast('Error: '+e.message,'danger'); }
-}
-
-
-// ══ ADMIN AI HELPERS ══
-
-async function runTeamAIAdmin(branch) {
-  const outEl = document.getElementById('ai-admin-team-out');
-  if (!outEl) return;
-  outEl.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:10px">\u2728 Loading scores\u2026</div>';
-  if (!Object.keys(swl_scores_cache).length) {
-    try { await buildUserScores(null, 'all'); } catch(e) {}
-  }
-  await runTeamAIForEl(branch, 'All Time', outEl, null);
-}
-
-async function runTeamAIForEl(branch, rangeLabel, outEl, btnEl) {
-  const cacheId=(branch||'ALL')+'_team';
-  let cached=null;
-  try{const cSnap=await db.collection('ai_summaries').doc(cacheId).get();if(cSnap.exists){const cd=cSnap.data();if((Date.now()-cd.generatedAt.toMillis())/3600000<168)cached=cd.content;}}catch(e){}
-  if (!AI_ENABLED && !cached) {
-    outEl.style.display='block';
-    outEl.innerHTML = aiNotConfiguredHtml();
-    if (btnEl) { btnEl.disabled=false; btnEl.textContent='\u2728 Team AI Analysis'; }
-    return;
-  }
-  if (btnEl) { btnEl.disabled=true; btnEl.textContent='Analyzing\u2026'; }
-  outEl.style.display='block';
-  outEl.innerHTML='<div style="color:var(--text3);font-size:12px;padding:14px;text-align:center">\u2728 Analyzing team\u2026</div>';
-  if(cached){renderAITeamOutput(outEl,cached,true);if(btnEl){btnEl.disabled=false;btnEl.innerHTML='\u2728 Regenerate';}return;}
-  const members=Object.values(swl_scores_cache).filter(p=>!p.noActivity&&(branch==='ALL'||!branch||p.branch===branch||p.branch==='ALL'));
-  const payload={scope:'team',branch:branch||'ALL',rangeLabel,branchScore:members.length?Math.round(members.reduce((s,p)=>s+(p.score||0),0)/members.length):null,
-    employees:members.map(p=>({name:p.name,role:p.role,score:p.score,grade:p.grade,healthRate:p.healthRate,healthLabel:p.healthLabel,onTime:p.onTime,missed:p.missed,overdue:p.overdue,trend:p.trend,streak:p.streak,topOverdue:(p.overdueItems||[]).slice(0,2).map(i=>i.title)})),
-    topPerformers:members.filter(p=>p.grade==='A'||p.grade==='B').map(p=>p.name+' ('+p.score+')'),
-    needsCoaching:members.filter(p=>p.grade==='D'||p.grade==='F').map(p=>p.name+' ('+p.grade+', '+p.overdue+' overdue)'),
-    excessiveOverdue:members.filter(p=>p.overdue>=3).map(p=>p.name+' ('+p.overdue+' overdue)')};
-  const sys='You are an operations manager analyst for SouthWest Landscape Inc. Analyze the provided branch team data and return a JSON object with exactly these keys: branch_summary (string), health_overview (string), top_performers (array), coaching_needed (array), overdue_risks (array), trend_analysis (string), recommended_actions (array). Only reference data explicitly provided. Each array 2-3 items, 1-2 sentences each. Output valid JSON only, no markdown, no preamble.';
-  try{
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:900,system:sys,messages:[{role:'user',content:JSON.stringify(payload)}]})});
-    if(!resp.ok)throw new Error('API '+resp.status);
-    const result=JSON.parse((await resp.json()).content[0].text.replace(/```json|```/g,'').trim());
-    try{await db.collection('ai_summaries').doc(cacheId).set({content:result,generatedAt:firebase.firestore.FieldValue.serverTimestamp(),scope:'team',branch:branch||'ALL'});}catch(e){}
-    renderAITeamOutput(outEl,result,false);
-    if(btnEl){btnEl.disabled=false;btnEl.innerHTML='\u2728 Regenerate';}
-  }catch(e){
-    outEl.innerHTML='<div style="color:var(--danger);font-size:12px;padding:12px;background:rgba(220,38,38,.08);border-radius:8px">Failed: '+esc(e.message)+'</div>';
-    if(btnEl){btnEl.disabled=false;btnEl.textContent='\u2728 Team AI Analysis';}
-  }
-}
-
-function populateAdminAIEmployeeList() {
-  const el = document.getElementById('ai-admin-employee-list');
-  if (!el) return;
-  const scored = Object.values(swl_scores_cache).filter(p=>!p.noActivity).sort((a,b)=>(b.score||0)-(a.score||0));
-  if (!scored.length) {
-    el.innerHTML='<div style="font-size:12px;color:var(--text3)">Scores not yet loaded. Open Reports → Accountability first, then return here to analyze employees.</div>';
-    return;
-  }
-  const rangeNote = '<div style="font-size:10.5px;font-weight:600;color:var(--text3);margin-bottom:8px">&#128197; Scores shown are from: '
-    + esc(SWL_RANGE_LABELS[swl_scores_cache_meta.dateRange]||'All Time') + ' &middot; ' + esc(swl_scores_cache_meta.branch||'ALL') + ' branch</div>';
-  el.innerHTML = rangeNote + scored.map(p=>{
-    const gc={A:'var(--success)',B:'var(--success)',C:'#FBBF24',D:'var(--warn)',F:'var(--danger)'}[p.grade]||'var(--text3)';
-    return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px">'
-      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">'
-      +'<div style="flex:1"><div style="font-size:13px;font-weight:600">'+esc(p.name)+'</div>'
-      +'<div style="font-size:10px;color:var(--text3)">'+esc(p.role||'')+' \u00b7 <span class="badge '+(p.branch||'').toLowerCase()+'">'+p.branch+'</span></div></div>'
-      +'<span style="font-size:16px;font-weight:700;color:'+gc+'">'+p.score+'</span>'
-      +' <span style="font-size:11px;font-weight:700;color:'+gc+'">'+p.grade+'</span>'
-      +' <button onclick="runIndividualAIAdmin(\''+p.uid+'\')" id="ai-adm-btn-'+p.uid+'" '
-      +'style="background:rgba(139,92,246,.12);color:#A78BFA;border:1px solid rgba(139,92,246,.3);border-radius:6px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer">'
-      +'\u2728 Analyze</button>'
-      +'</div>'
-      +'<div id="ai-adm-out-'+p.uid+'" style="display:none"></div>'
-      +'</div>';
-  }).join('');
-}
-
-async function runIndividualAIAdmin(uid) {
-  if (!Object.keys(swl_scores_cache).length) try{await buildUserScores(null,'all');}catch(e){}
-  const p=swl_scores_cache[uid]; if(!p)return;
-  const outEl=document.getElementById('ai-adm-out-'+uid);
-  const btnEl=document.getElementById('ai-adm-btn-'+uid);
-  if(!outEl)return;
-  const cacheId=uid+'_individual';
-  let cached=null;
-  try{const cSnap=await db.collection('ai_summaries').doc(cacheId).get();if(cSnap.exists){const cd=cSnap.data();if((Date.now()-cd.generatedAt.toMillis())/3600000<168&&Math.abs((cd.scoreAtGeneration||0)-(p.score||0))<5)cached=cd.content;}}catch(e){}
-  if (!AI_ENABLED && !cached) {
-    outEl.style.display='block';
-    outEl.innerHTML = aiNotConfiguredHtml();
-    if (btnEl) { btnEl.disabled=false; btnEl.textContent='\u2728 Analyze'; }
-    return;
-  }
-  if(cached){renderAIOutput(outEl,cached,true);return;}
-  if(btnEl){btnEl.disabled=true;btnEl.textContent='Analyzing\u2026';}
-  outEl.style.display='block';
-  outEl.innerHTML='<div style="color:var(--text3);font-size:12px;padding:12px;text-align:center">\u2728 Analyzing '+esc(p.name)+'\u2026</div>';
-  const payload={scope:'individual',rangeLabel:'All Time',employee:{name:p.name,role:p.role,branch:p.branch,score:p.score,grade:p.grade,gradeLabel:p.gradeLabel,risk:p.risk,trend:p.trend,trendDelta:p.trendDelta,healthRate:p.healthRate,healthLabel:p.healthLabel,onTime:p.onTime,late:p.late,missed:p.missed,overdue:p.overdue,futurePending:p.futurePending,onTimeRate:p.onTimeRate,streak:p.streak,scoredItems:p.scoredItems,newHireProtection:p.newHireProtection,insufficientHistory:p.insufficientHistory,components:p.components,overdueItems:(p.overdueItems||[]).slice(0,10),missedItems:(p.missedItems||[]).slice(0,5)}};
-  const sys='You are an accountability analyst for SouthWest Landscape Inc. Analyze the provided employee performance data and return a JSON object with exactly these keys: summary (string), score_explanation (string), strengths (array of strings), concerns (array of strings), recommendations (array of strings), patterns (array of strings), predictions (array of strings). Only reference data explicitly provided. Never invent metrics not in the input. Each array 2-3 items, 1-2 sentences each. If newHireProtection is true, note limited history and omit trend claims. Tone: professional, coaching-focused, not punitive. Output valid JSON only, no markdown, no preamble.';
-  try{
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:900,system:sys,messages:[{role:'user',content:JSON.stringify(payload)}]})});
-    if(!resp.ok)throw new Error('API '+resp.status);
-    const result=JSON.parse((await resp.json()).content[0].text.replace(/```json|```/g,'').trim());
-    try{await db.collection('ai_summaries').doc(cacheId).set({content:result,generatedAt:firebase.firestore.FieldValue.serverTimestamp(),scoreAtGeneration:p.score,uid,scope:'individual'});}catch(e){}
-    renderAIOutput(outEl,result,false);
-    if(btnEl){btnEl.disabled=false;btnEl.innerHTML='\u2728 Regenerate';}
-  }catch(e){
-    outEl.innerHTML='<div style="color:var(--danger);font-size:12px;padding:12px;background:rgba(220,38,38,.08);border-radius:8px">Failed: '+esc(e.message)+'</div>';
-    if(btnEl){btnEl.disabled=false;btnEl.textContent='\u2728 Analyze';}
-  }
 }
 
 // ══ DEFAULT BADGES LIBRARY ══
