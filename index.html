@@ -745,7 +745,7 @@ const TEAM = [
   { name:'Yocelin Reynoso Prado',email:'yocelin@southwestlandscapeinc.com',    role:'branch_manager',        branch:'LA', initials:'YR', color:'#003F6E' },
   { name:'Sebastian Gomez',      email:'sebastian@southwestlandscapeinc.com',  role:'client_rep',            branch:'LA', initials:'SG', color:'#5E1522' },
   { name:'Juan Zaragoza',        email:'juan@southwestlandscapeinc.com',       role:'ops_specialist',        branch:'LA', initials:'JZ', color:'#005A9C' },
-  { name:'Antonio Ballinas',     email:'antonio@southwestlandscapeinc.com',    role:'irrigation_supervisor', branch:'LA', initials:'AB', color:'#005A9C' },
+  { name:'Antonio Ballinas',     email:'antonio@southwestlandscapeinc.com',    role:'irrigation_supervisor', branch:'LA', initials:'AB', color:'#005A9C', language:'es' },
   { name:'David Eufracio',       email:'david@southwestlandscapeinc.com',      role:'admin',                 branch:'ALL',initials:'DE', color:'#7A1C2E' }
 ];
 
@@ -795,15 +795,24 @@ function getMonday(d) {
   dt.setDate(diff); dt.setHours(0,0,0,0); return dt;
 }
 function getSaturday(m) { const d = new Date(m); d.setDate(d.getDate()+5); return d; }
+// A plain "YYYY-MM-DD" string (how every deadline/incident date field is
+// stored) gets parsed by `new Date(...)` as UTC midnight — then formatting
+// it in a US timezone rolls it back a calendar day (e.g. 7/30 shows as
+// 7/29). Force local-midnight parsing for date-only strings; anything else
+// (a real Date, a Firestore Timestamp, a full ISO datetime) passes through.
+function swlParseDateLocal(d) {
+  if (d instanceof Date) return d;
+  if (d && d.toDate) return d.toDate();
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) return new Date(d + 'T00:00:00');
+  return new Date(d);
+}
 function fmtDate(d) {
   if (!d) return '—';
-  const dt = d instanceof Date ? d : d.toDate ? d.toDate() : new Date(d);
-  return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  return swlParseDateLocal(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 }
 function fmtShort(d) {
   if (!d) return '—';
-  const dt = d instanceof Date ? d : d.toDate ? d.toDate() : new Date(d);
-  return dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+  return swlParseDateLocal(d).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
 }
 function weekKey(m) { return new Date(m).toISOString().split('T')[0]; }
 function fmtWeek(m) { return `${fmtShort(m)} – ${fmtShort(getSaturday(m))}`; }
@@ -2122,10 +2131,15 @@ async function renderCheckin(type) {
   const branchLabel = type.includes('oc')||type==='om' ? 'OC' : type.includes('la')||type==='os'||type==='sv' ? 'LA' : '';
   const accentClass = branchLabel==='OC'?'oc-btn':branchLabel==='LA'?'la-btn':'primary';
 
-  // Load Spanish preference
+  // Load Spanish preference — an explicit per-device toggle wins if they've
+  // ever used it; otherwise default to their profile's language (set on
+  // TEAM, e.g. Antonio Ballinas) instead of always starting in English.
+  // localStorage alone made the preference reset on every new device/browser.
   const spanishTypes = ['os','sv'];
+  const storedLangPref = localStorage.getItem('swl-lang-' + CU.uid);
+  const profileLang = TEAM.find(t => t.name === CD.name)?.language;
   const useSpanish = spanishTypes.includes(type)
-    && localStorage.getItem('swl-lang-' + CU.uid) === 'es';
+    && (storedLangPref ? storedLangPref === 'es' : profileLang === 'es');
 
   ca.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
@@ -2148,7 +2162,7 @@ async function renderCheckin(type) {
       <div id="inline-weekly-items" style="display:flex;flex-direction:column;gap:6px">
         <div style="color:#555;font-size:12px;padding:4px;font-style:italic">Loading weekly items…</div>
       </div>
-      <textarea id="wi-inline-notes" rows="2" placeholder="Weekly items notes — any blockers, progress, or carry-overs?" style="width:100%;margin-top:8px;padding:8px 10px;border-radius:6px;border:1px solid var(--border);font-size:12px;background:var(--surface);color:var(--text);resize:vertical"></textarea>
+      <textarea id="wi-inline-notes" rows="2" placeholder="Weekly items notes — any blockers, progress, or carry-overs?" style="width:100%;margin-top:8px;padding:8px 10px;border-radius:6px;border:1px solid var(--border);font-size:12px;background:var(--surface);color:var(--text);resize:vertical">${esc(existingData.weekly_items_notes||'')}</textarea>
     </div>
     <div class="btn-row">
       <button class="btn ${accentClass}" onclick="submitCheckin('${type}','${existingId||''}','submitted')">
@@ -2171,8 +2185,14 @@ function togglePass() {
 }
 
 function toggleLanguage(type) {
-  const current = localStorage.getItem('swl-lang-' + CU.uid);
-  localStorage.setItem('swl-lang-' + CU.uid, current === 'es' ? 'en' : 'es');
+  // Flip the EFFECTIVE current language, not just the raw stored value — if
+  // nothing's been explicitly toggled yet, the profile default (see
+  // renderCheckin) may already be Spanish, and reading only localStorage
+  // here would make the first click on the button silently do nothing.
+  const stored = localStorage.getItem('swl-lang-' + CU.uid);
+  const profileLang = TEAM.find(t => t.name === CD.name)?.language;
+  const currentlySpanish = stored ? stored === 'es' : profileLang === 'es';
+  localStorage.setItem('swl-lang-' + CU.uid, currentlySpanish ? 'en' : 'es');
   renderCheckin(type); // re-render with new language
 }
 
@@ -2408,6 +2428,7 @@ function addTableRow(btn, id) {
 async function submitCheckin(type, existingId, status) {
   const fields = collectFormFields();
   const wk = weekKey(CW);
+  const wiNotesEl = document.getElementById('wi-inline-notes');
   const data = {
     userId: CU.uid,
     userEmail: CU.email,
@@ -2419,7 +2440,13 @@ async function submitCheckin(type, existingId, status) {
     weekEnd: weekKey(getSaturday(CW)),
     status,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    ...fields
+    ...fields,
+    // Was rendered but never actually collected — typed here, silently
+    // discarded on submit, so a manager could never see it. Captured
+    // separately from collectFormFields() since this textarea lives outside
+    // #checkin-form-body (it's about the inline weekly-items block, not the
+    // dynamic per-role form).
+    weekly_items_notes: (wiNotesEl ? wiNotesEl.value : '').trim()
   };
   if (!existingId) data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
 
@@ -2955,6 +2982,18 @@ function swlDaysBetween(dateStrA, dateStrB) {
   return Math.round((b - a) / 86400000);
 }
 
+// Shared with swlScoreOneUser and renderItems — a deadline pushed forward
+// while the item was already overdue shouldn't make it invisible just
+// because its new deadline hasn't arrived yet. Both the score and the
+// operational Weekly Items list need to agree on this or an item can be
+// "overdue" in one screen and unfindable in the other.
+function swlWasPushedWhileOverdue(item) {
+  return (item.extensionHistory || []).some(ext => {
+    if (!ext.changedAt || !ext.originalDeadline) return false;
+    return ext.changedAt.slice(0, 10) > ext.originalDeadline;
+  });
+}
+
 function swlLatenessPoints(item) {
   // Returns points earned for a completed item based on how late it was.
   // Priority: resolvedAt > lastStatusAt > updatedAt > unknown
@@ -3086,12 +3125,7 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
   // if it happened before the original deadline passed; if the deadline had
   // already blown by the time someone extended it, that item keeps counting
   // against the person until it's actually finished.
-  function wasPushedWhileOverdue(i) {
-    return (i.extensionHistory || []).some(ext => {
-      if (!ext.changedAt || !ext.originalDeadline) return false;
-      return ext.changedAt.slice(0, 10) > ext.originalDeadline;
-    });
-  }
+  const wasPushedWhileOverdue = swlWasPushedWhileOverdue;
 
   // Separate items into scored vs future-pending (excluded)
   // Items due today (deadline === today) are NOT yet overdue — exclude them same as future.
@@ -3198,7 +3232,14 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
   const maxPossible = insufficientHistory ? 75 : 85;
   const rawSum = rawA + rawB + rawD;
   const rawTotal = noActivity ? null : Math.max(0, Math.min(maxPossible, rawSum));
-  const finalScore = noActivity ? null : Math.round((rawTotal / maxPossible) * 100 * volMod);
+  const uncappedScore = noActivity ? null : Math.round((rawTotal / maxPossible) * 100 * volMod);
+  // "Excellent" shouldn't be achievable while work is currently sitting open
+  // overdue, no matter how the ratio-based components land — an open backlog
+  // is a live problem, not just a drag on a percentage. Caps the score itself
+  // (not just the label) so the number and the grade never contradict each
+  // other on screen.
+  const cappedByOpenBacklog = !noActivity && openOverdueItems.length > 0 && uncappedScore >= 90;
+  const finalScore = cappedByOpenBacklog ? 89 : uncappedScore;
   const grade = noActivity ? null : swlGrade(finalScore);
 
   // Show "insufficient data" label only when fewer than 4 scored items (not for new-hire trend protection)
@@ -3237,6 +3278,7 @@ function swlScoreOneUser(userItems, submittedWeekStarts, priorItems, priorSubs, 
     trend: noActivity ? 'none' : (rawD > 0 ? 'improving' : rawD < 0 ? 'declining' : 'stable'),
     trendDelta: rawD,
     trendCappedByBacklog,
+    cappedByOpenBacklog,
     insufficientHistory,
     newHireProtection,
     components: {
@@ -3719,9 +3761,10 @@ function buildScoreReportHtml(p, idPrefix) {
     // in the same breath as an overdue-items list, even if the number itself is small.
     const daysPhrase = maxDaysOverdue !== null ? (p.overdue === 1 ? maxDaysOverdue+'d past its deadline' : 'up to '+maxDaysOverdue+'d past deadline') : null;
     const pushedPhrase = anyPushedWhileOverdue ? (daysPhrase ? ' — some pushed back while already overdue' : ' — pushed back while already overdue, new deadline hasn’t arrived yet') : '';
+    const cappedPhrase = p.cappedByOpenBacklog ? ' The ratio-based components alone would’ve scored higher, but the grade is capped below Excellent while any of this is still open.' : '';
     mainConcern = p.overdue === 1
-      ? '1 item is currently overdue'+(daysPhrase?' ('+daysPhrase+')':'')+pushedPhrase+', see Overdue Items below. Worth confirming it gets closed out soon — it’s already holding the score back, and will further the longer it sits.'
-      : p.overdue+' items are currently overdue'+(daysPhrase?' ('+daysPhrase+')':'')+pushedPhrase+', see Overdue Items below. Worth confirming these get closed out soon — they’re already holding the score back, and will further the longer they sit.';
+      ? '1 item is currently overdue'+(daysPhrase?' ('+daysPhrase+')':'')+pushedPhrase+', see Overdue Items below. Worth confirming it gets closed out soon — it’s already holding the score back, and will further the longer it sits.'+cappedPhrase
+      : p.overdue+' items are currently overdue'+(daysPhrase?' ('+daysPhrase+')':'')+pushedPhrase+', see Overdue Items below. Worth confirming these get closed out soon — they’re already holding the score back, and will further the longer they sit.'+cappedPhrase;
     concernLevel = 'medium';
   } else if (weakestPillar.pct < 60) {
     mainConcern = '“'+weakestPillar.label+'” is the weakest of the three at '+weakestPillar.pct+'%. That’s the best place to focus improvement.';
@@ -4280,20 +4323,25 @@ async function renderItems() {
   // (owner/ownerName/branch) with anything else risks needing a manual
   // Firestore composite index we can't assume exists.
   let priorSnap = null, priorSnapName = null, priorSnapBranch = null;
+  let priorFetchError = null;
   if (!isMgr) {
     try {
       priorSnap = await db.collection('weekly_items').where('owner','==',CU.uid).get();
-    } catch(e) { priorSnap = null; }
+    } catch(e) { priorSnap = null; priorFetchError = e.message; }
     try {
       priorSnapName = await db.collection('weekly_items').where('ownerName','==',CD.name).get();
-    } catch(e) { priorSnapName = null; }
+    } catch(e) { priorSnapName = null; priorFetchError = priorFetchError || e.message; }
   } else {
     try {
       priorSnapBranch = branch
         ? await db.collection('weekly_items').where('branch','==',branch).get()
         : await db.collection('weekly_items').get();
-    } catch(e) { priorSnapBranch = null; }
+    } catch(e) { priorSnapBranch = null; priorFetchError = e.message; }
   }
+  // A failure here used to fail silently — carried-over/overdue items from
+  // past weeks would just be missing with no indication why, easy to
+  // mistake for "there's nothing there" instead of "this couldn't load."
+  if (priorFetchError) toast('Some older items may not be showing — ' + priorFetchError, 'err');
 
   const snap = await q.get();
   const today = new Date().toISOString().split('T')[0];
@@ -4308,13 +4356,18 @@ async function renderItems() {
       docs.forEach(d => {
         const it = {id:d.id,...d.data()};
         if (!currentIds.has(it.id) && it.weekStart !== wk) {
-          const isPastDeadline = it.deadline && it.deadline < today;
+          // A push-back applied while an item was already overdue can move its
+          // deadline into the future — checking only the current deadline made
+          // that item vanish from this list entirely (still open, but neither
+          // "this week" nor "past deadline" anymore). Same rule the score uses.
+          const isOpenOverdue = (it.status === 'pending' || it.status === 'in_progress')
+            && ((it.deadline && it.deadline < today) || swlWasPushedWhileOverdue(it));
           const isCompleted = ['completed_on_time','completed_late','not_completed'].includes(it.status);
-          if (isPastDeadline || isCompleted) {
+          if (isOpenOverdue || isCompleted) {
             items.push({
               ...it,
               _prior_week: true,
-              _overdue_prior: it.status === 'pending' && isPastDeadline
+              _overdue_prior: isOpenOverdue
             });
             currentIds.add(it.id);
           }
@@ -4334,8 +4387,11 @@ async function renderItems() {
     priorSnapBranch.docs.forEach(d => {
       const it = {id:d.id,...d.data()};
       if (currentIds.has(it.id) || it.weekStart === wk) return;
-      const isPastDeadline = it.deadline && it.deadline < today;
-      const isOpenOverdue = (it.status === 'pending' || it.status === 'in_progress') && isPastDeadline;
+      // Same reasoning as the employee branch above — a push-back applied while
+      // already overdue can move the deadline into the future, so checking only
+      // the current deadline would drop the item from this list entirely.
+      const isOpenOverdue = (it.status === 'pending' || it.status === 'in_progress')
+        && ((it.deadline && it.deadline < today) || swlWasPushedWhileOverdue(it));
       const wasResolvedNotOnTime = ['completed_late','not_completed','canceled_by_client'].includes(it.status);
       const wasCompletedOnTime = it.status === 'completed_on_time';
       if (isOpenOverdue || wasResolvedNotOnTime || wasCompletedOnTime) {
@@ -4658,6 +4714,12 @@ async function addItem() {
   const isMgr = ROLES[CD.role]?.isManager || CD.role==='admin';
   const ownerSelect = document.getElementById('ni-owner-uid');
   const ownerUid = ownerSelect ? ownerSelect.value : CU.uid;
+  // The "Assigned to" list loads asynchronously (populateOwnerDropdown) and
+  // starts on a placeholder "Loading…" option with value="". Submitting
+  // before it finishes used to silently write owner:"" — an item that
+  // matches nobody's uid and vanishes from every owner-based lookup, on
+  // both this screen and the score engine, forever. Block it instead.
+  if (ownerSelect && !ownerUid) { toast('Still loading the assignee list — try again in a second','err'); return; }
   const ownerName = ownerSelect ? ownerSelect.options[ownerSelect.selectedIndex]?.dataset?.name || CD.name : CD.name;
   await db.collection('weekly_items').add({
     branch, weekStart: weekKey(CW), title,
@@ -4868,7 +4930,7 @@ async function renderSummary() {
     const fields = Object.entries(sub).filter(([k])=>!skip.includes(k)&&sub[k]);
     if (!fields.length) return '<div class="empty">No data submitted</div>';
     return fields.map(([k,v]) => {
-      const label = k.replace(/^[a-z]+_/,'').replace(/_/g,' ');
+      const label = k === 'weekly_items_notes' ? 'Weekly Items Notes' : k.replace(/^[a-z]+_/,'').replace(/_/g,' ');
       if (Array.isArray(v) && v.length) {
         // Support both old nested array format and new flat string format
         const rows = v.map(r => Array.isArray(r) ? r.filter(Boolean).join(' · ') : String(r)).filter(Boolean);
@@ -5019,7 +5081,8 @@ async function renderFridaySummary() {
       accomplishments:'Accomplishments', client_wins:'Client Wins', team_wins:'Team Wins',
       missed_items:'Missed Items', issues_encountered:'Issues Encountered', blockers:'Blockers',
       next_week_priorities:'Next Week Priorities', carryover_notes:'Carry-Over Notes',
-      support_needed:'Support Needed', week_rating:'Week Rating', general_notes:'General Notes'
+      support_needed:'Support Needed', week_rating:'Week Rating', general_notes:'General Notes',
+      weekly_items_notes:'Weekly Items Notes'
     };
     return Object.entries(sub)
       .filter(([k,v])=>!skip.includes(k)&&v&&String(v).trim())
