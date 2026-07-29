@@ -7023,7 +7023,22 @@ function computeSaturdayStatus(person, disciplineDocs) {
 // waitlist further (this exact "release valve" is documented in the
 // reference spreadsheet's README, found necessary after simulating 500
 // weeks with a strict cap).
-function computeSaturdayRotation(rotatingPeople, anchorDateStr, targetDates, unavailableByDate) {
+//
+// confirmedByDate: {dateStr: [{name,...}, ...]} — the REAL final roster for
+// any Saturday that's already been locked in via "Confirm Schedule",
+// including last-minute manual swaps. Reality can differ from what this
+// simulation would have picked (someone called out, someone covered ad
+// hoc) — without reconciling that, the pointer/waitlist would silently
+// treat a swapped-out person as having had their turn (unfairly skipping
+// them next time) and never account for whoever actually covered (risking
+// picking them again too soon). For a confirmed week: whoever the
+// simulation would have picked but isn't in the real roster goes on the
+// waitlist (they didn't actually get their turn); whoever's in the real
+// roster gets cleared off the waitlist if they were on it (they just had
+// theirs). The recorded result for that date is the real roster, not the
+// simulated guess.
+function computeSaturdayRotation(rotatingPeople, anchorDateStr, targetDates, unavailableByDate, confirmedByDate) {
+  confirmedByDate = confirmedByDate || {};
   const results = {};
   if (!rotatingPeople.length || !targetDates.length) { targetDates.forEach(d => results[d] = []); return results; }
   const n = rotatingPeople.length;
@@ -7075,6 +7090,21 @@ function computeSaturdayRotation(rotatingPeople, anchorDateStr, targetDates, una
       picks.push(person);
       pickedNames.add(person.name);
       if (person.position === 'Foreman') foremenPicked++;
+    }
+
+    const confirmed = confirmedByDate[dateStr];
+    if (confirmed) {
+      const confirmedNames = new Set(confirmed.map(p => p.name));
+      // Simulated pick didn't actually happen for this person — they were
+      // swapped out in reality, so they still need their turn.
+      picks.forEach(p => {
+        if (!confirmedNames.has(p.name) && !waitlist.some(w => w.name === p.name)) waitlist.push(p);
+      });
+      // They actually worked (whether the simulation expected it or not) —
+      // clear them off the waitlist so they aren't picked again too soon.
+      waitlist = waitlist.filter(w => !confirmedNames.has(w.name));
+      if (targetSet.has(dateStr)) results[dateStr] = confirmed;
+      continue;
     }
 
     if (targetSet.has(dateStr)) results[dateStr] = picks;
@@ -7418,10 +7448,24 @@ async function generateSaturdayMonth() {
     const availSnap = await db.collection('saturday_availability').get();
     availSnap.docs.forEach(d => { const v = d.data(); if (anchorDateSet.has(v.date)) unavailableByDate[v.date] = new Set(v.unavailable || []); });
 
-    const rotation = computeSaturdayRotation(eligibleRotating, SATURDAY_ROTATION_ANCHOR, saturdays, unavailableByDate);
+    // Confirmed weeks (anywhere in history, not just this month) are ground
+    // truth for the rotation simulation — see computeSaturdayRotation for why.
+    const allSchedSnap = await db.collection('saturday_schedules').get();
+    const confirmedByDate = {};
+    const confirmedDocsByDate = {};
+    allSchedSnap.docs.forEach(d => {
+      const v = d.data();
+      if (v.confirmed && anchorDateSet.has(v.date)) {
+        confirmedByDate[v.date] = v.confirmedRoster || [];
+        confirmedDocsByDate[v.date] = { id: d.id, ...v };
+      }
+    });
+
+    const rotation = computeSaturdayRotation(eligibleRotating, SATURDAY_ROTATION_ANCHOR, saturdays, unavailableByDate, confirmedByDate);
 
     const batch = db.batch();
     for (const dateStr of saturdays) {
+      if (confirmedDocsByDate[dateStr]) continue; // locked in — never overwritten by a regenerate
       const existing = window._satSchedules[dateStr];
       const ref = existing ? db.collection('saturday_schedules').doc(existing.id) : db.collection('saturday_schedules').doc();
       const overrides = existing?.overrides || {};
@@ -7462,9 +7506,15 @@ function renderSaturdayBoard() {
     const sched = window._satSchedules[dateStr];
     const rotating = sched?.rotatingCrew || [];
     const overrides = sched?.overrides || {};
+    const isConfirmed = !!sched?.confirmed;
     const fullyStaffed = !!sched && [0, 1, 2].every(i => overrides[i] || rotating[i]);
     const statusPill = !sched ? satPill('Not generated', 'var(--text3)', 'var(--surface)')
+      : isConfirmed ? satPill('✓ Confirmed', 'var(--info)', 'var(--info-l)')
       : (fullyStaffed ? satPill('Fully Staffed', 'var(--success)', 'var(--success-l)') : satPill('Slot Open', 'var(--warn)', 'var(--warn-l)'));
+    const confirmBtn = !sched ? ''
+      : isConfirmed ? '<button onclick="unconfirmSaturdayWeek(\'' + dateStr + '\')" style="width:100%;margin-top:10px;padding:5px;font-size:10px;font-weight:600;background:var(--surface);color:var(--text3);border:1px solid var(--border2);border-radius:6px;cursor:pointer">🔓 Unlock</button>'
+      : fullyStaffed ? '<button onclick="confirmSaturdayWeek(\'' + dateStr + '\')" style="width:100%;margin-top:10px;padding:5px;font-size:10px;font-weight:700;background:var(--info);color:#fff;border:none;border-radius:6px;cursor:pointer">✓ Confirm Schedule</button>'
+      : '';
     return '<div style="min-width:220px;flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:var(--rl);padding:12px">'
       + '<div style="font-size:12px;font-weight:700;color:var(--text);font-family:var(--disp);margin-bottom:6px">' + fmtDate(dateStr) + '</div>'
       + statusPill
@@ -7476,14 +7526,50 @@ function renderSaturdayBoard() {
           const overridden = overrides[i];
           const person = overridden ? { name: overridden, position: '(manual)' } : rotating[i];
           if (!person) return '<div style="font-size:11px;color:var(--text3);padding:5px 0">— open slot —</div>';
+          if (isConfirmed) return boardPerson(person.name, person.position);
           const dropdown = '<select style="font-size:9.5px;padding:2px 3px;border-radius:5px;border:1px solid var(--border2);background:var(--surface);color:var(--text3);flex-shrink:0;max-width:78px" onchange="satOverrideSlot(\'' + dateStr + '\',' + i + ',this.value)">'
             + '<option value="">Override…</option>'
             + eligibleNames.map(n => '<option value="' + esc(n) + '"' + (overridden === n ? ' selected' : '') + '>' + esc(n) + '</option>').join('')
             + '</select>';
           return boardPerson(person.name, person.position, dropdown);
         }).join('')
+      + confirmBtn
       + '</div>';
   }).join('');
+}
+
+async function confirmSaturdayWeek(dateStr) {
+  const sched = window._satSchedules[dateStr];
+  if (!sched) return;
+  const rotating = sched.rotatingCrew || [];
+  const overrides = sched.overrides || {};
+  // Snapshot the FINAL roster (overrides merged in) at the moment of
+  // confirming — the authoritative record of who actually worked, used to
+  // correctly reconcile the rotation for every week generated after this.
+  const confirmedRoster = [0, 1, 2].map(i => {
+    const overridden = overrides[i];
+    return overridden ? { name: overridden, position: '(manual)' } : rotating[i];
+  }).filter(Boolean);
+  try {
+    await db.collection('saturday_schedules').doc(sched.id).update({
+      confirmed: true, confirmedRoster,
+      confirmedAt: firebase.firestore.FieldValue.serverTimestamp(), confirmedBy: CD.name
+    });
+    window._satSchedules[dateStr] = { ...sched, confirmed: true, confirmedRoster };
+    toast('✓ ' + fmtDate(dateStr) + ' confirmed — locked in for this and future rotations');
+    renderSaturdayBoard();
+  } catch (e) { toast('Could not confirm — ' + e.message, 'err'); }
+}
+
+async function unconfirmSaturdayWeek(dateStr) {
+  const sched = window._satSchedules[dateStr];
+  if (!sched) return;
+  try {
+    await db.collection('saturday_schedules').doc(sched.id).update({ confirmed: false });
+    window._satSchedules[dateStr] = { ...sched, confirmed: false };
+    toast('🔓 ' + fmtDate(dateStr) + ' unlocked — editable again');
+    renderSaturdayBoard();
+  } catch (e) { toast('Could not unlock — ' + e.message, 'err'); }
 }
 
 function printSaturdaySchedule() {
