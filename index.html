@@ -3685,7 +3685,12 @@ function swlScoreExplainToggle(id) {
 function swlGoToScoredItem(itemId, bucket) {
   const modal = document.getElementById('swl-drilldown-modal');
   if (modal) modal.remove();
-  window._pendingItemsFilter = bucket;
+  // Used to also silently apply the "bucket" (e.g. Overdue) as the active
+  // filter, hiding every other item with zero visual indicator a filter was
+  // even on — someone arriving here from Inbox would see their other items
+  // simply gone, no obvious way to tell why. The scroll+highlight below
+  // already does the actual job of pointing at the right item without
+  // hiding anything else, so just rely on that.
   window._pendingItemsHighlightId = itemId;
   navigateTo('items');
 }
@@ -4319,25 +4324,24 @@ async function renderItems() {
   // (The 90-day decay window in swlScoreOneUser is a separate, deliberate
   // rule that only affects *scoring* — it should never make an item
   // invisible on this operational screen.)
-  // Each query below uses only a single filter — combining an equality filter
-  // (owner/ownerName/branch) with anything else risks needing a manual
-  // Firestore composite index we can't assume exists.
-  let priorSnap = null, priorSnapName = null, priorSnapBranch = null;
+  //
+  // One branch-wide query for everyone, not a separate owner==uid /
+  // ownerName==name exact-match query for employees. Those exact-match
+  // queries broke silently the moment an item's stored ownerName had any
+  // whitespace/capitalization difference from the live user's name —
+  // Firestore equality is exact and case-sensitive, so a name typed once at
+  // assignment time could permanently exclude that item from the owner's
+  // own view and search, even though the (lenient, trimmed/lowercased)
+  // matching in Accountability's buildUserScores found it just fine — which
+  // is exactly why an item could show up as "overdue" in someone's own score
+  // drilldown while being genuinely unfindable on the Weekly Items screen.
+  let priorSnapBranch = null;
   let priorFetchError = null;
-  if (!isMgr) {
-    try {
-      priorSnap = await db.collection('weekly_items').where('owner','==',CU.uid).get();
-    } catch(e) { priorSnap = null; priorFetchError = e.message; }
-    try {
-      priorSnapName = await db.collection('weekly_items').where('ownerName','==',CD.name).get();
-    } catch(e) { priorSnapName = null; priorFetchError = priorFetchError || e.message; }
-  } else {
-    try {
-      priorSnapBranch = branch
-        ? await db.collection('weekly_items').where('branch','==',branch).get()
-        : await db.collection('weekly_items').get();
-    } catch(e) { priorSnapBranch = null; priorFetchError = e.message; }
-  }
+  try {
+    priorSnapBranch = branch
+      ? await db.collection('weekly_items').where('branch','==',branch).get()
+      : await db.collection('weekly_items').get();
+  } catch(e) { priorSnapBranch = null; priorFetchError = e.message; }
   // A failure here used to fail silently — carried-over/overdue items from
   // past weeks would just be missing with no indication why, easy to
   // mistake for "there's nothing there" instead of "this couldn't load."
@@ -4348,48 +4352,24 @@ async function renderItems() {
 
   let items = snap.docs.map(d=>({id:d.id,...d.data()}));
 
-  // Merge prior-week items for this employee
-  if (!isMgr) {
-    const currentIds = new Set(items.map(i=>i.id));
-    const addPrior = (docs) => {
-      if (!docs) return;
-      docs.forEach(d => {
-        const it = {id:d.id,...d.data()};
-        if (!currentIds.has(it.id) && it.weekStart !== wk) {
-          // A push-back applied while an item was already overdue can move its
-          // deadline into the future — checking only the current deadline made
-          // that item vanish from this list entirely (still open, but neither
-          // "this week" nor "past deadline" anymore). Same rule the score uses.
-          const isOpenOverdue = (it.status === 'pending' || it.status === 'in_progress')
-            && ((it.deadline && it.deadline < today) || swlWasPushedWhileOverdue(it));
-          const isCompleted = ['completed_on_time','completed_late','not_completed'].includes(it.status);
-          if (isOpenOverdue || isCompleted) {
-            items.push({
-              ...it,
-              _prior_week: true,
-              _overdue_prior: isOpenOverdue
-            });
-            currentIds.add(it.id);
-          }
-        }
-      });
-    };
-    if (priorSnap) addPrior(priorSnap.docs);
-    if (priorSnapName) addPrior(priorSnapName.docs);
-  } else if (priorSnapBranch) {
-    // Merge every branch-wide prior-week item — including completed_on_time
-    // ones. They used to be excluded entirely ("nothing to follow up on"),
-    // but that made a finished item unfindable anywhere, even via search, once
-    // it dropped out of the current week. They're tagged _default_hidden so
-    // they stay out of the default view (no clutter) but still show up the
-    // moment someone searches for them.
+  // Same lenient match buildUserScores/the Data Integrity report use — a
+  // uid match if present, otherwise a trimmed/lowercased name comparison —
+  // instead of Firestore's exact, case-sensitive equality.
+  const myNameLower = (CD.name || '').trim().toLowerCase();
+  const isMine = (it) => it.owner === CU.uid
+    || (!it.owner && (it.ownerName || '').trim().toLowerCase() === myNameLower);
+
+  // Merge prior-week items
+  if (priorSnapBranch) {
     const currentIds = new Set(items.map(i=>i.id));
     priorSnapBranch.docs.forEach(d => {
       const it = {id:d.id,...d.data()};
       if (currentIds.has(it.id) || it.weekStart === wk) return;
-      // Same reasoning as the employee branch above — a push-back applied while
-      // already overdue can move the deadline into the future, so checking only
-      // the current deadline would drop the item from this list entirely.
+      if (!isMgr && !isMine(it)) return; // employees only see their own prior-week items here
+      // A push-back applied while an item was already overdue can move its
+      // deadline into the future — checking only the current deadline made
+      // that item vanish from this list entirely (still open, but neither
+      // "this week" nor "past deadline" anymore). Same rule the score uses.
       const isOpenOverdue = (it.status === 'pending' || it.status === 'in_progress')
         && ((it.deadline && it.deadline < today) || swlWasPushedWhileOverdue(it));
       const wasResolvedNotOnTime = ['completed_late','not_completed','canceled_by_client'].includes(it.status);
@@ -4400,7 +4380,12 @@ async function renderItems() {
           _prior_week: true,
           _overdue_prior: isOpenOverdue,
           _resolved_late: wasResolvedNotOnTime,
-          _default_hidden: wasCompletedOnTime
+          // Managers get a huge branch-wide history, so completed-on-time
+          // items are hidden by default there to avoid clutter (still
+          // findable via search). An employee's own list is small enough
+          // that hiding their own finished work by default would just be
+          // confusing, so only apply that to the manager branch-wide view.
+          _default_hidden: isMgr && wasCompletedOnTime
         });
         currentIds.add(it.id);
       }
@@ -4414,7 +4399,7 @@ async function renderItems() {
         <div class="card-header">
           <div class="card-title">Weekly Items — ${fmtWeek(CW)}</div>
           <div style="display:flex;gap:6px">
-            ${['all','overdue','pending','completed','not_completed'].map(f=>`<button class="btn sm" onclick="filterItems('${f}')">${f==='all'?'All':f==='overdue'?'⚠ Overdue':f==='pending'?'Pending':f==='completed'?'✓ Completed':'Carry-over'}</button>`).join('')}
+            ${['all','overdue','pending','completed','not_completed'].map(f=>`<button class="btn sm" data-filter-btn="${f}" onclick="filterItems('${f}')">${f==='all'?'All':f==='overdue'?'⚠ Overdue':f==='pending'?'Pending':f==='completed'?'✓ Completed':'Carry-over'}</button>`).join('')}
           </div>
         </div>
         ${buildTeamRosterHtml(items, isMgr)}
@@ -4520,7 +4505,7 @@ function renderItemCard(it) {
       <div class="item-title">${esc(it.title)}${tag}</div>
       <div class="item-meta">${esc(it.ownerName||it.owner)} · ${deadlineDisplay}${isOverdueNow ? ' — <span style="color:var(--danger)">past deadline</span>' : (it._prior_week ? ' — <span style="color:var(--text3)">prior week</span>' : '')}</div>
       ${it.fridayReview?.reason?`<div style="font-size:11px;color:var(--text2);margin-top:2px;font-style:italic">Employee note: ${esc(it.fridayReview.reason)}</div>`:''}
-      ${it._resolved_late && it.latestNote?`<div style="font-size:11px;color:var(--text2);margin-top:2px;font-style:italic">${it.status==='canceled_by_client'?'Cancellation reason':'Resolution note'}: ${esc(it.latestNote)}</div>`:''}
+      ${it.latestNote?`<div style="font-size:11px;color:var(--text2);margin-top:2px;font-style:italic">${it.status==='canceled_by_client'?'Cancellation reason':it._resolved_late?'Resolution note':'Note'}${it.latestNoteBy?' ('+esc(it.latestNoteBy)+')':''}: ${esc(it.latestNote)}</div>`:''}
     </div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
       ${actionBtns}
@@ -4654,6 +4639,13 @@ function applyItemsFilters(searchOverride) {
     const ownerNameVal = row.dataset.ownerName || '';
     const matchesPerson = !_itemsCurrentPerson || ownerNameVal.includes(_itemsCurrentPerson) || _itemsCurrentPerson.includes(ownerNameVal);
     row.style.display = (matchesFilter && matchesSearch && matchesPerson && !hiddenByDefault) ? 'block' : 'none';
+  });
+  // Filter buttons previously gave no visual sign a non-"All" filter was
+  // active — arriving on a filtered view (from a dashboard link, or a
+  // lingering filter) looked identical to "this is everything," which read
+  // as items having gone missing rather than being filtered out.
+  document.querySelectorAll('[data-filter-btn]').forEach(btn => {
+    btn.classList.toggle('primary', btn.dataset.filterBtn === _itemsCurrentFilter);
   });
 }
 
