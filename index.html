@@ -7037,6 +7037,7 @@ function computeSaturdayRotation(rotatingPeople, anchorDateStr, targetDates, una
     const dateStr = d.toISOString().split('T')[0];
     const unavailable = unavailableByDate[dateStr] || new Set();
     const picks = [];
+    const pickedNames = new Set();
     let foremenPicked = 0;
 
     for (let i = 0; i < waitlist.length && picks.length < 3; ) {
@@ -7044,7 +7045,12 @@ function computeSaturdayRotation(rotatingPeople, anchorDateStr, targetDates, una
       const releaseValve = waitlist.length >= 2;
       if (unavailable.has(person.name)) { i++; continue; }
       if (person.position === 'Foreman' && foremenPicked >= 1 && !releaseValve) { i++; continue; }
+      // Hard safety net — should be unreachable now that the pointer scan
+      // below skips anyone already on the waitlist, but this guarantees the
+      // same person can never appear twice in one week's picks regardless.
+      if (pickedNames.has(person.name)) { waitlist.splice(i, 1); continue; }
       picks.push(person);
+      pickedNames.add(person.name);
       if (person.position === 'Foreman') foremenPicked++;
       waitlist.splice(i, 1);
     }
@@ -7054,10 +7060,20 @@ function computeSaturdayRotation(rotatingPeople, anchorDateStr, targetDates, una
       const person = rotatingPeople[pointer];
       pointer = (pointer + 1) % n;
       scanned++;
+      // The pointer cycles through the full roster every week regardless of
+      // who's already queued up — without this check, someone who stays
+      // unavailable for several weeks in a row could get pushed onto the
+      // waitlist a SECOND time once the pointer looped back around to them
+      // while still on it, so both copies would drain in the same week the
+      // moment they became available again: the exact "same person picked
+      // twice in one week" bug. Once queued, leave them queued.
+      if (waitlist.some(w => w.name === person.name)) continue;
       const releaseValve = waitlist.length >= 2;
       if (unavailable.has(person.name)) { waitlist.push(person); continue; }
       if (person.position === 'Foreman' && foremenPicked >= 1 && !releaseValve) { waitlist.push(person); continue; }
+      if (pickedNames.has(person.name)) continue; // safety net, see above
       picks.push(person);
+      pickedNames.add(person.name);
       if (person.position === 'Foreman') foremenPicked++;
     }
 
