@@ -734,7 +734,12 @@ const ROLES = {
   ops_specialist:       { label:'Operations Specialist',branch:'LA',  canViewAll:false, isManager:false, color:'var(--la)' },
   client_rep:           { label:'Client Representative',branch:null,  canViewAll:false, isManager:false, color:'var(--burg)' },
   irrigation_supervisor:{ label:'Irrigation Supervisor',branch:'LA',  canViewAll:false, isManager:false, color:'var(--la)' },
-  exec_viewer:          { label:'Executive Viewer',       branch:'ALL', canViewAll:true,  isManager:false, color:'var(--burg)', isExec:true }
+  exec_viewer:          { label:'Executive Viewer',       branch:'ALL', canViewAll:true,  isManager:false, color:'var(--burg)', isExec:true },
+  // Distinct from ops_specialist (LA) above — that role has full normal
+  // employee access (dashboard, check-in form, weekly items). This one is
+  // deliberately locked down to a single read-only screen, so it's a
+  // separate role rather than a branch variant of the same one.
+  ops_specialist_oc:    { label:'Operations Specialist (OC)', branch:'OC', canViewAll:false, isManager:false, color:'var(--oc)', restrictedTo:'saturday-schedule' }
 };
 
 const TEAM = [
@@ -817,6 +822,158 @@ function fmtShort(d) {
 function weekKey(m) { return new Date(m).toISOString().split('T')[0]; }
 function fmtWeek(m) { return `${fmtShort(m)} – ${fmtShort(getSaturday(m))}`; }
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Prefers the live Firestore profile field (so any hire works the moment
+// their user doc is created/updated, no redeploy), falling back to the
+// hardcoded TEAM entry for people set up before that field existed — which
+// is what makes Antonio Ballinas Spanish without anyone editing Firestore.
+function isSpanishUser() {
+  if (!CD) return false;
+  if (CD.language) return CD.language === 'es';
+  return TEAM.find(t => t.name === CD.name)?.language === 'es';
+}
+function T(en, es) { return isSpanishUser() ? es : en; }
+
+// Builds one plain-text blob ("Label: value" per field) from a submission
+// doc, for the "Translate to English" button on Monday/Friday summaries.
+// No translation API/key is wired up here — this opens Google Translate in
+// a new tab with the text pre-filled, which needs no account or billing on
+// our side. Shares the same skip-list + label logic the summary views use
+// so the translated text matches what's actually shown on screen.
+function swlSubmissionTextBlob(sub) {
+  const skip = ['userId','userEmail','userName','branch','role','formType','weekStart','weekEnd','status','createdAt','updatedAt','submittedAt'];
+  return Object.entries(sub)
+    .filter(([k, v]) => !skip.includes(k) && v && String(v).trim())
+    .map(([k, v]) => {
+      const label = k === 'weekly_items_notes' ? 'Weekly Items Notes' : k.replace(/^[a-z]+_/, '').replace(/_/g, ' ');
+      const text = Array.isArray(v) ? v.map(r => Array.isArray(r) ? r.filter(Boolean).join(' | ') : String(r)).join('; ') : String(v);
+      return label + ': ' + text;
+    }).join('\n\n');
+}
+
+window._translateBlobs = {};
+function swlOpenTranslate(subId) {
+  const text = window._translateBlobs[subId];
+  if (!text) { toast('Nothing to translate', 'err'); return; }
+  const url = 'https://translate.google.com/?sl=es&tl=en&op=translate&text=' + encodeURIComponent(text);
+  window.open(url, '_blank', 'noopener');
+}
+
+// ══════════════════════════════════════════════════
+// SPANISH UI (whole-app, for users with language:'es')
+// ══════════════════════════════════════════════════
+// Every screen is built by assembling big HTML template strings, so
+// hand-translating each one would mean touching hundreds of inline strings
+// across thousands of lines — a huge diff with a high chance of silently
+// missing many of them. Instead this translates the rendered DOM after the
+// fact, using exact whole-string matches only.
+//
+// Exact-match is the important safety property: a text node is only
+// replaced when its ENTIRE trimmed content is a known UI label. That means
+// people's names, property names, and anything an employee actually typed
+// can never be mangled — they simply won't match a key. Anything not in
+// the dictionary stays in English rather than breaking, so this degrades
+// gracefully and the dictionary can grow over time.
+const SWL_ES = {
+  // Nav / chrome
+  'Dashboard':'Panel', 'Inbox':'Bandeja', 'Weekly Notes':'Notas Semanales',
+  'My Grading':'Mi Calificación', 'Reports':'Reportes', 'More':'Más',
+  'Sign out':'Cerrar sesión', 'Saturday Schedule':'Horario del Sábado',
+  'Weekly Items':'Tareas Semanales', 'My History':'Mi Historial',
+  'My Submissions & History':'Mis Envíos e Historial',
+  // Common states / actions
+  'Loading…':'Cargando…', 'Loading...':'Cargando...',
+  'Save':'Guardar', 'Cancel':'Cancelar', 'Back':'Atrás', 'Close':'Cerrar',
+  'Submit':'Enviar', 'Retry':'Reintentar', 'Save Draft':'Guardar Borrador',
+  'Submit Check-In':'Enviar Registro', 'Update Submission':'Actualizar Envío',
+  'Draft':'Borrador', 'Not started':'No iniciado', '✓ Submitted':'✓ Enviado',
+  'Pending':'Pendiente', 'Completed':'Completado', 'Overdue':'Atrasado',
+  '⚠ Overdue':'⚠ Atrasado', 'Carry-over':'Pendiente Anterior', 'All':'Todo',
+  'Open':'Abierto', 'In Progress':'En Progreso', 'Done Late':'Hecho Tarde',
+  'Nothing here yet.':'Nada aquí todavía.', 'No items this week.':'No hay tareas esta semana.',
+  'Save Note':'Guardar Nota', 'Update Status':'Actualizar Estado',
+  '📝 Update Status':'📝 Actualizar Estado', 'Available':'Disponible',
+  'Yes, it’s done':'Sí, está hecho', 'Not yet':'Todavía no',
+  'Was this item completed?':'¿Se completó esta tarea?',
+  'Update My Item':'Actualizar Mi Tarea',
+  'When did you finish it?':'¿Cuándo lo terminaste?',
+  'Reason / notes (optional)':'Razón / notas (opcional)',
+  'What’s the status?':'¿Cuál es el estado?',
+  'Still working on it':'Todavía trabajando en ello',
+  'Won’t be completing this':'No podré completar esto',
+  'Canceled by client':'Cancelado por el cliente',
+  'Reason':'Razón', 'Priority':'Prioridad',
+  'Critical':'Crítico', 'High':'Alto', 'Medium':'Medio', 'Low':'Bajo',
+  'Due This Week':'Vence Esta Semana', 'Needs Attention':'Requiere Atención',
+  'Streak':'Racha', 'Work week':'Semana laboral',
+  'This Week':'Esta Semana', 'Language / Idioma:':'Idioma:',
+  // Grading
+  'Score Breakdown':'Desglose del Puntaje', 'Item Summary':'Resumen de Tareas',
+  'Overdue Items':'Tareas Atrasadas', 'Missed Items':'Tareas Perdidas',
+  'On Time':'A Tiempo', 'Late':'Tarde', 'Missed':'Perdido', 'Future':'Futuro',
+  'Main Concern':'Preocupación Principal', 'Strongest Area':'Área Más Fuerte',
+  'Getting Work Done':'Trabajo Completado', 'Hitting Due Dates':'Cumplir Fechas',
+  'Trend':'Tendencia', 'Reliability':'Confiabilidad', 'Risk Level':'Nivel de Riesgo',
+  'Acct Score':'Puntaje', 'Acct Health':'Salud de Cuenta', 'Miss Rate':'Tasa de Fallos',
+  'Excellent':'Excelente', 'Good':'Bueno', 'Fair':'Regular', 'Poor':'Malo',
+  'Low Risk':'Riesgo Bajo', 'Medium Risk':'Riesgo Medio', 'High Risk':'Riesgo Alto',
+  'On Track':'En Camino', 'None':'Ninguno'
+};
+
+// Attributes worth translating too — placeholders and tooltips are as
+// user-facing as the visible text.
+const SWL_ES_ATTRS = ['placeholder','title'];
+
+function swlTranslateNode(root) {
+  if (!isSpanishUser() || !root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const hits = [];
+  let n;
+  while ((n = walker.nextNode())) {
+    const raw = n.nodeValue;
+    if (!raw) continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const es = SWL_ES[trimmed];
+    // Whole-string match only — never a substring replace, so names and
+    // free text an employee typed are structurally safe from being altered.
+    if (es) hits.push([n, raw.replace(trimmed, es)]);
+  }
+  hits.forEach(([node, val]) => { node.nodeValue = val; });
+  SWL_ES_ATTRS.forEach(attr => {
+    root.querySelectorAll('[' + attr + ']').forEach(el => {
+      const es = SWL_ES[(el.getAttribute(attr) || '').trim()];
+      if (es) el.setAttribute(attr, es);
+    });
+  });
+}
+
+// Screens render asynchronously (most are `async` and write innerHTML after
+// their Firestore reads resolve), so there's no single reliable "render
+// finished" hook to translate on. An observer catches every render — initial,
+// async, and partial re-renders like a filter click — without each call site
+// needing to remember to ask for translation.
+function swlInstallSpanishObserver() {
+  if (!isSpanishUser() || window._swlEsObserver) return;
+  const target = document.getElementById('app-shell') || document.body;
+  // Only childList is observed (not characterData/attributes), so the text
+  // and attribute values this callback rewrites cannot re-trigger it — no
+  // re-entrancy guard needed, and no risk of a guard swallowing a real
+  // render that happens in the same tick.
+  const obs = new MutationObserver(muts => {
+    muts.forEach(m => {
+      m.addedNodes.forEach(node => {
+        if (node.nodeType === 1) swlTranslateNode(node);
+        else if (node.nodeType === 3 && node.nodeValue) {
+          const es = SWL_ES[node.nodeValue.trim()];
+          if (es) node.nodeValue = node.nodeValue.replace(node.nodeValue.trim(), es);
+        }
+      });
+    });
+  });
+  obs.observe(target, { childList: true, subtree: true });
+  window._swlEsObserver = obs;
+  swlTranslateNode(target); // whatever's already on screen
+}
 /* greet defined elsewhere */
 function isFriday() { return new Date().getDay()===5; }
 function isMonday() { return new Date().getDay()===1; }
@@ -952,7 +1109,8 @@ function enterApp() {
     _sw.querySelectorAll(".ts-opt")[0].classList.toggle("on", _wantsDark);
     _sw.querySelectorAll(".ts-opt")[1].classList.toggle("on", !_wantsDark);
   }
-  navigateTo('dashboard');
+  swlInstallSpanishObserver();
+  navigateTo(ROLES[CD.role]?.restrictedTo || 'dashboard');
 }
 
 function leaveApp() {
@@ -964,6 +1122,9 @@ function leaveApp() {
 async function doSignOut() {
   localStorage.removeItem('swl_remember_me');
   await auth.signOut();
+  // Tear the Spanish observer down — otherwise it survives into the next
+  // sign-in on the same tab and would keep translating for an English user.
+  if (window._swlEsObserver) { window._swlEsObserver.disconnect(); window._swlEsObserver = null; }
   CU = null; CD = null; leaveApp();
   const btn = document.getElementById('ls-signin-btn');
   if (btn) { btn.textContent='Sign In →'; btn.disabled=false; }
@@ -1006,6 +1167,15 @@ function buildSidebar() {
   const nav = document.getElementById('sb-nav');
   const isManager = ROLES[role]?.isManager || role === 'admin';
   const isExec = role === 'exec_viewer';
+
+  // A role locked to one screen (restrictedTo) gets a single icon and
+  // nothing else — no Dashboard, no More dropdown, nothing to navigate to
+  // that they aren't allowed on anyway.
+  const restrictedTo = ROLES[role]?.restrictedTo;
+  if (restrictedTo) {
+    nav.innerHTML = topIcon(restrictedTo, T('Saturday Schedule', 'Horario del Sábado'), '🗓');
+    return;
+  }
 
   // Primary destinations — always visible as icons in the bar
   let html = topIcon('dashboard','Dashboard','🏠');
@@ -1091,6 +1261,12 @@ document.addEventListener('click', closeAllMenus);
 // NAVIGATION — NO scroll reset
 // ══════════════════════════════════════════════════
 function navigateTo(screen) {
+  // A role locked to a single screen (e.g. ops_specialist_oc) has no nav
+  // buttons pointing anywhere else, but defend against stale bookmarks/
+  // browser history/leftover pending-nav state trying to reach anything
+  // outside their one allowed screen.
+  const restrictedTo = ROLES[CD?.role]?.restrictedTo;
+  if (restrictedTo && screen !== restrictedTo) screen = restrictedTo;
   activeScreen = screen;
   // Update active nav btn
   document.querySelectorAll('.nav-btn, .top-icon-link').forEach(b => {
@@ -1137,7 +1313,7 @@ function renderScreen(screen) {
     'admin':        { title:'Admin Panel',         fn: renderAdmin },
     'exec-dashboard': { title:'Executive Dashboard',  fn: renderExecDashboard },
     'reports':      { title:'Reports',             fn: renderReports },
-    'saturday-schedule': { title:'Saturday Schedule', fn: renderSaturdaySchedule },
+    'saturday-schedule': { title: T('Saturday Schedule', 'Horario del Sábado'), fn: renderSaturdaySchedule },
   };
   const s = screens[screen];
   if (!s) return;
@@ -2132,12 +2308,15 @@ async function renderCheckin(type) {
   const accentClass = branchLabel==='OC'?'oc-btn':branchLabel==='LA'?'la-btn':'primary';
 
   // Load Spanish preference — an explicit per-device toggle wins if they've
-  // ever used it; otherwise default to their profile's language (set on
-  // TEAM, e.g. Antonio Ballinas) instead of always starting in English.
-  // localStorage alone made the preference reset on every new device/browser.
+  // ever used it; otherwise default to their profile's language — CD.language
+  // if their live Firestore user doc has it (works for any hire the moment
+  // their account is created, no code change needed), falling back to the
+  // hardcoded TEAM entry for anyone set up before that field existed (e.g.
+  // Antonio Ballinas). localStorage alone made the preference reset on
+  // every new device/browser.
   const spanishTypes = ['os','sv'];
   const storedLangPref = localStorage.getItem('swl-lang-' + CU.uid);
-  const profileLang = TEAM.find(t => t.name === CD.name)?.language;
+  const profileLang = CD.language || TEAM.find(t => t.name === CD.name)?.language;
   const useSpanish = spanishTypes.includes(type)
     && (storedLangPref ? storedLangPref === 'es' : profileLang === 'es');
 
@@ -2190,7 +2369,7 @@ function toggleLanguage(type) {
   // renderCheckin) may already be Spanish, and reading only localStorage
   // here would make the first click on the button silently do nothing.
   const stored = localStorage.getItem('swl-lang-' + CU.uid);
-  const profileLang = TEAM.find(t => t.name === CD.name)?.language;
+  const profileLang = CD.language || TEAM.find(t => t.name === CD.name)?.language;
   const currentlySpanish = stored ? stored === 'es' : profileLang === 'es';
   localStorage.setItem('swl-lang-' + CU.uid, currentlySpanish ? 'en' : 'es');
   renderCheckin(type); // re-render with new language
@@ -4942,13 +5121,15 @@ async function renderSummary() {
     }).join('');
   };
 
-  const roleBlock = (sub, roleLabel, icon) => `
+  const roleBlock = (sub, roleLabel, icon) => {
+    if (sub) window._translateBlobs[sub.id] = swlSubmissionTextBlob(sub);
+    return `
     <div class="sum-role-block">
       <div class="sum-role-hdr" style="background:${sub?'var(--surface2)':'var(--warn-l)'}">
         <span style="font-size:16px">${icon}</span>
         <div class="sum-role-name">${roleLabel}</div>
         ${sub
-          ? `<span class="badge success sum-role-status">✓ Submitted</span>`
+          ? `<button class="btn sm" style="margin-left:auto" onclick="swlOpenTranslate('${sub.id}')" title="Opens Google Translate in a new tab">🌐 Translate to English</button><span class="badge success sum-role-status">✓ Submitted</span>`
           : `<span class="badge warn sum-role-status">⏳ Pending</span>`}
       </div>
       <div class="sum-fields">${sub
@@ -4956,6 +5137,7 @@ async function renderSummary() {
         : '<div style="font-size:12px;color:var(--text3);padding:4px 0;font-style:italic">Check-in not yet submitted for this week</div>'
       }</div>
     </div>`;
+  };
 
   ca.innerHTML = `
     <div class="summary-header">
@@ -5067,6 +5249,10 @@ async function renderFridaySummary() {
   const notCompleted    = allItems.filter(i=>i.status==='not_completed').length;
   const pending         = allItems.filter(i=>i.status==='pending').length;
 
+  // Cache the plain-text version of every submission up front so the
+  // "Translate to English" buttons below have something to open.
+  subs.forEach(s => { window._translateBlobs[s.id] = swlSubmissionTextBlob(s); });
+
   const renderSub = (sub) => {
     const skip = ['userId','userEmail','userName','branch','role','formType','weekStart','weekEnd','status','createdAt','updatedAt'];
     const fieldLabels = {
@@ -5126,6 +5312,7 @@ async function renderFridaySummary() {
         <div class="sum-role-hdr" style="background:${sub.branch==='OC'?'var(--oc-l)':'var(--la-l)'}">
           <span style="font-size:16px">${sub.branch==='OC'?'🟠':'🔵'}</span>
           <div class="sum-role-name">${esc(sub.userName||'')} — ${ROLES[sub.role]?.label||sub.role}</div>
+          <button class="btn sm" style="margin-left:auto" onclick="swlOpenTranslate('${sub.id}')" title="Opens Google Translate in a new tab">🌐 Translate to English</button>
           <span class="badge ${sub.branch==='OC'?'oc':'la'} sum-role-status">${sub.branch}</span>
           ${sub.week_rating?`<span class="badge success" style="margin-left:4px">${sub.week_rating.replace(/_/g,' ')}</span>`:''}
         </div>
@@ -5497,6 +5684,14 @@ async function renderAdmin() {
           </select>
         </div>
       </div>
+      <div class="g2" style="margin-bottom:16px">
+        <div class="fg"><label>Language <span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none">(their default app language)</span></label>
+          <select id="nu-language">
+            <option value="en">English</option>
+            <option value="es">Español (Spanish)</option>
+          </select>
+        </div>
+      </div>
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn primary" onclick="createUserProfile()">
           <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -5647,6 +5842,7 @@ async function createUserProfile() {
   const role     = document.getElementById('nu-role').value;
   const branch   = document.getElementById('nu-branch').value;
   const formType = document.getElementById('nu-formtype').value;
+  const language  = document.getElementById('nu-language')?.value || 'en';
   const result   = document.getElementById('nu-result');
 
   if (!uid)    { toast('Firebase UID is required','err'); return; }
@@ -5672,6 +5868,7 @@ async function createUserProfile() {
       role: actualRole,
       branch,
       formType: autoFormType,
+      language,
       active: true,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -5710,6 +5907,7 @@ async function updateUserProfile() {
   const role   = document.getElementById('nu-role').value;
   const branch = document.getElementById('nu-branch').value;
   const formType = document.getElementById('nu-formtype').value;
+  const language = document.getElementById('nu-language')?.value;
   const result = document.getElementById('nu-result');
 
   if (!uid) { toast('Firebase UID is required to update','err'); return; }
@@ -5720,6 +5918,7 @@ async function updateUserProfile() {
   if (role)   updates.role   = role === 'client_rep_2' ? 'client_rep' : role;
   if (branch) updates.branch = branch;
   if (formType) updates.formType = formType;
+  if (language) updates.language = language;
 
   try {
     await db.collection('users').doc(uid).update(updates);
@@ -7127,13 +7326,20 @@ window._satSelectedWeek = null;
 
 function satIsAuthorized() {
   const isManager = ROLES[CD.role]?.isManager || CD.role === 'admin';
-  return CD.role === 'admin' || CD.role === 'exec_viewer' || (isManager && CD.branch === 'OC');
+  return CD.role === 'admin' || CD.role === 'exec_viewer' || (isManager && CD.branch === 'OC') || CD.role === 'ops_specialist_oc';
+}
+
+// Everyone else who can reach this screen today keeps their existing full
+// access — this only carves out the new read-only role, not a behavior
+// change for admin/OC managers/exec_viewer.
+function satCanEdit() {
+  return CD.role !== 'ops_specialist_oc';
 }
 
 async function renderSaturdaySchedule() {
   const ca = document.getElementById('content-area');
-  if (!satIsAuthorized()) { ca.innerHTML = '<div class="empty">Saturday Schedule is only available to Admin and OC managers.</div>'; return; }
-  ca.innerHTML = '<div class="empty">Loading Saturday Schedule…</div>';
+  if (!satIsAuthorized()) { ca.innerHTML = '<div class="empty">' + T('Saturday Schedule is only available to Admin and OC managers.', 'El Horario del Sábado solo está disponible para Admin y gerentes de OC.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading Saturday Schedule…', 'Cargando el Horario del Sábado…') + '</div>';
   try {
     await ensureSaturdayCrewSeeded();
     const [crewSnap, discSnap] = await Promise.all([
@@ -7150,7 +7356,7 @@ async function renderSaturdaySchedule() {
       const today = new Date().toISOString().split('T')[0];
       window._satSelectedWeek = saturdays.find(s => s >= today) || saturdays[0];
     }
-    const monthLabel = new Date(window._satMonth.year, window._satMonth.month, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const monthLabel = new Date(window._satMonth.year, window._satMonth.month, 1).toLocaleDateString(T('en-US', 'es-MX'), { month: 'long', year: 'numeric' });
 
     // Unfiltered fetch + client-side filter, not a where('date','in',...) —
     // these collections stay small (one doc per Saturday ever used, across
@@ -7166,32 +7372,33 @@ async function renderSaturdaySchedule() {
     window._satSchedules = {};
     schedAllSnap.docs.forEach(d => { const v = d.data(); if (saturdaySet.has(v.date)) window._satSchedules[v.date] = { id: d.id, ...v }; });
 
+    const canEdit = satCanEdit();
     ca.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">'
-      + '<div><div style="font-size:15px;font-weight:700;color:var(--text)">🗓 Saturday Crew Schedule</div>'
-      + '<div style="font-size:11.5px;color:var(--text3);margin-top:2px">OC field crew rotation — 3 Fixed + 3 Rotating each Saturday</div></div>'
+      + '<div><div style="font-size:15px;font-weight:700;color:var(--text)">🗓 ' + T('Saturday Crew Schedule', 'Horario de Cuadrilla del Sábado') + '</div>'
+      + '<div style="font-size:11.5px;color:var(--text3);margin-top:2px">' + T('OC field crew rotation — 3 Fixed + 3 Rotating each Saturday', 'Rotación de cuadrilla de campo de OC — 3 Fijos + 3 Rotativos cada sábado') + '</div></div>'
       + '<div style="display:flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px">'
-      + '<button onclick="satChangeMonth(-1)" style="width:26px;height:26px;border:none;border-radius:50%;background:var(--surface);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:var(--text2)" title="Previous month">‹</button>'
+      + '<button onclick="satChangeMonth(-1)" style="width:26px;height:26px;border:none;border-radius:50%;background:var(--surface);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:var(--text2)" title="' + T('Previous month', 'Mes anterior') + '">‹</button>'
       + '<div style="font-size:12px;font-weight:700;min-width:120px;text-align:center;color:var(--text);font-family:var(--disp)">' + esc(monthLabel) + '</div>'
-      + '<button onclick="satChangeMonth(1)" style="width:26px;height:26px;border:none;border-radius:50%;background:var(--surface);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:var(--text2)" title="Next month">›</button>'
+      + '<button onclick="satChangeMonth(1)" style="width:26px;height:26px;border:none;border-radius:50%;background:var(--surface);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:var(--text2)" title="' + T('Next month', 'Mes siguiente') + '">›</button>'
       + '</div>'
       + '</div>'
       + '<div class="card" style="margin-bottom:16px">'
-      + '<div class="card-header"><div class="card-title">' + esc(monthLabel) + ' Schedule</div>'
+      + '<div class="card-header"><div class="card-title">' + esc(monthLabel) + ' ' + T('Schedule', 'Horario') + '</div>'
       + '<div style="display:flex;gap:8px">'
-      + '<button class="btn" onclick="printSaturdaySchedule()">🖨 Print Schedule</button>'
-      + '<button class="btn primary" id="sat-generate-btn" onclick="generateSaturdayMonth()">✨ Generate Month</button>'
+      + '<button class="btn" onclick="printSaturdaySchedule()">🖨 ' + T('Print Schedule', 'Imprimir Horario') + '</button>'
+      + (canEdit ? '<button class="btn primary" id="sat-generate-btn" onclick="generateSaturdayMonth()">✨ Generate Month</button>' : '')
       + '</div></div>'
-      + '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Fills every Saturday in ' + esc(monthLabel) + ' using current availability. Re-running keeps any manual overrides already saved.</div>'
+      + (canEdit ? '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Fills every Saturday in ' + esc(monthLabel) + ' using current availability. Re-running keeps any manual overrides already saved.</div>' : '')
       + '<div id="sat-board" style="display:flex;gap:14px;overflow-x:auto;padding-bottom:6px"></div>'
       + '</div>'
       + '<div class="card" style="margin-bottom:16px">'
-      + '<div class="card-header"><div class="card-title">Crew Roster &amp; Availability</div>'
+      + '<div class="card-header"><div class="card-title">' + T('Crew Roster &amp; Availability', 'Cuadrilla y Disponibilidad') + '</div>'
       + '<div style="display:flex;align-items:center;gap:8px">'
-      + '<button class="btn" onclick="openSaturdayAddModal()">+ Add Crew Member</button>'
+      + (canEdit ? '<button class="btn" onclick="openSaturdayAddModal()">+ Add Crew Member</button>' : '')
       + '<select id="sat-week-select" onchange="satSelectWeek(this.value)" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
       + saturdays.map(s => '<option value="' + s + '"' + (s === window._satSelectedWeek ? ' selected' : '') + '>' + fmtDate(s) + '</option>').join('')
       + '</select></div></div>'
-      + '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Uncheck anyone who is out on <b>' + fmtDate(window._satSelectedWeek) + '</b> — they will be skipped that week only and prioritized the next time they are available.</div>'
+      + (canEdit ? '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Uncheck anyone who is out on <b>' + fmtDate(window._satSelectedWeek) + '</b> — they will be skipped that week only and prioritized the next time they are available.</div>' : '')
       + '<div id="sat-roster-table"></div>'
       + '</div>';
 
@@ -7234,32 +7441,34 @@ function satPill(text, color, bg) {
 function renderSaturdayRosterTable() {
   const el = document.getElementById('sat-roster-table');
   if (!el) return;
+  const canEdit = satCanEdit();
   const crew = window._satCrew || [];
   const discipline = window._satDiscipline || [];
   const wk = window._satSelectedWeek;
   const unavailableThisWeek = new Set(window._satAvailability[wk] || []);
-  const statusPill = { Active: satPill('Active', 'var(--success)', 'var(--success-l)'), Suspended: satPill('Suspended', 'var(--danger)', 'var(--danger-l)'), Ineligible: satPill('Ineligible', 'var(--text3)', 'var(--surface2)') };
+  const statusPill = { Active: satPill(T('Active', 'Activo'), 'var(--success)', 'var(--success-l)'), Suspended: satPill(T('Suspended', 'Suspendido'), 'var(--danger)', 'var(--danger-l)'), Ineligible: satPill(T('Ineligible', 'No Elegible'), 'var(--text3)', 'var(--surface2)') };
   const sorted = [...crew].sort((a, b) => (a.role === b.role ? a.name.localeCompare(b.name) : (a.role === 'Fixed' ? -1 : 1)));
+  const positionLabel = (pos) => T(pos, pos === 'Foreman' ? 'Capataz' : pos === 'Laborer' ? 'Trabajador' : pos);
 
   el.innerHTML = sorted.map(p => {
     const { status, daysRemaining, noShowCount } = computeSaturdayStatus(p, discipline);
     const checked = p.role === 'Fixed' ? true : !unavailableThisWeek.has(p.name);
-    const disabled = p.role === 'Fixed' || status !== 'Active';
+    const disabled = !canEdit || p.role === 'Fixed' || status !== 'Active';
     return '<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--border)">'
       + '<div style="width:32px;height:32px;border-radius:50%;background:' + satAvatarColor(p) + ';color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">' + satInitials(p.name) + '</div>'
       + '<div style="flex:1;min-width:0">'
       + '<div style="font-size:12.5px;font-weight:600;color:var(--text)">' + esc(p.name) + '</div>'
       + '<div style="display:flex;gap:6px;margin-top:3px;flex-wrap:wrap">'
-      + satPill(p.role === 'Fixed' ? 'Always Scheduled' : 'Rotating', p.role === 'Fixed' ? 'var(--swl-green)' : 'var(--text2)', p.role === 'Fixed' ? 'var(--success-l)' : 'var(--surface2)')
-      + (p.position !== 'N/A' ? satPill(p.position, p.position === 'Foreman' ? 'var(--info)' : 'var(--text3)', p.position === 'Foreman' ? 'var(--info-l)' : 'var(--surface2)') : '')
+      + satPill(p.role === 'Fixed' ? T('Always Scheduled', 'Siempre Programado') : T('Rotating', 'Rotativo'), p.role === 'Fixed' ? 'var(--swl-green)' : 'var(--text2)', p.role === 'Fixed' ? 'var(--success-l)' : 'var(--surface2)')
+      + (p.position !== 'N/A' ? satPill(positionLabel(p.position), p.position === 'Foreman' ? 'var(--info)' : 'var(--text3)', p.position === 'Foreman' ? 'var(--info-l)' : 'var(--surface2)') : '')
       + (statusPill[status] || '')
-      + (status === 'Suspended' ? satPill(daysRemaining + 'd left', 'var(--danger)', 'var(--danger-l)') : '')
+      + (status === 'Suspended' ? satPill(daysRemaining + T('d left', 'd restantes'), 'var(--danger)', 'var(--danger-l)') : '')
       + '</div></div>'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--text3);white-space:nowrap;cursor:' + (disabled ? 'default' : 'pointer') + '">'
-      + '<input type="checkbox" ' + (checked ? 'checked' : '') + (disabled ? ' disabled' : '') + ' onchange="satToggleAvailability(\'' + esc(p.name).replace(/'/g, "\\'") + '\',this.checked)">Available'
+      + '<input type="checkbox" ' + (checked ? 'checked' : '') + (disabled ? ' disabled' : '') + ' onchange="satToggleAvailability(\'' + esc(p.name).replace(/'/g, "\\'") + '\',this.checked)">' + T('Available', 'Disponible')
       + '</label>'
-      + '<button style="background:var(--surface2);color:var(--text2);border:1px solid var(--border2);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayEditModal(\'' + p.id + '\')" title="Edit role/position">✏️ Edit</button>'
-      + '<button style="background:var(--danger-l);color:var(--danger);border:1px solid rgba(220,38,38,.25);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayIncidentModal(\'' + esc(p.name).replace(/'/g, "\\'") + '\')" title="Log a no-call/no-show">' + (noShowCount ? '⚠ ' + noShowCount : 'Log Incident') + '</button>'
+      + (canEdit ? '<button style="background:var(--surface2);color:var(--text2);border:1px solid var(--border2);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayEditModal(\'' + p.id + '\')" title="Edit role/position">✏️ Edit</button>' : '')
+      + (canEdit ? '<button style="background:var(--danger-l);color:var(--danger);border:1px solid rgba(220,38,38,.25);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayIncidentModal(\'' + esc(p.name).replace(/'/g, "\\'") + '\')" title="Log a no-call/no-show">' + (noShowCount ? '⚠ ' + noShowCount : 'Log Incident') + '</button>' : '')
       + '</div>';
   }).join('');
 }
@@ -7502,31 +7711,32 @@ function renderSaturdayBoard() {
     + (extra || '')
     + '</div>';
 
+  const canEdit = satCanEdit();
   el.innerHTML = saturdays.map(dateStr => {
     const sched = window._satSchedules[dateStr];
     const rotating = sched?.rotatingCrew || [];
     const overrides = sched?.overrides || {};
     const isConfirmed = !!sched?.confirmed;
     const fullyStaffed = !!sched && [0, 1, 2].every(i => overrides[i] || rotating[i]);
-    const statusPill = !sched ? satPill('Not generated', 'var(--text3)', 'var(--surface)')
-      : isConfirmed ? satPill('✓ Confirmed', 'var(--info)', 'var(--info-l)')
-      : (fullyStaffed ? satPill('Fully Staffed', 'var(--success)', 'var(--success-l)') : satPill('Slot Open', 'var(--warn)', 'var(--warn-l)'));
-    const confirmBtn = !sched ? ''
+    const statusPill = !sched ? satPill(T('Not generated', 'No generado'), 'var(--text3)', 'var(--surface)')
+      : isConfirmed ? satPill('✓ ' + T('Confirmed', 'Confirmado'), 'var(--info)', 'var(--info-l)')
+      : (fullyStaffed ? satPill(T('Fully Staffed', 'Completo'), 'var(--success)', 'var(--success-l)') : satPill(T('Slot Open', 'Cupo Abierto'), 'var(--warn)', 'var(--warn-l)'));
+    const confirmBtn = !sched || !canEdit ? ''
       : isConfirmed ? '<button onclick="unconfirmSaturdayWeek(\'' + dateStr + '\')" style="width:100%;margin-top:10px;padding:5px;font-size:10px;font-weight:600;background:var(--surface);color:var(--text3);border:1px solid var(--border2);border-radius:6px;cursor:pointer">🔓 Unlock</button>'
       : fullyStaffed ? '<button onclick="confirmSaturdayWeek(\'' + dateStr + '\')" style="width:100%;margin-top:10px;padding:5px;font-size:10px;font-weight:700;background:var(--info);color:#fff;border:none;border-radius:6px;cursor:pointer">✓ Confirm Schedule</button>'
       : '';
     return '<div style="min-width:220px;flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:var(--rl);padding:12px">'
       + '<div style="font-size:12px;font-weight:700;color:var(--text);font-family:var(--disp);margin-bottom:6px">' + fmtDate(dateStr) + '</div>'
       + statusPill
-      + '<div style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:10px 0 2px">Fixed</div>'
+      + '<div style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:10px 0 2px">' + T('Fixed', 'Fijo') + '</div>'
       + fixedNames.map(n => boardPerson(n, 'N/A')).join('')
-      + '<div style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:10px 0 2px">Rotating</div>'
+      + '<div style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:10px 0 2px">' + T('Rotating', 'Rotativo') + '</div>'
       + [0, 1, 2].map(i => {
-          if (!sched) return '<div style="font-size:11px;color:var(--text3);padding:5px 0">— not generated —</div>';
+          if (!sched) return '<div style="font-size:11px;color:var(--text3);padding:5px 0">— ' + T('not generated', 'no generado') + ' —</div>';
           const overridden = overrides[i];
           const person = overridden ? { name: overridden, position: '(manual)' } : rotating[i];
-          if (!person) return '<div style="font-size:11px;color:var(--text3);padding:5px 0">— open slot —</div>';
-          if (isConfirmed) return boardPerson(person.name, person.position);
+          if (!person) return '<div style="font-size:11px;color:var(--text3);padding:5px 0">— ' + T('open slot', 'cupo abierto') + ' —</div>';
+          if (isConfirmed || !canEdit) return boardPerson(person.name, T(person.position, person.position === 'Foreman' ? 'Capataz' : person.position === 'Laborer' ? 'Trabajador' : person.position));
           const dropdown = '<select style="font-size:9.5px;padding:2px 3px;border-radius:5px;border:1px solid var(--border2);background:var(--surface);color:var(--text3);flex-shrink:0;max-width:78px" onchange="satOverrideSlot(\'' + dateStr + '\',' + i + ',this.value)">'
             + '<option value="">Override…</option>'
             + eligibleNames.map(n => '<option value="' + esc(n) + '"' + (overridden === n ? ' selected' : '') + '>' + esc(n) + '</option>').join('')
