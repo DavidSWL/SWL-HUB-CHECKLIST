@@ -7329,13 +7329,6 @@ function satIsAuthorized() {
   return CD.role === 'admin' || CD.role === 'exec_viewer' || (isManager && CD.branch === 'OC') || CD.role === 'ops_specialist_oc';
 }
 
-// Everyone else who can reach this screen today keeps their existing full
-// access — this only carves out the new read-only role, not a behavior
-// change for admin/OC managers/exec_viewer.
-function satCanEdit() {
-  return CD.role !== 'ops_specialist_oc';
-}
-
 async function renderSaturdaySchedule() {
   const ca = document.getElementById('content-area');
   if (!satIsAuthorized()) { ca.innerHTML = '<div class="empty">' + T('Saturday Schedule is only available to Admin and OC managers.', 'El Horario del Sábado solo está disponible para Admin y gerentes de OC.') + '</div>'; return; }
@@ -7372,7 +7365,6 @@ async function renderSaturdaySchedule() {
     window._satSchedules = {};
     schedAllSnap.docs.forEach(d => { const v = d.data(); if (saturdaySet.has(v.date)) window._satSchedules[v.date] = { id: d.id, ...v }; });
 
-    const canEdit = satCanEdit();
     ca.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">'
       + '<div><div style="font-size:15px;font-weight:700;color:var(--text)">🗓 ' + T('Saturday Crew Schedule', 'Horario de Cuadrilla del Sábado') + '</div>'
       + '<div style="font-size:11.5px;color:var(--text3);margin-top:2px">' + T('OC field crew rotation — 3 Fixed + 3 Rotating each Saturday', 'Rotación de cuadrilla de campo de OC — 3 Fijos + 3 Rotativos cada sábado') + '</div></div>'
@@ -7386,19 +7378,19 @@ async function renderSaturdaySchedule() {
       + '<div class="card-header"><div class="card-title">' + esc(monthLabel) + ' ' + T('Schedule', 'Horario') + '</div>'
       + '<div style="display:flex;gap:8px">'
       + '<button class="btn" onclick="printSaturdaySchedule()">🖨 ' + T('Print Schedule', 'Imprimir Horario') + '</button>'
-      + (canEdit ? '<button class="btn primary" id="sat-generate-btn" onclick="generateSaturdayMonth()">✨ Generate Month</button>' : '')
+      + '<button class="btn primary" id="sat-generate-btn" onclick="generateSaturdayMonth()">✨ ' + T('Generate Month', 'Generar Mes') + '</button>'
       + '</div></div>'
-      + (canEdit ? '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Fills every Saturday in ' + esc(monthLabel) + ' using current availability. Re-running keeps any manual overrides already saved.</div>' : '')
+      + '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">' + T('Fills every Saturday in ' + esc(monthLabel) + ' using current availability. Re-running keeps any manual overrides already saved.', 'Llena cada sábado de ' + esc(monthLabel) + ' según la disponibilidad actual. Volver a generar conserva los cambios manuales ya guardados.') + '</div>'
       + '<div id="sat-board" style="display:flex;gap:14px;overflow-x:auto;padding-bottom:6px"></div>'
       + '</div>'
       + '<div class="card" style="margin-bottom:16px">'
       + '<div class="card-header"><div class="card-title">' + T('Crew Roster &amp; Availability', 'Cuadrilla y Disponibilidad') + '</div>'
       + '<div style="display:flex;align-items:center;gap:8px">'
-      + (canEdit ? '<button class="btn" onclick="openSaturdayAddModal()">+ Add Crew Member</button>' : '')
+      + '<button class="btn" onclick="openSaturdayAddModal()">+ ' + T('Add Crew Member', 'Agregar Trabajador') + '</button>'
       + '<select id="sat-week-select" onchange="satSelectWeek(this.value)" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
       + saturdays.map(s => '<option value="' + s + '"' + (s === window._satSelectedWeek ? ' selected' : '') + '>' + fmtDate(s) + '</option>').join('')
       + '</select></div></div>'
-      + (canEdit ? '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Uncheck anyone who is out on <b>' + fmtDate(window._satSelectedWeek) + '</b> — they will be skipped that week only and prioritized the next time they are available.</div>' : '')
+      + '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">' + T('Uncheck anyone who is out on <b>' + fmtDate(window._satSelectedWeek) + '</b> — they will be skipped that week only and prioritized the next time they are available.', 'Desmarca a quien no esté disponible el <b>' + fmtDate(window._satSelectedWeek) + '</b> — se omitirá solo esa semana y tendrá prioridad la próxima vez que esté disponible.') + '</div>'
       + '<div id="sat-roster-table"></div>'
       + '</div>';
 
@@ -7441,7 +7433,6 @@ function satPill(text, color, bg) {
 function renderSaturdayRosterTable() {
   const el = document.getElementById('sat-roster-table');
   if (!el) return;
-  const canEdit = satCanEdit();
   const crew = window._satCrew || [];
   const discipline = window._satDiscipline || [];
   const wk = window._satSelectedWeek;
@@ -7453,7 +7444,7 @@ function renderSaturdayRosterTable() {
   el.innerHTML = sorted.map(p => {
     const { status, daysRemaining, noShowCount } = computeSaturdayStatus(p, discipline);
     const checked = p.role === 'Fixed' ? true : !unavailableThisWeek.has(p.name);
-    const disabled = !canEdit || p.role === 'Fixed' || status !== 'Active';
+    const disabled = p.role === 'Fixed' || status !== 'Active';
     return '<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--border)">'
       + '<div style="width:32px;height:32px;border-radius:50%;background:' + satAvatarColor(p) + ';color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">' + satInitials(p.name) + '</div>'
       + '<div style="flex:1;min-width:0">'
@@ -7467,8 +7458,8 @@ function renderSaturdayRosterTable() {
       + '<label style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--text3);white-space:nowrap;cursor:' + (disabled ? 'default' : 'pointer') + '">'
       + '<input type="checkbox" ' + (checked ? 'checked' : '') + (disabled ? ' disabled' : '') + ' onchange="satToggleAvailability(\'' + esc(p.name).replace(/'/g, "\\'") + '\',this.checked)">' + T('Available', 'Disponible')
       + '</label>'
-      + (canEdit ? '<button style="background:var(--surface2);color:var(--text2);border:1px solid var(--border2);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayEditModal(\'' + p.id + '\')" title="Edit role/position">✏️ Edit</button>' : '')
-      + (canEdit ? '<button style="background:var(--danger-l);color:var(--danger);border:1px solid rgba(220,38,38,.25);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayIncidentModal(\'' + esc(p.name).replace(/'/g, "\\'") + '\')" title="Log a no-call/no-show">' + (noShowCount ? '⚠ ' + noShowCount : 'Log Incident') + '</button>' : '')
+      + '<button style="background:var(--surface2);color:var(--text2);border:1px solid var(--border2);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayEditModal(\'' + p.id + '\')" title="' + T('Edit role/position', 'Editar puesto') + '">✏️ ' + T('Edit', 'Editar') + '</button>'
+      + '<button style="background:var(--danger-l);color:var(--danger);border:1px solid rgba(220,38,38,.25);border-radius:8px;padding:5px 10px;font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap" onclick="openSaturdayIncidentModal(\'' + esc(p.name).replace(/'/g, "\\'") + '\')" title="' + T('Log a no-call/no-show', 'Registrar falta sin aviso') + '">' + (noShowCount ? '⚠ ' + noShowCount : T('Log Incident', 'Registrar Falta')) + '</button>'
       + '</div>';
   }).join('');
 }
@@ -7711,7 +7702,6 @@ function renderSaturdayBoard() {
     + (extra || '')
     + '</div>';
 
-  const canEdit = satCanEdit();
   el.innerHTML = saturdays.map(dateStr => {
     const sched = window._satSchedules[dateStr];
     const rotating = sched?.rotatingCrew || [];
@@ -7721,9 +7711,9 @@ function renderSaturdayBoard() {
     const statusPill = !sched ? satPill(T('Not generated', 'No generado'), 'var(--text3)', 'var(--surface)')
       : isConfirmed ? satPill('✓ ' + T('Confirmed', 'Confirmado'), 'var(--info)', 'var(--info-l)')
       : (fullyStaffed ? satPill(T('Fully Staffed', 'Completo'), 'var(--success)', 'var(--success-l)') : satPill(T('Slot Open', 'Cupo Abierto'), 'var(--warn)', 'var(--warn-l)'));
-    const confirmBtn = !sched || !canEdit ? ''
-      : isConfirmed ? '<button onclick="unconfirmSaturdayWeek(\'' + dateStr + '\')" style="width:100%;margin-top:10px;padding:5px;font-size:10px;font-weight:600;background:var(--surface);color:var(--text3);border:1px solid var(--border2);border-radius:6px;cursor:pointer">🔓 Unlock</button>'
-      : fullyStaffed ? '<button onclick="confirmSaturdayWeek(\'' + dateStr + '\')" style="width:100%;margin-top:10px;padding:5px;font-size:10px;font-weight:700;background:var(--info);color:#fff;border:none;border-radius:6px;cursor:pointer">✓ Confirm Schedule</button>'
+    const confirmBtn = !sched ? ''
+      : isConfirmed ? '<button onclick="unconfirmSaturdayWeek(\'' + dateStr + '\')" style="width:100%;margin-top:10px;padding:5px;font-size:10px;font-weight:600;background:var(--surface);color:var(--text3);border:1px solid var(--border2);border-radius:6px;cursor:pointer">🔓 ' + T('Unlock', 'Desbloquear') + '</button>'
+      : fullyStaffed ? '<button onclick="confirmSaturdayWeek(\'' + dateStr + '\')" style="width:100%;margin-top:10px;padding:5px;font-size:10px;font-weight:700;background:var(--info);color:#fff;border:none;border-radius:6px;cursor:pointer">✓ ' + T('Confirm Schedule', 'Confirmar Horario') + '</button>'
       : '';
     return '<div style="min-width:220px;flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:var(--rl);padding:12px">'
       + '<div style="font-size:12px;font-weight:700;color:var(--text);font-family:var(--disp);margin-bottom:6px">' + fmtDate(dateStr) + '</div>'
@@ -7736,9 +7726,9 @@ function renderSaturdayBoard() {
           const overridden = overrides[i];
           const person = overridden ? { name: overridden, position: '(manual)' } : rotating[i];
           if (!person) return '<div style="font-size:11px;color:var(--text3);padding:5px 0">— ' + T('open slot', 'cupo abierto') + ' —</div>';
-          if (isConfirmed || !canEdit) return boardPerson(person.name, T(person.position, person.position === 'Foreman' ? 'Capataz' : person.position === 'Laborer' ? 'Trabajador' : person.position));
+          if (isConfirmed) return boardPerson(person.name, T(person.position, person.position === 'Foreman' ? 'Capataz' : person.position === 'Laborer' ? 'Trabajador' : person.position));
           const dropdown = '<select style="font-size:9.5px;padding:2px 3px;border-radius:5px;border:1px solid var(--border2);background:var(--surface);color:var(--text3);flex-shrink:0;max-width:78px" onchange="satOverrideSlot(\'' + dateStr + '\',' + i + ',this.value)">'
-            + '<option value="">Override…</option>'
+            + '<option value="">' + T('Override…', 'Cambiar…') + '</option>'
             + eligibleNames.map(n => '<option value="' + esc(n) + '"' + (overridden === n ? ' selected' : '') + '>' + esc(n) + '</option>').join('')
             + '</select>';
           return boardPerson(person.name, person.position, dropdown);
