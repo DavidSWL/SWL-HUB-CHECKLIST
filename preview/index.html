@@ -6,7 +6,9 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>SWL Operations Hub</title>
+<!-- This is the FIRST title tag in the document and the one browsers
+     actually use for the tab; a second one further down is ignored. -->
+<title>[PREVIEW] SWL Operations Hub</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -622,6 +624,94 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   pointer-events:none; user-select:none;
 }
 @media print{ #swl-preview-badge{display:none} }
+
+/* ══════════════════════════════════════════════════════════════
+   PHASE 1 — WORKSPACE SHELL
+   Replaces the single top bar with a Slack-style three-column
+   layout: app rail, section sidebar, main pane. Deliberately
+   scoped to new .ws-* classes and an .app.ws wrapper so it
+   overrides the old chrome without touching any screen's own
+   styles — #content-area keeps its class and every render
+   function draws into it exactly as before.
+   ══════════════════════════════════════════════════════════════ */
+.app.ws{flex-direction:row}
+.ws-rail{width:58px;flex-shrink:0;background:#16241D;display:flex;flex-direction:column;
+  align-items:center;padding:10px 0;gap:5px;z-index:20}
+.ws-rail-logo{width:34px;height:34px;border-radius:9px;
+  background:linear-gradient(140deg,#EDF1EA,#C6D0C2);display:flex;align-items:center;
+  justify-content:center;font-family:var(--disp,'Trebuchet MS');font-weight:700;font-size:12.5px;
+  color:#7A1C2E;margin-bottom:6px;letter-spacing:-.02em;flex-shrink:0}
+.ws-rail-ics{display:flex;flex-direction:column;gap:5px;align-items:center;overflow-y:auto;
+  overflow-x:hidden;width:100%}
+.ws-rail-ics::-webkit-scrollbar{display:none}
+.ws-ric{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;
+  justify-content:center;font-size:16px;color:#B9CBBF;cursor:pointer;position:relative;
+  flex-shrink:0;border:none;background:none;padding:0}
+.ws-ric:hover{background:#25392E;color:#fff}
+.ws-ric.on{background:#25392E;color:#fff;box-shadow:inset 2.5px 0 0 #FC6020}
+.ws-ric-b{position:absolute;top:3px;right:3px;background:#C93D00;color:#fff;font-size:8.5px;
+  font-weight:700;border-radius:9px;padding:0 4px;border:2px solid #16241D;line-height:1.5}
+.ws-rail-sp{flex:1;min-height:8px}
+.ws-rail-user{position:relative;flex-shrink:0;cursor:pointer}
+.ws-rail-av{width:31px;height:31px;border-radius:50%;background:#7A1C2E;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.ws-rail-user .sb-user-popover{bottom:100%;top:auto;left:0;right:auto;margin:0 0 8px}
+
+.ws-side{width:216px;flex-shrink:0;background:#F5F7F5;border-right:1px solid #E2E8E4;
+  display:flex;flex-direction:column;overflow:hidden}
+.ws-side-hd{padding:12px 14px;border-bottom:1px solid #E2E8E4;flex-shrink:0}
+.ws-side-ttl{font-family:var(--disp,'Trebuchet MS');font-size:14px;font-weight:700;
+  color:#0D1B12;letter-spacing:-.01em}
+.ws-side-sub{font-size:10.5px;color:#7A9088;margin-top:1px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.ws-side-body{flex:1;overflow-y:auto;padding:8px;display:block}
+.ws-grp{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:#9BADA2;padding:11px 8px 4px}
+.ws-nav{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:7px;
+  font-size:13px;color:#42544A;cursor:pointer;width:100%;text-align:left;border:none;
+  background:none;font-family:inherit;margin-bottom:1px}
+.ws-nav:hover{background:#E4EAE5}
+.ws-nav.active{background:#0E4C2D;color:#fff;font-weight:600}
+.ws-nav-ic{font-size:14px;flex-shrink:0;width:18px;text-align:center}
+.ws-side-ft{padding:9px 12px;border-top:1px solid #E2E8E4;flex-shrink:0}
+
+.ws-main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.ws-top{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:11px 20px;border-bottom:1px solid #E2E8E4;background:#fff;flex-shrink:0;flex-wrap:wrap}
+.ws-top-ttl{font-family:var(--disp,'Trebuchet MS');font-size:16px;font-weight:700;
+  color:#0D1B12;letter-spacing:-.01em;display:block}
+.ws-top-r{display:flex;align-items:center;gap:9px;flex-shrink:0}
+.ws-wknav{display:flex;align-items:center;gap:5px}
+.ws-wkbtn{width:26px;height:26px;border:1px solid #D6DED8;border-radius:7px;background:#fff;
+  cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:#5A6B60}
+.ws-wkbtn:hover{border-color:#9BADA2}
+#tb-week{min-width:148px;text-align:center;font-size:11px;color:#42544A;background:#F1F4F1;
+  padding:4px 10px;border-radius:20px;border:1px solid #E2E8E4}
+.ws-burger{display:none}
+
+/* Dark ("Grey") content theme — sidebar/top follow so the shell
+   doesn't read as light chrome wrapped around a dark screen. */
+.app.ws:has(.content-area:not(.theme-white)) .ws-side{background:#1E1E1E;border-right-color:#2E2E2E}
+.app.ws:has(.content-area:not(.theme-white)) .ws-side-hd{border-bottom-color:#2E2E2E}
+.app.ws:has(.content-area:not(.theme-white)) .ws-side-ttl{color:#E8E8E8}
+.app.ws:has(.content-area:not(.theme-white)) .ws-nav{color:#B4B4B4}
+.app.ws:has(.content-area:not(.theme-white)) .ws-nav:hover{background:#2A2A2A}
+.app.ws:has(.content-area:not(.theme-white)) .ws-side-ft{border-top-color:#2E2E2E}
+.app.ws:has(.content-area:not(.theme-white)) .ws-top{background:#242424;border-bottom-color:#2E2E2E}
+.app.ws:has(.content-area:not(.theme-white)) .ws-top-ttl{color:#F0F0F0}
+.app.ws:has(.content-area:not(.theme-white)) .ws-wkbtn{background:#2A2A2A;border-color:#383838;color:#CCC}
+.app.ws:has(.content-area:not(.theme-white)) #tb-week{background:#2A2A2A;border-color:#383838;color:#CCC}
+
+@media (max-width:860px){
+  .ws-side{position:fixed;left:58px;top:0;bottom:0;z-index:60;transform:translateX(-110%);
+    transition:transform .2s ease;box-shadow:6px 0 24px rgba(0,0,0,.18)}
+  .ws-side.open{transform:translateX(0)}
+  .ws-burger{display:flex;align-items:center;justify-content:center;width:30px;height:30px;
+    border:1px solid #D6DED8;border-radius:7px;background:#fff;cursor:pointer;font-size:14px;
+    color:#5A6B60;flex-shrink:0;margin-right:8px}
+  .ws-top{padding:10px 12px}
+  #tb-week{min-width:112px;font-size:10px}
+}
 </style>
 </head>
 <body>
@@ -668,33 +758,16 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 <!-- ══════════════════════════════════════
      APP SHELL
 ══════════════════════════════════════ -->
-<div class="app" id="app-shell" style="display:none">
+<div class="app ws" id="app-shell" style="display:none">
 <div class="mob-overlay" id="mob-overlay" onclick="closeMobileNav()"></div>
 
-  <!-- SIDEBAR -->
-  <aside class="sidebar">
-    <div class="sb-landmark"><img id="sb-img" src="" alt=""></div>
-    <div id="sb-ov" class="sb-ov"></div>
-    <div class="sb-inner">
-    <div class="sb-header" style="padding:0 12px 0 0">
-      <img src="data:image/png;base64,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" alt="SouthWest Landscape" style="width:100%;max-width:150px;height:auto;display:block;margin-bottom:4px">
-      <div class="sb-logo-sub" style="font-size:10px;color:rgba(211,222,215,.55);letter-spacing:.05em;text-transform:uppercase">Operations Hub</div>
-    </div>
-    <nav class="sb-nav" id="sb-nav">
-      <!-- dynamically populated based on role -->
-    </nav>
-    <span id="tb-title" style="display:none">Dashboard</span>
-    <div class="tb-controls" style="display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:4px">
-      <div class="theme-sw" id="theme-sw"><button class="ts-opt" onclick="setContentTheme('grey',this)">Grey</button><button class="ts-opt on" onclick="setContentTheme('white',this)">White</button></div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <button onclick="prevWeek()" style="width:26px;height:26px;border:1px solid rgba(255,255,255,.18);border-radius:8px;background:rgba(255,255,255,.08);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.85)" title="Previous week">‹</button>
-        <div class="tb-week" id="tb-week" style="min-width:150px;text-align:center;font-size:11px;color:rgba(255,255,255,.85);background:rgba(255,255,255,.08);padding:4px 10px;border-radius:20px;border:1px solid rgba(255,255,255,.15)">—</div>
-        <button onclick="nextWeek()" style="width:26px;height:26px;border:1px solid rgba(255,255,255,.18);border-radius:8px;background:rgba(255,255,255,.08);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.85)" title="Next week">›</button>
-      </div>
-    </div>
-    <div class="sb-user" id="sb-user" onclick="toggleUserPopover(event)">
-      <div class="sb-user-avatar" id="sb-user-avatar">—</div>
-      <div class="sb-user-name" id="sb-name">—</div>
+  <!-- ══ WORKSPACE RAIL — top-level areas ══ -->
+  <div class="ws-rail">
+    <div class="ws-rail-logo" title="SouthWest Landscape">SW</div>
+    <div class="ws-rail-ics" id="ws-rail"></div>
+    <div class="ws-rail-sp"></div>
+    <div class="ws-rail-user" id="sb-user" onclick="toggleUserPopover(event)">
+      <div class="ws-rail-av" id="sb-user-avatar">—</div>
       <div class="sb-user-popover" id="sb-user-popover">
         <div class="pv-name" id="sb-name-pv">—</div>
         <div class="pv-role" id="sb-role">—</div>
@@ -705,16 +778,41 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
         </button>
       </div>
     </div>
+  </div>
+
+  <!-- ══ SECTION SIDEBAR — screens within the active area ══ -->
+  <aside class="ws-side" id="ws-side">
+    <div class="ws-side-hd">
+      <div class="ws-side-ttl" id="ws-area-title">Home</div>
+      <div class="ws-side-sub" id="sb-name">—</div>
+    </div>
+    <nav class="ws-side-body" id="sb-nav"></nav>
+    <div class="ws-side-ft">
+      <div class="theme-sw" id="theme-sw"><button class="ts-opt" onclick="setContentTheme('grey',this)">Grey</button><button class="ts-opt on" onclick="setContentTheme('white',this)">White</button></div>
     </div>
   </aside>
 
-  <!-- MAIN -->
-  <div class="main-area">
+  <!-- ══ MAIN — #content-area is untouched, every screen renders into it as before ══ -->
+  <div class="main-area ws-main">
+    <div class="ws-top">
+      <div style="display:flex;align-items:center;min-width:0">
+        <button class="ws-burger" onclick="wsToggleSide(event)" title="Menu">☰</button>
+        <span class="ws-top-ttl" id="tb-title">Dashboard</span>
+      </div>
+      <div class="ws-top-r">
+        <div class="ws-wknav">
+          <button class="ws-wkbtn" onclick="prevWeek()" title="Previous week">‹</button>
+          <div class="tb-week" id="tb-week">—</div>
+          <button class="ws-wkbtn" onclick="nextWeek()" title="Next week">›</button>
+        </div>
+      </div>
+    </div>
     <div class="content-area" id="content-area">
       <!-- screens injected here -->
     </div>
   </div>
 </div>
+
 
 <div id="toast"></div>
 
@@ -1167,70 +1265,141 @@ function buildSidebar() {
   document.getElementById('sb-role').textContent = ROLES[role]?.label || role;
   const btag = document.getElementById('sb-branch-tag');
   btag.textContent = branch; btag.className = 'pv-branch ' + (branch==='ALL'?'all':branch.toLowerCase());
-  // Show photo if available (non-destructive — hides the initials circle instead of replacing it)
-  const sbUser = document.querySelector('.sb-user');
-  const existingPhoto = sbUser.querySelector('.sb-photo');
-  if (existingPhoto) existingPhoto.remove();
-  if (CD.photoURL) {
-    if (avatarEl) avatarEl.style.display = 'none';
-    const img = document.createElement('img');
-    img.className = 'sb-photo';
-    img.src = CD.photoURL;
-    img.style.cssText = 'width:24px;height:24px;border-radius:50%;object-fit:cover;flex-shrink:0';
-    sbUser.insertBefore(img, avatarEl);
-  } else if (avatarEl) {
-    avatarEl.style.display = 'flex';
+  // Show photo if available (non-destructive — hides the initials circle instead of replacing it).
+  // Looked up by id, not by the old .sb-user class: the user chip moved into
+  // the workspace rail and carries the id but not that class.
+  const sbUser = document.getElementById('sb-user');
+  if (sbUser) {
+    const existingPhoto = sbUser.querySelector('.sb-photo');
+    if (existingPhoto) existingPhoto.remove();
+    if (CD.photoURL) {
+      if (avatarEl) avatarEl.style.display = 'none';
+      const img = document.createElement('img');
+      img.className = 'sb-photo';
+      img.src = CD.photoURL;
+      img.style.cssText = 'width:31px;height:31px;border-radius:50%;object-fit:cover;flex-shrink:0';
+      sbUser.insertBefore(img, avatarEl);
+    } else if (avatarEl) {
+      avatarEl.style.display = 'flex';
+    }
   }
 
-  const nav = document.getElementById('sb-nav');
+  buildWorkspaceNav();
+}
+
+// ══════════════════════════════════════════════════
+// PHASE 1 — WORKSPACE NAVIGATION
+// ══════════════════════════════════════════════════
+// Same screens, same role gating, same render functions — only the
+// container changes. The old model was one flat bar plus a "More"
+// dropdown that hid half the app; this groups screens into areas so
+// the rail answers "what am I doing" and the sidebar answers "which
+// screen", which is the shape Chat and Docs need in later phases.
+function wsAreas() {
+  const role = CD.role, branch = CD.branch;
   const isManager = ROLES[role]?.isManager || role === 'admin';
   const isExec = role === 'exec_viewer';
+  const ocCrew = role === 'admin' || role === 'exec_viewer'
+    || (isManager && branch === 'OC') || role === 'ops_specialist_oc';
 
-  // A role locked to one screen (restrictedTo) gets a single icon and
-  // nothing else — no Dashboard, no More dropdown, nothing to navigate to
-  // that they aren't allowed on anyway.
-  const restrictedTo = ROLES[role]?.restrictedTo;
-  if (restrictedTo) {
-    nav.innerHTML = topIcon(restrictedTo, T('Saturday Schedule', 'Horario del Sábado'), '🗓');
-    return;
+  const areas = [];
+  areas.push({ id:'home', icon:'🏠', label:T('Home','Inicio'), screens:[
+    { id:'dashboard', icon:'🏠', label:T('Dashboard','Panel') }
+  ]});
+  areas.push({ id:'inbox', icon:'📥', label:T('Inbox','Bandeja'), badge:true, screens:[
+    { id:'inbox', icon:'📥', label:T('Inbox','Bandeja') }
+  ]});
+  if (!isExec) {
+    const work = [{ id:'weekly-notes', icon:'📝', label:T('Weekly Notes','Notas Semanales') },
+                  { id:'my-grading',   icon:'📊', label:T('My Grading','Mi Calificación') }];
+    if (isManager) work.unshift({ id:'items', icon:'✅', label:T('Weekly Items','Tareas Semanales') });
+    if (isManager) work.push({ id:'my-history', icon:'📚', label:T('My History','Mi Historial') });
+    areas.push({ id:'work', icon:'✅', label:T('My Work','Mi Trabajo'), screens:work });
   }
-
-  // Primary destinations — always visible as icons in the bar
-  let html = topIcon('dashboard','Dashboard','🏠');
-  html += topIcon('inbox','Inbox','📥', true);
-  if (!isExec) html += topIcon('weekly-notes','Weekly Notes','📝');
-  if (!isExec) html += topIcon('my-grading','My Grading','📊');
-  if (isManager || isExec) html += topIcon('reports','Reports','📈');
-
-  // Everything else lives in the "More" dropdown, grouped exactly as the
-  // old vertical nav did — same role-gating, just a different container.
-  // Monday Check-In and Friday Notes now live in the "Weekly Notes" tab
-  // above, not here — no duplicate path to the same screen.
-  let more = '';
-
   if (isManager || isExec) {
-    more += '<div class="more-dd-label">Planning</div>';
-    more += navBtn('items','Weekly Items','✅');
-    more += navBtn('monday-recap','Monday Planning Overview','📆');
-    more += navBtn('my-history','My History','📚');
-    more += navBtn('summary','Monday Recap','📄');
-    more += navBtn('friday-summary','Friday Recap','📊');
+    areas.push({ id:'recaps', icon:'📄', label:T('Recaps','Resúmenes'), screens:[
+      { id:'monday-recap',   icon:'📆', label:T('Monday Planning','Planeación Lunes') },
+      { id:'summary',        icon:'📄', label:T('Monday Recap','Resumen Lunes') },
+      { id:'friday-summary', icon:'📊', label:T('Friday Recap','Resumen Viernes') }
+    ]});
+    areas.push({ id:'reports', icon:'📈', label:T('Reports','Reportes'), screens:[
+      { id:'reports', icon:'📈', label:T('Reports','Reportes') }
+    ]});
   }
-  if (role === 'admin' || role === 'exec_viewer' || (isManager && branch === 'OC')) {
-    more += '<div class="more-dd-label">OC Field Crew</div>';
-    more += navBtn('saturday-schedule','Saturday Schedule','🗓');
+  if (ocCrew) {
+    areas.push({ id:'crew', icon:'🗓', label:T('Field Crew','Cuadrilla'), screens:[
+      { id:'saturday-schedule', icon:'🗓', label:T('Saturday Schedule','Horario del Sábado') }
+    ]});
   }
   if (role === 'admin') {
-    more += '<div class="more-dd-label">Admin</div>';
-    more += navBtn('admin','Admin Panel','⚙');
+    areas.push({ id:'admin', icon:'⚙', label:'Admin', screens:[
+      { id:'admin', icon:'⚙', label:'Admin Panel' }
+    ]});
   }
 
-  html += `<div class="more-wrap">
-    <button class="more-btn" id="more-btn" onclick="toggleMoreMenu(event)">⋯ More <span style="font-size:8px">▾</span></button>
-    <div class="more-dropdown" id="more-dropdown">${more}</div>
-  </div>`;
+  // A role locked to a single screen only ever sees the one area that
+  // contains it — same guarantee the old single-icon branch gave.
+  const restrictedTo = ROLES[role]?.restrictedTo;
+  if (restrictedTo) return areas.filter(a => a.screens.some(s => s.id === restrictedTo));
+  return areas;
+}
 
-  nav.innerHTML = html;
+function wsAreaForScreen(screen) {
+  const areas = wsAreas();
+  const hit = areas.find(a => a.screens.some(s => s.id === screen));
+  if (hit) return hit;
+  // Screens reachable without their own nav entry (check-in forms opened
+  // from Weekly Notes, drilldowns, legacy aliases) shouldn't blank the
+  // sidebar — keep whatever area is already active.
+  return areas.find(a => a.id === window._wsArea) || areas[0];
+}
+
+function buildWorkspaceNav() {
+  const rail = document.getElementById('ws-rail');
+  const nav  = document.getElementById('sb-nav');
+  if (!rail || !nav) return;
+  const areas = wsAreas();
+  const active = wsAreaForScreen(activeScreen || 'dashboard');
+  window._wsArea = active.id;
+
+  rail.innerHTML = areas.map(a =>
+    '<button class="ws-ric' + (a.id === active.id ? ' on' : '') + '"'
+    + ' onclick="wsGoArea(\'' + a.id + '\')" title="' + esc(a.label) + '">'
+    + a.icon
+    + (a.badge ? '<span class="ws-ric-b" id="inbox-badge-count" style="display:none">&nbsp;</span>' : '')
+    + '</button>'
+  ).join('');
+
+  const ttl = document.getElementById('ws-area-title');
+  if (ttl) ttl.textContent = active.label;
+
+  nav.innerHTML = '<div class="ws-grp">' + esc(active.label) + '</div>'
+    + active.screens.map(s =>
+        '<button class="ws-nav' + (s.id === activeScreen ? ' active' : '') + '"'
+        + ' onclick="wsGoScreen(\'' + s.id + '\')">'
+        + '<span class="ws-nav-ic">' + s.icon + '</span>' + esc(s.label)
+        + '</button>'
+      ).join('');
+}
+
+function wsGoArea(areaId) {
+  const area = wsAreas().find(a => a.id === areaId);
+  if (!area || !area.screens.length) return;
+  window._wsArea = areaId;
+  navigateTo(area.screens[0].id);
+}
+function wsGoScreen(id) {
+  wsCloseSide();
+  navigateTo(id);
+}
+function wsToggleSide(e) {
+  if (e) e.stopPropagation();
+  const s = document.getElementById('ws-side');
+  if (s) s.classList.toggle('open');
+}
+function wsCloseSide() {
+  const s = document.getElementById('ws-side');
+  if (s) s.classList.remove('open');
 }
 
 function topIcon(id, label, icon, hasBadge) {
@@ -1286,6 +1455,10 @@ function navigateTo(screen) {
   const restrictedTo = ROLES[CD?.role]?.restrictedTo;
   if (restrictedTo && screen !== restrictedTo) screen = restrictedTo;
   activeScreen = screen;
+  // Rebuild the rail + sidebar so the active area and screen highlight
+  // follow, including for screens reached without a nav click (dashboard
+  // links, drilldowns, check-in forms opened from Weekly Notes).
+  if (CD) buildWorkspaceNav();
   // Update active nav btn
   document.querySelectorAll('.nav-btn, .top-icon-link').forEach(b => {
     b.classList.toggle('active', b.getAttribute('onclick')?.includes(`'${screen}'`));
