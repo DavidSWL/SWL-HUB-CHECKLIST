@@ -702,7 +702,73 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .app.ws:has(.content-area:not(.theme-white)) .ws-wkbtn{background:#2A2A2A;border-color:#383838;color:#CCC}
 .app.ws:has(.content-area:not(.theme-white)) #tb-week{background:#2A2A2A;border-color:#383838;color:#CCC}
 
+/* ══════════════════════════════════════════════════════════════
+   PHASE 2 — CHAT
+   Fills #content-area like any other screen, so it inherits the
+   workspace shell and the Grey/White theme without special-casing.
+   ══════════════════════════════════════════════════════════════ */
+/* Cancels #content-area's 20px padding so chat sits edge-to-edge; the
+   height compensates for that negative margin so it fills exactly and
+   doesn't push a second scrollbar onto the container. */
+.ch-wrap{display:flex;flex-direction:column;margin:-20px;height:calc(100% + 40px);background:#fff}
+.ch-hd{padding:11px 18px;border-bottom:1px solid #E2E8E4;display:flex;align-items:center;
+  justify-content:space-between;gap:12px;flex-wrap:wrap;flex-shrink:0}
+.ch-hd-ttl{font-family:var(--disp,'Trebuchet MS');font-size:15px;font-weight:700;color:#0D1B12;
+  display:flex;align-items:center;gap:7px}
+.ch-hd-sub{font-size:11.5px;color:#7A9088;margin-top:1px}
+.ch-feed{flex:1;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:2px;min-height:0}
+.ch-day{display:flex;align-items:center;gap:10px;margin:12px 0 8px;color:#9BADA2;font-size:10.5px;font-weight:600}
+.ch-day:before,.ch-day:after{content:"";height:1px;background:#E2E8E4;flex:1}
+.ch-msg{display:flex;gap:10px;padding:6px 8px;border-radius:8px}
+.ch-msg:hover{background:#F7F9F7}
+.ch-msg.mine-mention{background:#FFF8E6;box-shadow:inset 3px 0 0 #D9A441}
+.ch-av{width:32px;height:32px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;color:#fff;font-size:11px;font-weight:700}
+.ch-b{min-width:0;flex:1}
+.ch-h{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+.ch-who{font-weight:700;font-size:13px;color:#0D1B12}
+.ch-role{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  padding:1px 6px;border-radius:20px;background:#F1F4F1;color:#5A6B60}
+.ch-when{font-size:10.5px;color:#9BADA2}
+.ch-txt{font-size:13.5px;color:#1A2620;margin-top:1px;white-space:pre-wrap;word-break:break-word}
+.ch-txt .men{background:#005A9C;color:#fff;border-radius:4px;padding:0 4px;font-weight:600;font-size:12.5px}
+.ch-rec{margin-top:8px;border:1px solid #D6DED8;border-left:3px solid #C93D00;border-radius:8px;
+  padding:9px 11px;background:#fff;max-width:440px;cursor:pointer}
+.ch-rec:hover{border-color:#C93D00}
+.ch-rec-k{font-size:9.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#C93D00}
+.ch-rec-t{font-size:13px;font-weight:700;margin-top:2px;color:#0D1B12}
+.ch-rec-m{font-size:11.5px;color:#5A6B60;margin-top:3px;display:flex;gap:10px;flex-wrap:wrap}
+.ch-comp{margin:0 18px 16px;border:1px solid #D6DED8;border-radius:10px;background:#fff;flex-shrink:0}
+.ch-comp textarea{width:100%;border:none;background:none;resize:none;padding:10px 12px;
+  font-family:inherit;font-size:13.5px;color:#1A2620;outline:none;max-height:160px}
+.ch-comp-bar{display:flex;gap:7px;align-items:center;padding:6px 10px;border-top:1px solid #EDF1EE}
+.ch-comp-hint{font-size:10.5px;color:#9BADA2;flex:1}
+.ch-send{background:#0E4C2D;color:#fff;border:none;border-radius:7px;padding:6px 15px;
+  font-size:12px;font-weight:700;cursor:pointer}
+.ch-send:disabled{opacity:.45;cursor:default}
+.ch-empty{text-align:center;color:#9BADA2;font-size:12.5px;padding:40px 20px}
+.ws-nav-badge{margin-left:auto;background:#C93D00;color:#fff;font-size:9px;font-weight:700;
+  border-radius:9px;padding:1px 6px;flex-shrink:0}
+.ws-nav-dot{margin-left:auto;width:7px;height:7px;border-radius:50%;flex-shrink:0}
+
+.content-area:not(.theme-white) .ch-wrap{background:#1E1E1E}
+.content-area:not(.theme-white) .ch-hd{border-bottom-color:#2E2E2E}
+.content-area:not(.theme-white) .ch-hd-ttl{color:#F0F0F0}
+.content-area:not(.theme-white) .ch-msg:hover{background:#252525}
+.content-area:not(.theme-white) .ch-msg.mine-mention{background:#2A2113}
+.content-area:not(.theme-white) .ch-who{color:#E8E8E8}
+.content-area:not(.theme-white) .ch-txt{color:#D8DDD9}
+.content-area:not(.theme-white) .ch-role{background:#2A2A2A;color:#AAB4AD}
+.content-area:not(.theme-white) .ch-day:before,
+.content-area:not(.theme-white) .ch-day:after{background:#2E2E2E}
+.content-area:not(.theme-white) .ch-rec{background:#242424;border-color:#383838}
+.content-area:not(.theme-white) .ch-rec-t{color:#E8E8E8}
+.content-area:not(.theme-white) .ch-comp{background:#242424;border-color:#383838}
+.content-area:not(.theme-white) .ch-comp textarea{color:#E0E0E0}
+.content-area:not(.theme-white) .ch-comp-bar{border-top-color:#2E2E2E}
+
 @media (max-width:860px){
+  .ch-wrap{margin:-12px;height:calc(100% + 24px)}
   .ws-side{position:fixed;left:58px;top:0;bottom:0;z-index:60;transform:translateX(-110%);
     transition:transform .2s ease;box-shadow:6px 0 24px rgba(0,0,0,.18)}
   .ws-side.open{transform:translateX(0)}
@@ -1306,6 +1372,9 @@ function wsAreas() {
   areas.push({ id:'home', icon:'🏠', label:T('Home','Inicio'), screens:[
     { id:'dashboard', icon:'🏠', label:T('Dashboard','Panel') }
   ]});
+  areas.push({ id:'chat', icon:'💬', label:T('Chat','Chat'), custom:'chat', screens:[
+    { id:'chat', icon:'💬', label:T('Chat','Chat') }
+  ]});
   areas.push({ id:'inbox', icon:'📥', label:T('Inbox','Bandeja'), badge:true, screens:[
     { id:'inbox', icon:'📥', label:T('Inbox','Bandeja') }
   ]});
@@ -1373,6 +1442,10 @@ function buildWorkspaceNav() {
   const ttl = document.getElementById('ws-area-title');
   if (ttl) ttl.textContent = active.label;
 
+  // Chat replaces the flat screen list with its channel + DM list, since
+  // "which channel" is the real navigation inside that area.
+  if (active.custom === 'chat') { nav.innerHTML = chSidebarHtml(); return; }
+
   nav.innerHTML = '<div class="ws-grp">' + esc(active.label) + '</div>'
     + active.screens.map(s =>
         '<button class="ws-nav' + (s.id === activeScreen ? ' active' : '') + '"'
@@ -1380,6 +1453,57 @@ function buildWorkspaceNav() {
         + '<span class="ws-nav-ic">' + s.icon + '</span>' + esc(s.label)
         + '</button>'
       ).join('');
+}
+
+function chSidebarHtml() {
+  const visible = chVisibleChannels();
+  const chans = visible.filter(c => c.kind !== 'dm')
+    .sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  const dms = visible.filter(c => c.kind === 'dm');
+  const row = (c) => {
+    const unread = false; // read receipts land in the next pass
+    return '<button class="ws-nav' + (c.id === window._chActive ? ' active' : '')
+      + '" onclick="chSelect(\'' + c.id + '\')">'
+      + '<span class="ws-nav-ic">' + (c.kind === 'dm' ? '👤' : '#') + '</span>'
+      + esc(c.kind === 'dm' ? chLabel(c) : c.name)
+      + (c.branch && c.branch !== 'ALL'
+          ? '<span class="ws-nav-dot" style="background:' + (c.branch === 'OC' ? '#C93D00' : '#005A9C') + '"></span>' : '')
+      + '</button>';
+  };
+  return '<div class="ws-grp">' + T('Channels','Canales') + '</div>'
+    + chans.map(row).join('')
+    + '<div class="ws-grp">' + T('Direct messages','Mensajes directos') + '</div>'
+    + dms.map(row).join('')
+    + '<button class="ws-nav" onclick="chPickDm()"><span class="ws-nav-ic">＋</span>'
+    + T('New message','Nuevo mensaje') + '</button>';
+}
+
+// Anyone can start a DM with anyone — this is how the team reaches the
+// executive directly, and how the executive reaches any branch.
+async function chPickDm() {
+  const ex = document.getElementById('ch-dm-modal'); if (ex) ex.remove();
+  let users = [];
+  try {
+    const snap = await db.collection('users').where('active','==',true).get();
+    users = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+      .filter(u => u.id !== CU.uid)
+      .sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  } catch (e) { toast('Could not load people — ' + e.message, 'err'); return; }
+  const m = document.createElement('div');
+  m.id = 'ch-dm-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:22px;width:380px;max-width:100%;max-height:70vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+    + '<div style="font-size:14px;font-weight:700">' + T('New message','Nuevo mensaje') + '</div>'
+    + '<button onclick="document.getElementById(\'ch-dm-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + users.map(u => '<button class="ws-nav" style="width:100%" onclick="document.getElementById(\'ch-dm-modal\').remove();chOpenDm(\''
+        + u.id + '\',\'' + esc(u.name).replace(/'/g,"\\'") + '\')">'
+        + '<span class="ch-av" style="width:24px;height:24px;font-size:9px;background:' + chColor(u.id) + '">'
+        + satInitials(u.name) + '</span>' + esc(u.name)
+        + '<span style="margin-left:auto;font-size:10px;color:var(--text3)">' + esc(u.branch || '') + '</span>'
+        + '</button>').join('')
+    + '</div>';
+  document.body.appendChild(m);
 }
 
 function wsGoArea(areaId) {
@@ -1505,6 +1629,7 @@ function renderScreen(screen) {
     'exec-dashboard': { title:'Executive Dashboard',  fn: renderExecDashboard },
     'reports':      { title:'Reports',             fn: renderReports },
     'saturday-schedule': { title: T('Saturday Schedule', 'Horario del Sábado'), fn: renderSaturdaySchedule },
+    'chat':           { title: T('Chat','Chat'),           fn: renderChat },
   };
   const s = screens[screen];
   if (!s) return;
@@ -8031,6 +8156,342 @@ async function satOverrideSlot(dateStr, slotIndex, name) {
     toast('✓ Saved');
     renderSaturdayBoard();
   } catch (e) { toast('Could not save — ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════════════
+// CHAT  (Phase 2 — preview only)
+// ══════════════════════════════════════════════════
+// Everything here is ADDITIVE: new collections only. No existing
+// collection (users, weekly_items, weekly_submissions, saturday_*) is
+// read destructively or written to by this module, except the one
+// deliberate case of /task, which creates a weekly_item exactly the
+// way the Weekly Items screen already does.
+//
+// Messages live in a SUBCOLLECTION (channels/{id}/messages) rather than
+// one flat collection keyed by channelId. A flat collection would need
+// where('channelId','==',x).orderBy('createdAt') — a composite index,
+// which is a manual Firebase console step that fails silently in
+// production until someone remembers to do it. Ordering inside a
+// subcollection needs no index at all.
+
+// Branch-scoped by design: OC and LA get their own field, proposals and
+// budget channels. 'ALL' channels are company-wide. Admin and exec see
+// every channel regardless of branch — that's the executive overview.
+const CHAT_DEFAULT_CHANNELS = [
+  { key:'general',       name:'general',       branch:'ALL', desc:'Company-wide announcements' },
+  { key:'issues',        name:'issues',        branch:'ALL', desc:'Report something broken or needed' },
+  { key:'oc-field',      name:'oc-field',      branch:'OC',  desc:'Orange County field operations' },
+  { key:'la-field',      name:'la-field',      branch:'LA',  desc:'Los Angeles field operations' },
+  { key:'proposals-oc',  name:'proposals-oc',  branch:'OC',  desc:'OC proposals and pending work' },
+  { key:'proposals-la',  name:'proposals-la',  branch:'LA',  desc:'LA proposals and pending work' },
+  { key:'budgets-oc',    name:'budgets-oc',    branch:'OC',  desc:'OC budgets' },
+  { key:'budgets-la',    name:'budgets-la',    branch:'LA',  desc:'LA budgets' },
+  { key:'saturday-crew', name:'saturday-crew', branch:'OC',  desc:'Saturday crew coordination' }
+];
+
+window._chChannels = [];
+window._chActive = null;
+window._chUnsub = null;
+window._chMsgs = [];
+window._chReads = {};
+
+function chCanSeeAll() { return CD.role === 'admin' || CD.role === 'exec_viewer'; }
+
+function chVisibleChannels() {
+  const branch = CD.branch;
+  return (window._chChannels || []).filter(c => {
+    if (c.kind === 'dm') return (c.members || []).includes(CU.uid);
+    if (c.branch === 'ALL') return true;
+    if (chCanSeeAll()) return true;      // executive / admin overview
+    return c.branch === branch;
+  });
+}
+
+async function chEnsureSeeded() {
+  const snap = await db.collection('channels').get();
+  const have = new Set(snap.docs.map(d => d.data().key).filter(Boolean));
+  const missing = CHAT_DEFAULT_CHANNELS.filter(c => !have.has(c.key));
+  if (!missing.length) return;
+  const batch = db.batch();
+  missing.forEach(c => {
+    batch.set(db.collection('channels').doc(), {
+      ...c, kind:'channel', createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  });
+  await batch.commit();
+}
+
+async function chLoadChannels() {
+  const snap = await db.collection('channels').get();
+  window._chChannels = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+  // Read receipts drive the unread dots. One doc per user+channel, keyed
+  // so it can be fetched and written without a query.
+  try {
+    const rs = await db.collection('channel_reads').where('uid','==',CU.uid).get();
+    window._chReads = {};
+    rs.docs.forEach(d => { const v = d.data(); window._chReads[v.channelId] = v.lastReadAt || 0; });
+  } catch(e) { window._chReads = {}; }
+}
+
+function chDmKey(a, b) { return [a, b].sort().join('__'); }
+
+async function chOpenDm(otherUid, otherName) {
+  const key = chDmKey(CU.uid, otherUid);
+  let ch = (window._chChannels || []).find(c => c.kind === 'dm' && c.dmKey === key);
+  if (!ch) {
+    const ref = await db.collection('channels').add({
+      kind:'dm', dmKey:key, branch:'ALL',
+      members:[CU.uid, otherUid],
+      memberNames:{ [CU.uid]: CD.name, [otherUid]: otherName },
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    ch = { id:ref.id, kind:'dm', dmKey:key, members:[CU.uid, otherUid],
+           memberNames:{ [CU.uid]: CD.name, [otherUid]: otherName } };
+    window._chChannels.push(ch);
+  }
+  chSelect(ch.id);
+}
+
+function chLabel(c) {
+  if (c.kind !== 'dm') return '# ' + c.name;
+  const other = (c.members || []).find(u => u !== CU.uid);
+  return (c.memberNames && c.memberNames[other]) || 'Direct message';
+}
+
+function chSelect(id) {
+  window._chActive = id;
+  if (window._chUnsub) { window._chUnsub(); window._chUnsub = null; }
+  renderChat();
+}
+
+async function renderChat() {
+  const ca = document.getElementById('content-area');
+  ca.innerHTML = '<div class="empty">' + T('Loading chat…','Cargando chat…') + '</div>';
+  try {
+    await chEnsureSeeded();
+    await chLoadChannels();
+    const visible = chVisibleChannels();
+    if (!window._chActive || !visible.some(c => c.id === window._chActive)) {
+      const first = visible.find(c => c.kind !== 'dm');
+      window._chActive = first ? first.id : (visible[0] && visible[0].id);
+    }
+    buildWorkspaceNav(); // channel list lives in the sidebar
+    const ch = visible.find(c => c.id === window._chActive);
+    if (!ch) {
+      ca.innerHTML = '<div class="empty">' + T('No channels available.','No hay canales disponibles.') + '</div>';
+      return;
+    }
+
+    ca.innerHTML = '<div class="ch-wrap">'
+      + '<div class="ch-hd"><div>'
+      + '<div class="ch-hd-ttl">' + esc(chLabel(ch)) + (ch.branch && ch.branch !== 'ALL'
+          ? ' <span class="badge ' + ch.branch.toLowerCase() + '">' + ch.branch + '</span>' : '') + '</div>'
+      + '<div class="ch-hd-sub">' + esc(ch.desc || (ch.kind === 'dm' ? T('Direct message','Mensaje directo') : '')) + '</div>'
+      + '</div>'
+      + (ch.name === 'issues'
+          ? '<button class="btn" onclick="chOpenIssue()">🛠 ' + T('Report an Issue','Reportar un Problema') + '</button>' : '')
+      + '</div>'
+      + '<div class="ch-feed" id="ch-feed"><div class="ch-empty">' + T('Loading…','Cargando…') + '</div></div>'
+      + '<div class="ch-comp">'
+      + '<textarea id="ch-input" rows="1" placeholder="' + T('Message','Mensaje') + ' ' + esc(chLabel(ch)) + '…" onkeydown="chKey(event)" oninput="chGrow(this)"></textarea>'
+      + '<div class="ch-comp-bar">'
+      + '<span class="ch-comp-hint">' + T('Enter to send · @name to mention · /task Title | 2026-08-15 | Owner','Enter para enviar · @nombre para mencionar · /task Título | 2026-08-15 | Responsable') + '</span>'
+      + '<button class="ch-send" onclick="chSend()">' + T('Send','Enviar') + '</button>'
+      + '</div></div>'
+      + '</div>';
+
+    // Live subscription — new messages appear without a refresh, which is
+    // the entire reason chat belongs on Firestore rather than polling.
+    window._chUnsub = db.collection('channels').doc(ch.id).collection('messages')
+      .orderBy('createdAt').limitToLast(200)
+      .onSnapshot(snap => {
+        window._chMsgs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+        chPaint();
+        chMarkRead(ch.id);
+      }, err => {
+        const f = document.getElementById('ch-feed');
+        if (f) f.innerHTML = '<div class="ch-empty">' + esc(err.message) + '</div>';
+      });
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load Chat</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderChat()">Retry</button></div>';
+  }
+}
+
+function chPaint() {
+  const f = document.getElementById('ch-feed');
+  if (!f) return;
+  const msgs = window._chMsgs || [];
+  if (!msgs.length) {
+    f.innerHTML = '<div class="ch-empty">' + T('No messages yet — say something.','Sin mensajes todavía — escribe algo.') + '</div>';
+    return;
+  }
+  let lastDay = '';
+  const meLower = (CD.name || '').toLowerCase();
+  f.innerHTML = msgs.map(m => {
+    const d = m.createdAt && m.createdAt.toDate ? m.createdAt.toDate() : new Date();
+    const day = d.toDateString();
+    let sep = '';
+    if (day !== lastDay) {
+      lastDay = day;
+      sep = '<div class="ch-day">' + fmtDate(d.toISOString().split('T')[0]) + '</div>';
+    }
+    const mentionsMe = (m.text || '').toLowerCase().includes('@' + meLower.split(' ')[0]);
+    const time = d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+    return sep + '<div class="ch-msg' + (mentionsMe ? ' mine-mention' : '') + '">'
+      + '<div class="ch-av" style="background:' + chColor(m.uid || m.name) + '">' + satInitials(m.name) + '</div>'
+      + '<div class="ch-b">'
+      + '<div class="ch-h"><span class="ch-who">' + esc(m.name || '—') + '</span>'
+      + (m.role ? '<span class="ch-role">' + esc(ROLES[m.role]?.label || m.role) + '</span>' : '')
+      + '<span class="ch-when">' + time + '</span></div>'
+      + '<div class="ch-txt">' + chFormat(m.text || '') + '</div>'
+      + (m.itemId ? '<div class="ch-rec" onclick="swlGoToScoredItem(\'' + m.itemId + '\',\'all\')">'
+          + '<div class="ch-rec-k">' + T('Weekly item','Tarea semanal') + '</div>'
+          + '<div class="ch-rec-t">' + esc(m.itemTitle || '') + '</div>'
+          + '<div class="ch-rec-m"><span>' + esc(m.itemOwner || '') + '</span><span>'
+          + T('Due','Vence') + ' ' + fmtDate(m.itemDeadline) + '</span></div></div>' : '')
+      + '</div></div>';
+  }).join('');
+  f.scrollTop = f.scrollHeight;
+}
+
+// Escape first, then re-introduce only the @mention markup — never
+// inject raw message text into innerHTML.
+function chFormat(t) {
+  return esc(t).replace(/@([A-Za-zÁÉÍÓÚÑáéíóúñ]+)/g, '<span class="men">@$1</span>');
+}
+function chColor(seed) {
+  const palette = ['#0E4C2D','#7A1C2E','#005A9C','#C93D00','#5E1522','#1B4332','#2F5F8A'];
+  let h = 0; const s = String(seed || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+function chGrow(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; }
+function chKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chSend(); }
+}
+
+async function chSend() {
+  const el = document.getElementById('ch-input');
+  if (!el) return;
+  const text = el.value.trim();
+  if (!text || !window._chActive) return;
+  el.value = ''; chGrow(el);
+
+  // /task Title | YYYY-MM-DD | Owner  — creates a real weekly item and
+  // posts it back into the channel as a card, so a deadline agreed in
+  // conversation becomes a tracked record without leaving chat.
+  if (text.toLowerCase().startsWith('/task ')) {
+    await chCreateTask(text.slice(6));
+    return;
+  }
+  try {
+    await db.collection('channels').doc(window._chActive).collection('messages').add({
+      text, uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } catch (e) { toast('Could not send — ' + e.message, 'err'); el.value = text; }
+}
+
+async function chCreateTask(rest) {
+  const parts = rest.split('|').map(s => s.trim());
+  const title = parts[0];
+  const deadline = parts[1];
+  const ownerName = parts[2] || CD.name;
+  if (!title || !/^\d{4}-\d{2}-\d{2}$/.test(deadline || '')) {
+    toast('Format: /task Title | YYYY-MM-DD | Owner', 'err');
+    return;
+  }
+  try {
+    const users = await db.collection('users').where('active','==',true).get();
+    const match = users.docs.find(d =>
+      (d.data().name || '').trim().toLowerCase() === ownerName.trim().toLowerCase());
+    const ref = await db.collection('weekly_items').add({
+      branch: getUserBranch() || CD.branch,
+      weekStart: weekKey(CW), title,
+      description: 'Created from chat',
+      deadline,
+      priority: 'medium',
+      owner: match ? match.id : CU.uid,
+      ownerName: match ? match.data().name : CD.name,
+      status: 'pending', carriedOver: false,
+      deadlineEditableByManager: true,
+      assignedBy: CU.uid, assignedByName: CD.name,
+      seen: !match || match.id === CU.uid,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('channels').doc(window._chActive).collection('messages').add({
+      text: 'Created a task with a ' + deadline + ' deadline.',
+      uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
+      itemId: ref.id, itemTitle: title,
+      itemOwner: match ? match.data().name : CD.name, itemDeadline: deadline,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    toast('✓ Task created and posted');
+  } catch (e) { toast('Could not create task — ' + e.message, 'err'); }
+}
+
+async function chMarkRead(channelId) {
+  const now = Date.now();
+  window._chReads[channelId] = now;
+  try {
+    await db.collection('channel_reads').doc(CU.uid + '_' + channelId)
+      .set({ uid: CU.uid, channelId, lastReadAt: now }, { merge: true });
+  } catch (e) { /* unread state is cosmetic — never block on it */ }
+}
+
+// ══ Issue reporting ══
+// Employees flag something that needs fixing. Writes an issues record
+// AND posts into #issues so it's visible in conversation, not just
+// sitting in a table nobody opens.
+function chOpenIssue() {
+  const ex = document.getElementById('ch-issue-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'ch-issue-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:440px;max-width:100%;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">🛠 ' + T('Report an Issue','Reportar un Problema') + '</div>'
+    + '<button onclick="document.getElementById(\'ch-issue-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div class="fg"><label>' + T('What needs fixing?','¿Qué necesita arreglarse?') + '</label>'
+    + '<input type="text" id="ci-title" placeholder="' + T('Short summary','Resumen corto') + '"></div>'
+    + '<div class="fg"><label>' + T('Details','Detalles') + '</label>'
+    + '<textarea id="ci-desc" rows="3" placeholder="' + T('Where is it, what is happening?','¿Dónde está, qué está pasando?') + '"></textarea></div>'
+    + '<div class="fg"><label>' + T('Urgency','Urgencia') + '</label><select id="ci-pri">'
+    + '<option value="low">' + T('Low','Baja') + '</option>'
+    + '<option value="medium" selected>' + T('Medium','Media') + '</option>'
+    + '<option value="high">' + T('High','Alta') + '</option></select></div>'
+    + '<div style="display:flex;gap:8px;margin-top:6px">'
+    + '<button class="btn primary" onclick="chSaveIssue()">' + T('Submit','Enviar') + '</button>'
+    + '<button class="btn" onclick="document.getElementById(\'ch-issue-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+async function chSaveIssue() {
+  const title = document.getElementById('ci-title').value.trim();
+  const desc  = document.getElementById('ci-desc').value.trim();
+  const pri   = document.getElementById('ci-pri').value;
+  if (!title) { toast(T('Please add a short summary','Agrega un resumen corto'), 'err'); return; }
+  try {
+    await db.collection('issues').add({
+      title, description: desc, priority: pri, status: 'open',
+      reportedBy: CU.uid, reportedByName: CD.name, branch: CD.branch,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    const issues = (window._chChannels || []).find(c => c.name === 'issues');
+    if (issues) {
+      await db.collection('channels').doc(issues.id).collection('messages').add({
+        text: '🛠 ' + title + (desc ? '\n' + desc : '') + '\nUrgency: ' + pri,
+        uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    document.getElementById('ch-issue-modal').remove();
+    toast('✓ ' + T('Issue reported','Problema reportado'));
+  } catch (e) { toast('Could not submit — ' + e.message, 'err'); }
 }
 
 </script>
