@@ -739,6 +739,12 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .ch-rec-t{font-size:13px;font-weight:700;margin-top:2px;color:#0D1B12}
 .ch-rec-m{font-size:11.5px;color:#5A6B60;margin-top:3px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .ch-rec-acts{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+/* Kept out of the way until the message is hovered — a delete control
+   shouldn't sit visible on every line of the transcript. */
+.ch-x{opacity:0;background:none;border:none;color:#9BADA2;cursor:pointer;font-size:11px;
+  padding:0 4px;line-height:1;margin-left:2px;transition:opacity .12s}
+.ch-msg:hover .ch-x{opacity:1}
+.ch-x:hover{color:#B42318}
 .ch-act{border:1px solid #D6DED8;background:#fff;color:#42544A;border-radius:6px;padding:4px 10px;
   font-size:11px;font-weight:600;cursor:pointer;font-family:inherit}
 .ch-act:hover{border-color:#0E4C2D;color:#0E4C2D}
@@ -8368,7 +8374,11 @@ function chPaint() {
       + '<div class="ch-b">'
       + '<div class="ch-h"><span class="ch-who">' + esc(m.name || '—') + '</span>'
       + (m.role ? '<span class="ch-role">' + esc(ROLES[m.role]?.label || m.role) + '</span>' : '')
-      + '<span class="ch-when">' + time + '</span></div>'
+      + '<span class="ch-when">' + time + '</span>'
+      + (!m.itemId && chCanRemove(m)
+          ? '<button class="ch-x" title="' + T('Remove message','Quitar mensaje') + '"'
+            + ' onclick="chRemoveMsg(\'' + m.id + '\',false)">✕</button>' : '')
+      + '</div>'
       + '<div class="ch-txt">' + chFormat(m.text || '') + '</div>'
       + (m.itemId ? chItemCard(m) : '')
       + '</div></div>';
@@ -8405,7 +8415,78 @@ function chItemCard(m) {
       + '<button class="ch-act" onclick="chExtend(\'' + m.itemId + '\',\'' + safe(title) + '\')">📅 ' + T('Change date','Cambiar fecha') + '</button>'
       + '<button class="ch-act done" onclick="chMarkDone(\'' + m.itemId + '\',\'' + safe(title) + '\')">✓ ' + T('Mark done','Marcar hecho') + '</button>')
     + '<button class="ch-act" onclick="swlGoToScoredItem(\'' + m.itemId + '\',\'all\')">' + T('Open','Abrir') + '</button>'
+    + (chCanRemove(m)
+        ? '<button class="ch-act" onclick="chMoveMsg(\'' + m.id + '\')">↗ ' + T('Move','Mover') + '</button>'
+        + '<button class="ch-act" onclick="chRemoveMsg(\'' + m.id + '\',true)">✕ ' + T('Remove','Quitar') + '</button>'
+        : '')
     + '</div></div>';
+}
+
+// Authors can clean up their own posts; managers and admin can clean up
+// anything, since a card posted to the wrong channel is a shared problem.
+function chCanRemove(m) {
+  if (!m || !m.id) return false;
+  return m.uid === CU.uid || CD.role === 'admin' || ROLES[CD.role]?.isManager;
+}
+
+// Removes the MESSAGE only. The weekly_item it points at is never
+// touched — that's the whole point: a card in the wrong channel should
+// be retractable without destroying the work it refers to.
+async function chRemoveMsg(msgId, hasItem) {
+  const warn = hasItem
+    ? T('Remove this card from the channel?\n\nThe weekly item itself is NOT deleted — it stays in Weekly Items with its owner, deadline and history intact. Only this chat post goes away.',
+        '¿Quitar esta tarjeta del canal?\n\nLa tarea NO se elimina — sigue en Tareas Semanales con su responsable, fecha e historial. Solo se quita esta publicación del chat.')
+    : T('Remove this message?','¿Quitar este mensaje?');
+  if (!confirm(warn)) return;
+  try {
+    await db.collection('channels').doc(window._chActive)
+      .collection('messages').doc(msgId).delete();
+    toast('✓ ' + T('Removed from chat','Quitado del chat'));
+  } catch (e) { toast('Could not remove — ' + e.message, 'err'); }
+}
+
+// Wrong channel is the common case, so offer a real move rather than
+// making someone delete here and re-post there by hand.
+async function chMoveMsg(msgId) {
+  const msg = (window._chMsgs || []).find(x => x.id === msgId);
+  if (!msg) return;
+  const targets = chVisibleChannels().filter(c => c.id !== window._chActive);
+  const ex = document.getElementById('ch-move-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'ch-move-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:22px;width:380px;max-width:100%;max-height:70vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+    + '<div style="font-size:14px;font-weight:700">↗ ' + T('Move to channel','Mover a canal') + '</div>'
+    + '<button onclick="document.getElementById(\'ch-move-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:12px">'
+    + T('Reposts it there and removes it from here. The weekly item is untouched.',
+        'Lo publica allá y lo quita de aquí. La tarea no se modifica.') + '</div>'
+    + targets.map(c => '<button class="ws-nav" style="width:100%" onclick="chDoMove(\'' + msgId + '\',\'' + c.id + '\')">'
+        + '<span class="ws-nav-ic">' + (c.kind === 'dm' ? '👤' : '#') + '</span>'
+        + esc(c.kind === 'dm' ? chLabel(c) : c.name)
+        + (c.branch && c.branch !== 'ALL' ? '<span style="margin-left:auto;font-size:10px;color:var(--text3)">' + c.branch + '</span>' : '')
+        + '</button>').join('')
+    + '</div>';
+  document.body.appendChild(m);
+}
+
+async function chDoMove(msgId, targetChannelId) {
+  const msg = (window._chMsgs || []).find(x => x.id === msgId);
+  if (!msg) return;
+  const modal = document.getElementById('ch-move-modal'); if (modal) modal.remove();
+  try {
+    const copy = { ...msg };
+    delete copy.id;
+    // Re-stamp the time so it lands at the end of the target channel
+    // instead of buried wherever its original timestamp would place it.
+    copy.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+    copy.movedFrom = window._chActive;
+    await db.collection('channels').doc(targetChannelId).collection('messages').add(copy);
+    await db.collection('channels').doc(window._chActive)
+      .collection('messages').doc(msgId).delete();
+    toast('✓ ' + T('Moved','Movido'));
+  } catch (e) { toast('Could not move — ' + e.message, 'err'); }
 }
 
 // Loads the live weekly_items referenced by the messages on screen, so
