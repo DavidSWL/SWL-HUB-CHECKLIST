@@ -726,6 +726,14 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .ch-hd-ttl{font-family:var(--disp,'Trebuchet MS');font-size:15px;font-weight:700;color:#0D1B12;
   display:flex;align-items:center;gap:7px}
 .ch-hd-sub{font-size:11.5px;color:#7A9088;margin-top:1px}
+.ch-rename{background:none;border:none;color:#9BADA2;cursor:pointer;font-size:12px;margin-left:6px;
+  padding:2px 4px;border-radius:5px;vertical-align:middle}
+.ch-rename:hover{color:#0E4C2D;background:#EDF1EE}
+.ch-search-hit{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer;text-align:left;
+  width:100%;background:none;border-left:none;border-right:none;border-top:none;font-family:inherit}
+.ch-search-hit:hover{background:var(--surface2)}
+.ch-search-hit-ch{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7A9088}
+.ch-search-mark{background:#FBF0DF;color:#8A5A12;border-radius:3px;padding:0 2px;font-weight:700}
 .ch-feed{flex:1;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:2px;min-height:0}
 .ch-day{display:flex;align-items:center;gap:10px;margin:12px 0 8px;color:#9BADA2;font-size:10.5px;font-weight:600}
 .ch-day:before,.ch-day:after{content:"";height:1px;background:#E2E8E4;flex:1}
@@ -770,6 +778,14 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   border-radius:10px;padding:6px;display:flex;gap:3px;box-shadow:0 8px 26px rgba(0,0,0,.18)}
 .ch-pick button{background:none;border:none;font-size:17px;cursor:pointer;padding:3px 5px;border-radius:6px;line-height:1}
 .ch-pick button:hover{background:#EDF1EE}
+.ch-mention-list{flex-direction:column;padding:4px;gap:1px;max-height:220px;overflow-y:auto}
+.ch-mention-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:6px 8px;
+  border-radius:7px;font-size:12.5px;font-weight:500;color:#1A2620;font-family:inherit}
+.ch-mention-row.sel,.ch-mention-row:hover{background:#EDF1EE}
+.ch-mention-branch{margin-left:auto;font-size:10px;color:#9BADA2;flex-shrink:0}
+.content-area:not(.theme-white) .ch-mention-row{color:#E0E0E0}
+.content-area:not(.theme-white) .ch-mention-row.sel,
+.content-area:not(.theme-white) .ch-mention-row:hover{background:#333}
 .content-area:not(.theme-white) .ch-rx-b{background:#2A2A2A;border-color:#3A3A3A;color:#C4CCC7}
 .content-area:not(.theme-white) .ch-rx-b.mine{background:rgba(95,168,220,.16);border-color:#5FA8DC;color:#8CC5EA}
 .content-area:not(.theme-white) .ch-rx-add{background:#2A2A2A;border-color:#3A3A3A}
@@ -1539,12 +1555,8 @@ function chSidebarHtml() {
 async function chPickDm() {
   const ex = document.getElementById('ch-dm-modal'); if (ex) ex.remove();
   let users = [];
-  try {
-    const snap = await db.collection('users').where('active','==',true).get();
-    users = snap.docs.map(d => ({ id:d.id, ...d.data() }))
-      .filter(u => u.id !== CU.uid)
-      .sort((a,b) => (a.name||'').localeCompare(b.name||''));
-  } catch (e) { toast('Could not load people — ' + e.message, 'err'); return; }
+  try { users = await chDmCandidates(); }
+  catch (e) { toast('Could not load people — ' + e.message, 'err'); return; }
   const m = document.createElement('div');
   m.id = 'ch-dm-modal';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -8262,6 +8274,20 @@ function chVisibleChannels() {
   });
 }
 
+// People this user is allowed to DM or @mention: their own branch, plus
+// admin/exec_viewer always (so anyone can reach the executive overview
+// and the executive can reach anyone). Admin/exec themselves see
+// everyone. Same rule chVisibleChannels already applies to channels —
+// this is the equivalent for 1:1 reach.
+async function chDmCandidates() {
+  const snap = await db.collection('users').where('active','==',true).get();
+  let users = snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(u => u.id !== CU.uid);
+  if (!chCanSeeAll()) {
+    users = users.filter(u => u.branch === CD.branch || u.role === 'admin' || u.role === 'exec_viewer');
+  }
+  return users.sort((a,b) => (a.name||'').localeCompare(b.name||''));
+}
+
 async function chEnsureSeeded() {
   const snap = await db.collection('channels').get();
   const have = new Set(snap.docs.map(d => d.data().key).filter(Boolean));
@@ -8344,10 +8370,14 @@ async function renderChat() {
     ca.innerHTML = '<div class="ch-wrap">'
       + '<div class="ch-hd"><div>'
       + '<div class="ch-hd-ttl">' + esc(chLabel(ch)) + (ch.branch && ch.branch !== 'ALL'
-          ? ' <span class="badge ' + ch.branch.toLowerCase() + '">' + ch.branch + '</span>' : '') + '</div>'
+          ? ' <span class="badge ' + ch.branch.toLowerCase() + '">' + ch.branch + '</span>' : '')
+      + (CD.role === 'admin' && ch.kind !== 'dm'
+          ? '<button class="ch-rename" onclick="chRenameChannel()" title="' + T('Rename channel','Renombrar canal') + '">✎</button>' : '')
+      + '</div>'
       + '<div class="ch-hd-sub">' + esc(ch.desc || (ch.kind === 'dm' ? T('Direct message','Mensaje directo') : '')) + '</div>'
       + '</div>'
       + '<div style="display:flex;gap:7px;flex-wrap:wrap">'
+      + '<button class="btn" onclick="chOpenSearch()">🔍 ' + T('Search','Buscar') + '</button>'
       + (ch.name === 'issues'
           ? '<button class="btn" onclick="chOpenIssue()">🛠 ' + T('Report an Issue','Reportar un Problema') + '</button>' : '')
       + (ch.kind !== 'dm'
@@ -8358,7 +8388,7 @@ async function renderChat() {
       + '</div>'
       + '<div class="ch-feed" id="ch-feed"><div class="ch-empty">' + T('Loading…','Cargando…') + '</div></div>'
       + '<div class="ch-comp">'
-      + '<textarea id="ch-input" rows="1" placeholder="' + T('Message','Mensaje') + ' ' + esc(chLabel(ch)) + '…" onkeydown="chKey(event)" oninput="chGrow(this)"></textarea>'
+      + '<textarea id="ch-input" rows="1" placeholder="' + T('Message','Mensaje') + ' ' + esc(chLabel(ch)) + '…" onkeydown="chKey(event)" oninput="chGrow(this)" onblur="setTimeout(chMentionClose,150)"></textarea>'
       + '<div class="ch-comp-bar">'
       + '<button class="ch-act" onclick="chOpenTaskForm()">📅 ' + T('Add deadline','Agregar fecha') + '</button>'
       + '<span class="ch-comp-hint">' + T('Enter to send · @name to mention','Enter para enviar · @nombre para mencionar') + '</span>'
@@ -8482,7 +8512,7 @@ async function loadUserDirectory() {
     const dir = {};
     snap.docs.forEach(d => {
       const u = d.data();
-      dir[d.id] = { name: u.name || '', photoURL: u.photoURL || '', branch: u.branch || '', role: u.role || '' };
+      dir[d.id] = { uid: d.id, name: u.name || '', photoURL: u.photoURL || '', branch: u.branch || '', role: u.role || '', email: u.email || '' };
       // Also key by lowercased name so render paths that only have a
       // display name (older messages, legacy item rows) still resolve.
       if (u.name) dir['name:' + u.name.trim().toLowerCase()] = dir[d.id];
@@ -8648,6 +8678,67 @@ async function chHydrateItems() {
   chPaint();
 }
 
+// ══ Email notifications ══
+// A static page has no server, so it cannot send real email on its own —
+// this writes to a 'mail' collection in the exact shape Firebase's own
+// "Trigger Email" extension expects (Extensions → Trigger Email from
+// Firestore, in the Firebase Console). Until that extension is installed
+// and pointed at the 'mail' collection, these documents just sit in
+// Firestore harmlessly; nothing here can silently fail loud or leak
+// credentials, because there are no credentials on this side at all. The
+// moment the extension is installed, everything below starts delivering
+// with no further code changes.
+async function chQueueEmail(toUid, subject, bodyText) {
+  if (!toUid || toUid === CU.uid) return; // never email yourself
+  try {
+    let email = (window._userDir || {})[toUid]?.email;
+    if (!email) {
+      const d = await db.collection('users').doc(toUid).get();
+      email = d.exists ? d.data().email : null;
+    }
+    if (!email) return;
+    await db.collection('mail').add({
+      to: [email],
+      message: {
+        subject,
+        html: '<p>' + esc(bodyText).replace(/\n/g, '<br>') + '</p>'
+              + '<p style="color:#888;font-size:12px;margin-top:16px">SWL Operations Hub</p>'
+      },
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } catch (e) { /* never let a notification failure block the real action */ }
+}
+
+// Emails anyone @mentioned in a message, and — for a direct message — the
+// other person in the conversation, since being messaged 1:1 is itself
+// "being reached out to" even with no @name attached.
+async function chEmailForMessage(text) {
+  const ch = (window._chChannels || []).find(c => c.id === window._chActive);
+  if (!ch) return;
+  const mentioned = new Set();
+  const re = /@([A-Za-zÁÉÍÓÚÑáéíóúñ]+)/g;
+  let m;
+  if (re.test(text)) {
+    const cands = await chMentionCandidates();
+    re.lastIndex = 0;
+    while ((m = re.exec(text))) {
+      const frag = m[1].toLowerCase();
+      const hit = cands.find(u => (u.name || '').toLowerCase().split(' ')[0] === frag);
+      if (hit) mentioned.add(hit.id);
+    }
+  }
+  const subject = T('You were mentioned in','Te mencionaron en') + ' #' + chLabel(ch);
+  for (const uid of mentioned) {
+    await chQueueEmail(uid, subject, CD.name + ': ' + text);
+  }
+  if (ch.kind === 'dm') {
+    const other = (ch.members || []).find(u => u !== CU.uid);
+    if (other && !mentioned.has(other)) {
+      await chQueueEmail(other, T('New message from','Nuevo mensaje de') + ' ' + CD.name, text);
+    }
+  }
+}
+
 // ══ Nudge / follow-up ══
 // Writes to the item's existing followUp field — the same one the Inbox
 // already watches for unseen follow-ups — so a nudge sent from chat also
@@ -8669,6 +8760,13 @@ async function chNudge(itemId, title, ownerName) {
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     delete (window._chItemCache || {})[itemId];
+    // Nudge is a direct "you're being followed up on," so it emails the
+    // owner regardless of whether their name matched an @mention.
+    const cands = await chMentionCandidates();
+    const owner = cands.find(u => u.name === ownerName);
+    if (owner) chQueueEmail(owner.id, T('Follow-up on','Seguimiento de') + ' "' + title + '"',
+      CD.name + ' ' + T('is following up on','está dando seguimiento a') + ' "' + title + '"'
+      + (note ? ': ' + note : '')).catch(() => {});
     toast('✓ ' + T('Nudge sent','Recordatorio enviado'));
   } catch (e) { toast('Could not nudge — ' + e.message, 'err'); }
 }
@@ -8851,6 +8949,114 @@ async function chImportWeeklyItems(dry) {
 // A chat log buries things as it scrolls. This is the standing list of
 // everything still open for this channel's branch, so "what's outstanding"
 // never depends on scrolling back far enough to find it.
+// ══ Rename channel (admin) ══
+async function chRenameChannel() {
+  if (CD.role !== 'admin') return;
+  const ch = (window._chChannels || []).find(c => c.id === window._chActive);
+  if (!ch || ch.kind === 'dm') return;
+  const raw = prompt(T('New channel name:','Nuevo nombre del canal:'), ch.name);
+  if (raw === null) return;
+  const clean = raw.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]+/g, '').replace(/^-+|-+$/g, '');
+  if (!clean) { toast(T('Invalid name','Nombre inválido'), 'err'); return; }
+  if ((window._chChannels || []).some(c => c.id !== ch.id && c.name === clean)) {
+    toast(T('That name is already taken','Ese nombre ya existe'), 'err'); return;
+  }
+  try {
+    await db.collection('channels').doc(ch.id).update({ name: clean });
+    toast('✓ #' + clean);
+    renderChat();
+  } catch (e) { toast('Could not rename — ' + e.message, 'err'); }
+}
+
+// ══ Search ══
+// Firestore has no full-text search, so this is a client-side scan: the
+// active channel's already-loaded messages are searched instantly, and an
+// opt-in "search all channels" fetches a bounded batch (mirrors the live
+// feed's own limitToLast(200)) from every channel this user can see. That
+// keeps the common case — finding something in the channel you're already
+// in — free of any extra reads.
+function chOpenSearch() {
+  const ex = document.getElementById('ch-search-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'ch-search-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:flex-start;justify-content:center;padding:60px 20px 20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:18px;width:480px;max-width:100%;max-height:75vh;display:flex;flex-direction:column;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+    + '<div style="font-size:14px;font-weight:700">🔍 ' + T('Search','Buscar') + '</div>'
+    + '<button onclick="document.getElementById(\'ch-search-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<input type="text" id="ch-search-in" placeholder="' + T('Search messages…','Buscar mensajes…') + '"'
+    + ' style="width:100%;padding:9px 12px;border-radius:var(--r);border:1px solid var(--border2);font-size:13px;background:var(--surface);color:var(--text);margin-bottom:8px"'
+    + ' oninput="chSearchDebounced()">'
+    + '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text3);margin-bottom:10px;cursor:pointer">'
+    + '<input type="checkbox" id="ch-search-all" onchange="chDoSearch()"> ' + T('Search all my channels','Buscar en todos mis canales') + '</label>'
+    + '<div id="ch-search-results" style="overflow-y:auto;flex:1"></div>'
+    + '</div>';
+  document.body.appendChild(m);
+  document.getElementById('ch-search-in').focus();
+}
+
+let _chSearchTimer = null;
+function chSearchDebounced() {
+  clearTimeout(_chSearchTimer);
+  _chSearchTimer = setTimeout(chDoSearch, 180);
+}
+
+function chSearchMark(text, q) {
+  if (!q) return esc(text);
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  if (i === -1) return esc(text);
+  return esc(text.slice(0, i)) + '<span class="ch-search-mark">' + esc(text.slice(i, i + q.length)) + '</span>' + esc(text.slice(i + q.length));
+}
+
+async function chDoSearch() {
+  const box = document.getElementById('ch-search-in');
+  const out = document.getElementById('ch-search-results');
+  const all = document.getElementById('ch-search-all');
+  if (!box || !out) return;
+  const q = box.value.trim();
+  if (!q) { out.innerHTML = ''; return; }
+  out.innerHTML = '<div class="empty" style="padding:16px 0">' + T('Searching…','Buscando…') + '</div>';
+
+  let pool = []; // [{msg, channel}]
+  if (all && all.checked) {
+    const chans = chVisibleChannels();
+    const perChannel = await Promise.all(chans.map(async c => {
+      try {
+        const snap = await db.collection('channels').doc(c.id).collection('messages')
+          .orderBy('createdAt').limitToLast(200).get();
+        return snap.docs.map(d => ({ msg: { id: d.id, ...d.data() }, channel: c }));
+      } catch (e) { return []; }
+    }));
+    pool = perChannel.flat();
+  } else {
+    const ch = (window._chChannels || []).find(c => c.id === window._chActive);
+    pool = (window._chMsgs || []).map(msg => ({ msg, channel: ch }));
+  }
+
+  const qLower = q.toLowerCase();
+  const hits = pool.filter(({ msg }) =>
+    (msg.text || '').toLowerCase().includes(qLower)
+    || (msg.itemTitle || '').toLowerCase().includes(qLower)
+    || (msg.name || '').toLowerCase().includes(qLower)
+  ).slice(0, 40);
+
+  if (!hits.length) { out.innerHTML = '<div class="empty" style="padding:16px 0">' + T('No matches.','Sin resultados.') + '</div>'; return; }
+  out.innerHTML = hits.map(({ msg, channel }) => {
+    const d = msg.createdAt && msg.createdAt.toDate ? msg.createdAt.toDate() : new Date();
+    return '<button class="ch-search-hit" onclick="chJumpToSearchResult(\'' + (channel ? channel.id : '') + '\')">'
+      + avatarHtml(msg.uid, msg.name, 26, 'ch-av')
+      + '<div style="min-width:0;flex:1">'
+      + '<div class="ch-search-hit-ch">' + (channel ? esc(channel.kind === 'dm' ? chLabel(channel) : '#' + channel.name) : '') + ' · ' + esc(msg.name || '') + '</div>'
+      + '<div style="font-size:12.5px;color:var(--text2)">' + chSearchMark(msg.text || msg.itemTitle || '', q) + '</div>'
+      + '</div></button>';
+  }).join('');
+}
+
+function chJumpToSearchResult(channelId) {
+  const modal = document.getElementById('ch-search-modal'); if (modal) modal.remove();
+  if (channelId) chSelect(channelId);
+}
+
 async function chShowOpenWork() {
   const ch = (window._chChannels || []).find(c => c.id === window._chActive);
   if (!ch) return;
@@ -8962,8 +9168,95 @@ function chColor(seed) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 }
-function chGrow(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; }
+function chGrow(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; chMentionCheck(el); }
+
+// ══ @mention autocomplete ══
+// Candidates are cached per chat session and scoped by chDmCandidates —
+// the same branch rule as DMs, so you can't autocomplete someone you
+// wouldn't otherwise be able to reach.
+window._chMentionCands = null;
+window._chMentionSel = -1;
+
+async function chMentionCandidates() {
+  if (window._chMentionCands) return window._chMentionCands;
+  try { window._chMentionCands = await chDmCandidates(); }
+  catch (e) { window._chMentionCands = []; }
+  return window._chMentionCands;
+}
+
+function chMentionToken(el) {
+  const pos = el.selectionStart;
+  const head = el.value.slice(0, pos);
+  const m = head.match(/(?:^|\s)@([A-Za-zÁÉÍÓÚÑáéíóúñ]*)$/);
+  return m ? { frag: m[1], start: pos - m[1].length - 1 } : null;
+}
+
+async function chMentionCheck(el) {
+  const tok = chMentionToken(el);
+  if (!tok) { chMentionClose(); return; }
+  const all = await chMentionCandidates();
+  const fragLower = tok.frag.toLowerCase();
+  const matches = all.filter(u => (u.name || '').toLowerCase().split(' ')[0].startsWith(fragLower)
+    || (u.name || '').toLowerCase().includes(fragLower)).slice(0, 6);
+  if (!matches.length) { chMentionClose(); return; }
+  window._chMentionSel = 0;
+  chMentionRender(el, matches, tok);
+}
+
+function chMentionRender(el, matches, tok) {
+  const ex = document.getElementById('ch-mention'); if (ex) ex.remove();
+  const p = document.createElement('div');
+  p.id = 'ch-mention';
+  p.className = 'ch-pick ch-mention-list';
+  p.innerHTML = matches.map((u, i) =>
+    '<button data-i="' + i + '" class="ch-mention-row' + (i === 0 ? ' sel' : '') + '"'
+    + ' onmousedown="event.preventDefault();chMentionAccept(' + i + ')">'
+    + avatarHtml(u.id, u.name, 20, 'ch-av') + '<span>' + esc(u.name) + '</span>'
+    + '<span class="ch-mention-branch">' + esc(u.branch || '') + '</span></button>'
+  ).join('');
+  document.body.appendChild(p);
+  const r = el.getBoundingClientRect();
+  p.style.left = r.left + 'px';
+  p.style.top = 'auto';
+  p.style.bottom = (window.innerHeight - r.top + 6) + 'px';
+  p.style.width = Math.min(260, r.width) + 'px';
+  window._chMentionData = { matches, tok, el };
+}
+
+function chMentionMove(delta) {
+  const d = window._chMentionData; if (!d) return;
+  const n = d.matches.length;
+  window._chMentionSel = (window._chMentionSel + delta + n) % n;
+  document.querySelectorAll('#ch-mention .ch-mention-row').forEach((b, i) =>
+    b.classList.toggle('sel', i === window._chMentionSel));
+}
+
+function chMentionAccept(i) {
+  const d = window._chMentionData; if (!d) return;
+  const u = d.matches[i !== undefined ? i : window._chMentionSel];
+  if (!u) return;
+  const el = d.el;
+  const first = (u.name || '').split(' ')[0];
+  const before = el.value.slice(0, d.tok.start);
+  const after = el.value.slice(el.selectionStart);
+  el.value = before + '@' + first + ' ' + after;
+  const caret = (before + '@' + first + ' ').length;
+  el.focus(); el.setSelectionRange(caret, caret);
+  chMentionClose();
+}
+
+function chMentionClose() {
+  window._chMentionData = null;
+  const p = document.getElementById('ch-mention'); if (p) p.remove();
+}
+
 function chKey(e) {
+  if (window._chMentionData) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); chMentionMove(1); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); chMentionMove(-1); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); chMentionAccept(); return; }
+    if (e.key === 'Escape') { chMentionClose(); return; }
+  }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chSend(); }
 }
 
@@ -8972,6 +9265,7 @@ async function chSend() {
   if (!el) return;
   const text = el.value.trim();
   if (!text || !window._chActive) return;
+  chMentionClose();
   el.value = ''; chGrow(el);
 
   // /task Title | YYYY-MM-DD | Owner  — creates a real weekly item and
@@ -8981,6 +9275,7 @@ async function chSend() {
     await chCreateTask(text.slice(6));
     return;
   }
+  chEmailForMessage(text).catch(() => {}); // best-effort, never blocks sending
   try {
     await db.collection('channels').doc(window._chActive).collection('messages').add({
       text, uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
