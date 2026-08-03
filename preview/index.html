@@ -674,6 +674,16 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .ws-nav.active{background:#0E4C2D;color:#fff;font-weight:600}
 .ws-nav-ic{font-size:14px;flex-shrink:0;width:18px;text-align:center}
 .ws-side-ft{padding:9px 12px;border-top:1px solid #E2E8E4;flex-shrink:0}
+/* The Grey/White switcher was styled white-on-transparent for the old
+   dark top bar. On the light sidebar that rendered as invisible text,
+   so it looked like the theme control had been removed. Restyled for a
+   light ground here, and inverted again under the dark content theme. */
+.ws-side-ft .theme-sw{background:#E9EEEA;border:1px solid #D6DED8;width:100%;justify-content:center}
+.ws-side-ft .ts-opt{color:#5A6B60;flex:1}
+.ws-side-ft .ts-opt.on{background:#0E4C2D;color:#fff}
+.app.ws:has(.content-area:not(.theme-white)) .ws-side-ft .theme-sw{background:#2A2A2A;border-color:#3A3A3A}
+.app.ws:has(.content-area:not(.theme-white)) .ws-side-ft .ts-opt{color:#9BA8A0}
+.app.ws:has(.content-area:not(.theme-white)) .ws-side-ft .ts-opt.on{background:#4A7C5E;color:#fff}
 
 .ws-main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
 .ws-top{display:flex;align-items:center;justify-content:space-between;gap:14px;
@@ -1333,6 +1343,10 @@ function enterApp() {
     _sw.querySelectorAll(".ts-opt")[1].classList.toggle("on", !_wantsDark);
   }
   swlInstallSpanishObserver();
+  // Populates the photo directory in the background — avatars render as
+  // initials until it lands, then correctly on the next paint, so a slow
+  // load never blocks the app coming up.
+  loadUserDirectory();
   navigateTo(ROLES[CD.role]?.restrictedTo || 'dashboard');
 }
 
@@ -1416,9 +1430,10 @@ function wsAreas() {
   areas.push({ id:'chat', icon:'💬', label:T('Chat','Chat'), custom:'chat', screens:[
     { id:'chat', icon:'💬', label:T('Chat','Chat') }
   ]});
-  areas.push({ id:'inbox', icon:'📥', label:T('Inbox','Bandeja'), badge:true, screens:[
-    { id:'inbox', icon:'📥', label:T('Inbox','Bandeja') }
-  ]});
+  // Inbox is deliberately not an area any more — notifications, kudos,
+  // assignments and follow-ups all surface in chat now, and keeping a
+  // second place to check them just splits attention. renderInbox and its
+  // screens-map entry are left intact so existing deep links still work.
   if (!isExec) {
     const work = [{ id:'weekly-notes', icon:'📝', label:T('Weekly Notes','Notas Semanales') },
                   { id:'my-grading',   icon:'📊', label:T('My Grading','Mi Calificación') }];
@@ -1539,8 +1554,7 @@ async function chPickDm() {
     + '<button onclick="document.getElementById(\'ch-dm-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
     + users.map(u => '<button class="ws-nav" style="width:100%" onclick="document.getElementById(\'ch-dm-modal\').remove();chOpenDm(\''
         + u.id + '\',\'' + esc(u.name).replace(/'/g,"\\'") + '\')">'
-        + '<span class="ch-av" style="width:24px;height:24px;font-size:9px;background:' + chColor(u.id) + '">'
-        + satInitials(u.name) + '</span>' + esc(u.name)
+        + avatarHtml(u.id, u.name, 24, 'ch-av') + esc(u.name)
         + '<span style="margin-left:auto;font-size:10px;color:var(--text3)">' + esc(u.branch || '') + '</span>'
         + '</button>').join('')
     + '</div>';
@@ -4930,6 +4944,24 @@ async function renderItems() {
   const priorities = ['critical','high','medium','low'];
 
   ca.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><div class="card-title">+ Add New Item</div></div>
+      <div class="g3" style="margin-bottom:12px">
+        <div class="fg"><label>Title<span class="req">*</span></label><input type="text" id="ni-title" placeholder="What needs to get done?"></div>
+        <div class="fg"><label>Deadline<span class="req">*</span></label><input type="date" id="ni-deadline"></div>
+        <div class="fg"><label>Priority</label>
+          <select id="ni-priority">
+            <option value="low">Low</option><option value="medium" selected>Medium</option>
+            <option value="high">High</option><option value="critical">Critical</option>
+          </select>
+        </div>
+      </div>
+      <div class="g2" style="margin-bottom:12px">
+        <div class="fg"><label>Description</label><textarea id="ni-desc" rows="2" placeholder="Optional details…"></textarea></div>
+        <div class="fg"><label>Assigned to</label><select id="ni-owner-uid" style="width:100%"></select><input type="hidden" id="ni-owner"></div>
+      </div>
+      <button class="btn primary" onclick="addItem()">Add Item</button>
+    </div>
     <div class="cards-row" style="margin-bottom:16px">
       <div class="card full">
         <div class="card-header">
@@ -4953,24 +4985,6 @@ async function renderItems() {
           ${items.length ? items.sort((a,b)=>priorities.indexOf(a.priority)-priorities.indexOf(b.priority)).map(renderItemCard).join('') : '<div class="empty"><span class="empty-icon">📋</span>No items this week.</div>'}
         </div>
       </div>
-    </div>
-    <div class="card">
-      <div class="card-header"><div class="card-title">+ Add New Item</div></div>
-      <div class="g3" style="margin-bottom:12px">
-        <div class="fg"><label>Title<span class="req">*</span></label><input type="text" id="ni-title" placeholder="What needs to get done?"></div>
-        <div class="fg"><label>Deadline<span class="req">*</span></label><input type="date" id="ni-deadline"></div>
-        <div class="fg"><label>Priority</label>
-          <select id="ni-priority">
-            <option value="low">Low</option><option value="medium" selected>Medium</option>
-            <option value="high">High</option><option value="critical">Critical</option>
-          </select>
-        </div>
-      </div>
-      <div class="g2" style="margin-bottom:12px">
-        <div class="fg"><label>Description</label><textarea id="ni-desc" rows="2" placeholder="Optional details…"></textarea></div>
-        <div class="fg"><label>Assigned to</label><select id="ni-owner-uid" style="width:100%"></select><input type="hidden" id="ni-owner"></div>
-      </div>
-      <button class="btn primary" onclick="addItem()">Add Item</button>
     </div>`;
   populateOwnerDropdown();
   if (window._pendingItemsFilter) {
@@ -5208,7 +5222,7 @@ function buildTeamRosterHtml(items, isMgr) {
       const key = p.name.trim().toLowerCase();
       const branchBadge = isAdminOrExec ? '<span class="wi-roster-branch ' + p.branch.toLowerCase() + '">' + p.branch + '</span>' : '';
       return '<div class="wi-roster-chip" data-person="' + esc(key) + '" onclick="filterItemsByPerson(\'' + esc(key) + '\')">'
-        + '<div class="wi-roster-avatar" style="background:' + p.color + '">' + esc(p.initials) + '</div>'
+        + avatarHtml(null, p.name, 22, 'wi-roster-avatar', p.color)
         + '<span class="wi-roster-name">' + esc(p.name) + '</span>' + branchBadge
         + '<span class="wi-roster-count">' + countFor(p.name) + '</span>'
         + '</div>';
@@ -8309,6 +8323,10 @@ async function renderChat() {
   const ca = document.getElementById('content-area');
   ca.innerHTML = '<div class="empty">' + T('Loading chat…','Cargando chat…') + '</div>';
   try {
+    // Chat can open before enterApp's background load resolves, so make
+    // sure photos are available rather than showing initials for the
+    // whole first visit.
+    if (!Object.keys(window._userDir || {}).length) await loadUserDirectory();
     await chEnsureSeeded();
     await chLoadChannels();
     const visible = chVisibleChannels();
@@ -8390,7 +8408,7 @@ function chPaint() {
     const mentionsMe = (m.text || '').toLowerCase().includes('@' + meLower.split(' ')[0]);
     const time = d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
     return sep + '<div class="ch-msg' + (mentionsMe ? ' mine-mention' : '') + '">'
-      + '<div class="ch-av" style="background:' + chColor(m.uid || m.name) + '">' + satInitials(m.name) + '</div>'
+      + avatarHtml(m.uid, m.name, 32, 'ch-av')
       + '<div class="ch-b">'
       + '<div class="ch-h"><span class="ch-who">' + esc(m.name || '—') + '</span>'
       + (m.role ? '<span class="ch-role">' + esc(ROLES[m.role]?.label || m.role) + '</span>' : '')
@@ -8449,6 +8467,49 @@ function chItemCard(m) {
 // reacted and a second click can take it back, and so one person can't
 // inflate a count by clicking repeatedly.
 const CH_EMOJI = ['👍','✅','👀','🔥','❤️','🎉','⚠️','🙏'];
+
+// ══ Shared avatar helper ══
+// Photos are stored on the user doc as photoURL (a data URI written by
+// uploadUserPhoto). Loaded once into a directory so every avatar in the
+// app can show the real photo instead of initials, without each render
+// path doing its own lookup. Falls back to initials whenever there's no
+// photo, so nothing breaks for users who haven't uploaded one.
+window._userDir = window._userDir || {};
+
+async function loadUserDirectory() {
+  try {
+    const snap = await db.collection('users').get();
+    const dir = {};
+    snap.docs.forEach(d => {
+      const u = d.data();
+      dir[d.id] = { name: u.name || '', photoURL: u.photoURL || '', branch: u.branch || '', role: u.role || '' };
+      // Also key by lowercased name so render paths that only have a
+      // display name (older messages, legacy item rows) still resolve.
+      if (u.name) dir['name:' + u.name.trim().toLowerCase()] = dir[d.id];
+    });
+    window._userDir = dir;
+  } catch (e) { /* avatars fall back to initials */ }
+}
+
+function userPhoto(uid, name) {
+  const dir = window._userDir || {};
+  const rec = (uid && dir[uid]) || (name && dir['name:' + String(name).trim().toLowerCase()]);
+  return rec && rec.photoURL ? rec.photoURL : '';
+}
+
+// size in px; cls lets callers keep their own shape (rounded square in
+// chat, circle in rosters).
+function avatarHtml(uid, name, size, cls, bg) {
+  const photo = userPhoto(uid, name);
+  const s = size || 32;
+  if (photo) {
+    return '<img class="' + (cls || 'ch-av') + '" src="' + esc(photo) + '" alt="' + esc(name || '') + '"'
+      + ' style="width:' + s + 'px;height:' + s + 'px;object-fit:cover;flex-shrink:0">';
+  }
+  return '<div class="' + (cls || 'ch-av') + '" style="width:' + s + 'px;height:' + s + 'px;'
+    + 'background:' + (bg || chColor(uid || name)) + ';font-size:' + Math.round(s * 0.34) + 'px">'
+    + satInitials(name) + '</div>';
+}
 
 function chReactionsHtml(m) {
   const rx = m.reactions || {};
