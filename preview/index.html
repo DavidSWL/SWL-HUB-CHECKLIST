@@ -649,8 +649,10 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   flex-shrink:0;border:none;background:none;padding:0}
 .ws-ric:hover{background:#25392E;color:#fff}
 .ws-ric.on{background:#25392E;color:#fff;box-shadow:inset 2.5px 0 0 #FC6020}
-.ws-ric-b{position:absolute;top:3px;right:3px;background:#C93D00;color:#fff;font-size:8.5px;
-  font-weight:700;border-radius:9px;padding:0 4px;border:2px solid #16241D;line-height:1.5}
+.ws-ric-b{position:absolute;top:2px;right:2px;background:#C93D00;color:#fff;font-size:9px;
+  font-weight:700;border-radius:9px;min-width:15px;height:15px;padding:0 3px;border:2px solid #16241D;
+  display:inline-flex;align-items:center;justify-content:center;line-height:1;
+  font-variant-numeric:tabular-nums}
 .ws-rail-sp{flex:1;min-height:8px}
 .ws-rail-user{position:relative;flex-shrink:0;cursor:pointer}
 .ws-rail-av{width:31px;height:31px;border-radius:50%;background:#7A1C2E;color:#fff;
@@ -672,6 +674,8 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   background:none;font-family:inherit;margin-bottom:1px}
 .ws-nav:hover{background:#E4EAE5}
 .ws-nav.active{background:#0E4C2D;color:#fff;font-weight:600}
+.ws-nav.unread{color:#14181A;font-weight:700}
+.ws-nav.unread.active{color:#fff}
 .ws-nav-ic{font-size:14px;flex-shrink:0;width:18px;text-align:center}
 .ws-side-ft{padding:9px 12px;border-top:1px solid #E2E8E4;flex-shrink:0}
 /* The Grey/White switcher was styled white-on-transparent for the old
@@ -1363,7 +1367,21 @@ function enterApp() {
   // initials until it lands, then correctly on the next paint, so a slow
   // load never blocks the app coming up.
   loadUserDirectory();
+  // Starts unread watchers immediately at login rather than waiting for
+  // the user to open Chat, so the rail badge is ambient the way Slack's
+  // is — visible from any screen, not just when Chat happens to be open.
+  chBootstrapUnread();
   navigateTo(ROLES[CD.role]?.restrictedTo || 'dashboard');
+}
+
+async function chBootstrapUnread() {
+  try {
+    if (!window._chChannels || !window._chChannels.length) {
+      await chEnsureSeeded();
+      await chLoadChannels();
+    }
+    chStartUnreadWatchers();
+  } catch (e) { /* badges are cosmetic — never block app startup */ }
 }
 
 function leaveApp() {
@@ -1374,6 +1392,14 @@ function leaveApp() {
 
 async function doSignOut() {
   localStorage.removeItem('swl_remember_me');
+  // Unsubscribe every unread-badge listener before the auth token goes
+  // away — otherwise each one fails against Firestore rules that require
+  // an authenticated request, and they'd keep pointing at the signed-out
+  // user's channels if the next sign-in reuses this tab.
+  Object.values(window._chLastMsgListeners || {}).forEach(unsub => unsub());
+  window._chLastMsgListeners = {};
+  window._chUnread = {};
+  if (window._chUnsub) { window._chUnsub(); window._chUnsub = null; }
   await auth.signOut();
   // Tear the Spanish observer down — otherwise it survives into the next
   // sign-in on the same tab and would keep translating for an English user.
@@ -1443,7 +1469,8 @@ function wsAreas() {
   areas.push({ id:'home', icon:'🏠', label:T('Home','Inicio'), screens:[
     { id:'dashboard', icon:'🏠', label:T('Dashboard','Panel') }
   ]});
-  areas.push({ id:'chat', icon:'💬', label:T('Chat','Chat'), custom:'chat', screens:[
+  const chatUnread = Object.values(window._chUnread || {}).reduce((s,n) => s + (n||0), 0);
+  areas.push({ id:'chat', icon:'💬', label:T('Chat','Chat'), custom:'chat', badgeCount:chatUnread, screens:[
     { id:'chat', icon:'💬', label:T('Chat','Chat') }
   ]});
   // Inbox is deliberately not an area any more — notifications, kudos,
@@ -1507,7 +1534,7 @@ function buildWorkspaceNav() {
     '<button class="ws-ric' + (a.id === active.id ? ' on' : '') + '"'
     + ' onclick="wsGoArea(\'' + a.id + '\')" title="' + esc(a.label) + '">'
     + a.icon
-    + (a.badge ? '<span class="ws-ric-b" id="inbox-badge-count" style="display:none">&nbsp;</span>' : '')
+    + (a.badgeCount ? '<span class="ws-ric-b">' + (a.badgeCount > 99 ? '99+' : a.badgeCount) + '</span>' : '')
     + '</button>'
   ).join('');
 
@@ -1533,13 +1560,14 @@ function chSidebarHtml() {
     .sort((a,b) => (a.name||'').localeCompare(b.name||''));
   const dms = visible.filter(c => c.kind === 'dm');
   const row = (c) => {
-    const unread = false; // read receipts land in the next pass
-    return '<button class="ws-nav' + (c.id === window._chActive ? ' active' : '')
+    const unread = c.id === window._chActive ? 0 : ((window._chUnread || {})[c.id] || 0);
+    return '<button class="ws-nav' + (c.id === window._chActive ? ' active' : '') + (unread ? ' unread' : '')
       + '" onclick="chSelect(\'' + c.id + '\')">'
       + '<span class="ws-nav-ic">' + (c.kind === 'dm' ? '👤' : '#') + '</span>'
-      + esc(c.kind === 'dm' ? chLabel(c) : c.name)
-      + (c.branch && c.branch !== 'ALL'
-          ? '<span class="ws-nav-dot" style="background:' + (c.branch === 'OC' ? '#C93D00' : '#005A9C') + '"></span>' : '')
+      + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(c.kind === 'dm' ? chLabel(c) : c.name) + '</span>'
+      + (unread ? '<span class="ws-nav-badge">' + (unread > 30 ? '30+' : unread) + '</span>'
+          : (c.branch && c.branch !== 'ALL'
+              ? '<span class="ws-nav-dot" style="background:' + (c.branch === 'OC' ? '#C93D00' : '#005A9C') + '"></span>' : ''))
       + '</button>';
   };
   return '<div class="ws-grp">' + T('Channels','Canales') + '</div>'
@@ -8355,6 +8383,7 @@ async function renderChat() {
     if (!Object.keys(window._userDir || {}).length) await loadUserDirectory();
     await chEnsureSeeded();
     await chLoadChannels();
+    chStartUnreadWatchers(); // picks up any channel created since bootstrap; no-ops for ones already watched
     const visible = chVisibleChannels();
     if (!window._chActive || !visible.some(c => c.id === window._chActive)) {
       const first = visible.find(c => c.kind !== 'dm');
@@ -9325,10 +9354,66 @@ async function chCreateTask(rest) {
 async function chMarkRead(channelId) {
   const now = Date.now();
   window._chReads[channelId] = now;
+  window._chUnread = window._chUnread || {};
+  window._chUnread[channelId] = 0; // instant — don't wait on the write below
+  chRefreshUnreadUI();
   try {
     await db.collection('channel_reads').doc(CU.uid + '_' + channelId)
       .set({ uid: CU.uid, channelId, lastReadAt: now }, { merge: true });
   } catch (e) { /* unread state is cosmetic — never block on it */ }
+}
+
+// ══ Unread badges ══
+// No email, no push — this is the actual notification surface: a number
+// on the Chat rail icon and on each channel in the sidebar, the same
+// pattern Slack uses. Kept live with one lightweight listener per visible
+// channel (just the latest message, not the full history), so a badge
+// updates the moment something new arrives without polling.
+//
+// Costs stay small on purpose: a listener only ever reads ONE document
+// (limitToLast(1)) until it actually detects something new, at which
+// point a single capped follow-up query (limit 30) gets the real count.
+// At company size (a handful of channels, a handful of people) this is
+// negligible; it would need rethinking well before it became real cost.
+window._chUnread = window._chUnread || {};
+window._chLastMsgListeners = window._chLastMsgListeners || {};
+
+function chStartUnreadWatchers() {
+  const visible = chVisibleChannels();
+  const liveIds = new Set(visible.map(c => c.id));
+  Object.keys(window._chLastMsgListeners).forEach(id => {
+    if (!liveIds.has(id)) { window._chLastMsgListeners[id](); delete window._chLastMsgListeners[id]; }
+  });
+  visible.forEach(c => {
+    if (window._chLastMsgListeners[c.id]) return; // already watching
+    window._chLastMsgListeners[c.id] = db.collection('channels').doc(c.id)
+      .collection('messages').orderBy('createdAt').limitToLast(1)
+      .onSnapshot(snap => {
+        if (snap.empty) return;
+        const last = snap.docs[0].data();
+        const lastMs = last.createdAt && last.createdAt.toMillis ? last.createdAt.toMillis() : Date.now();
+        if (c.id === window._chActive) { window._chUnread[c.id] = 0; chRefreshUnreadUI(); return; }
+        const readMs = window._chReads[c.id] || 0;
+        if (lastMs > readMs) chCountUnread(c.id, readMs);
+        else { window._chUnread[c.id] = 0; chRefreshUnreadUI(); }
+      }, () => {}); // a blocked/failed listener just means no badge — never surface this as an error
+  });
+}
+
+async function chCountUnread(channelId, sinceMs) {
+  try {
+    const snap = await db.collection('channels').doc(channelId).collection('messages')
+      .where('createdAt', '>', new Date(sinceMs || 0)).limit(30).get();
+    window._chUnread[channelId] = snap.size;
+  } catch (e) { window._chUnread[channelId] = 0; }
+  chRefreshUnreadUI();
+}
+
+// Rebuilds only the rail + sidebar, never #content-area — badges updating
+// in the background must never disturb whatever's on screen (e.g. a
+// half-typed message, an open modal).
+function chRefreshUnreadUI() {
+  if (document.getElementById('app-shell') && CD) buildWorkspaceNav();
 }
 
 // ══ Issue reporting ══
