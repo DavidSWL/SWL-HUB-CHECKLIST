@@ -9,6 +9,16 @@
 <!-- This is the FIRST title tag in the document and the one browsers
      actually use for the tab; a second one further down is ignored. -->
 <title>[PREVIEW] SWL Operations Hub</title>
+<style>
+#swl-preview-badge{
+  position:fixed; right:10px; bottom:10px; z-index:99999;
+  background:#B45309; color:#fff; font-family:system-ui,sans-serif;
+  font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+  padding:5px 11px; border-radius:20px; box-shadow:0 3px 12px rgba(0,0,0,.35);
+  pointer-events:none; user-select:none;
+}
+@media print{ #swl-preview-badge{display:none} }
+</style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -607,24 +617,8 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 
 </style>
 <link id="favicon" rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAJCAYAAABT2S4KAAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAADoklEQVR4nG2TS2xUdRjFz/f9773TW2ZKO20HmVaKWgJphZaMTbpSIyt8N9KFL3DFQnGBCUQsZTKKSHxFTFlgQnwtNHQhJoCGaDQRjWEoCokj0ahoQktH+piO05k79/6/zwWPuPC3OTnJyTmrQ7llmW0EvkjARgrr+8LZc1M5QLIA5wBRgAjQ6woA2eWZFb7wger0vY+g7Vh/i+MeLttwU8Xl+ZSa44uIPh6ZOnNgX2pgTCDnR4sTh7Yi476DiRBXIVzrYld5aM90/tj51sr20KKSA+RAd3csB8i1pOLa+Audgx27lmfWYCo+yUp/xRInWnJXJs4GIr/EDK/aP5mfqUoUuGriBKgwfpv13A8A0PXxbFdXAwDdnb5j/Y7W1QnanxoY8Y15KLD2053F/Cu5VOYBZtOkIqWIrO+qmQlIGjyYRgO9vZHd1ZNc3d0WetsCyO+GEDnEC1D0l6x93WO+p5Fp43xkd3gu32+tFBuY1xpCvmRD8dgsFdI/4uK8VVF7lJ8v5l+uItxEROv3LRt40yNeM3r59Icu84ZGeD0ucSzuen/6ZHxVnahoeOS1Sz/+Sky8p3jmbQfUbiEXlNDhGtqobZVxUSzEHDxqAMSYBln0e2tFEuTc6SunQzIXrcqpuabSGO+9KTPmLylNByQfKeGKZYpnOweTAg1C0smIpCuwtjsgSQtTQkArn+7piQuQfLa727OqycDwFBSzMcWqXKFQV9azRnlDIPiOldLk8oVZtpeqhC8scMsSQS8xxZMLfgcLcKJabh2yivrI5fzexGJ01ETR3TbUw6OXTx+Ccs2JxLihPRcofxuLUFpdMM2W5OummVjKEn4wQd1vKdn9kYP3AKAW4RjUvrR3Ov9TBP3MDXlTe2D+cUS9GunReQ0moHrScKwf/6V9+K64u7mv97pf8djaFgDAkR4P73Y1AADe6PTbhvvuAwBs6WsGAGzNuHhyoBUA0g9fVSjMzQ+uT98o3z7o43+gYQwbYBw9gB4cyizzSZ5rjBZfDIx/a2T4YEL08QroKSFdadjZJZF9VUlrzfPh6NxS9/2WUrhlrtl9BhbnHMiX1jWfwMpOwLkNjj7hLdrt1uNhy1jX9HNtc2+h145jXLLIEpCDM45xe+OXs/G/O1Pl4qKJ9yHEFIhOBupWLdc/ByRZiwVlR+gbUqqUbbkETn614FNdgTxUq7YWsnrmlCFnRoyuU0iBm73psGbPkOpkoVCoF1AgAJpDTgHgX/yFxMsNmA7NAAAAAElFTkSuQmCC">
-<title>[PREVIEW] SWL Operations Hub</title>
-<!-- ══════════════════════════════════════════════════════════════
-     PREVIEW BUILD MARKER
-     This file lives at /preview/ and is served from its own URL.
-     The live app at the repo root is a separate file and is never
-     touched by anything deployed here. The badge below exists so a
-     preview tab can never be mistaken for production at a glance.
-     ══════════════════════════════════════════════════════════════ -->
+<title>SWL Operations Hub</title>
 <style>
-#swl-preview-badge{
-  position:fixed; right:10px; bottom:10px; z-index:99999;
-  background:#B45309; color:#fff; font-family:system-ui,sans-serif;
-  font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
-  padding:5px 11px; border-radius:20px; box-shadow:0 3px 12px rgba(0,0,0,.35);
-  pointer-events:none; user-select:none;
-}
-@media print{ #swl-preview-badge{display:none} }
-
 /* ══════════════════════════════════════════════════════════════
    PHASE 1 — WORKSPACE SHELL
    Replaces the single top bar with a Slack-style three-column
@@ -837,6 +831,25 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .content-area:not(.theme-white) .ch-comp{background:#242424;border-color:#383838}
 .content-area:not(.theme-white) .ch-comp textarea{color:#E0E0E0}
 .content-area:not(.theme-white) .ch-comp-bar{border-top-color:#2E2E2E}
+
+/* ══════════════════════════════════════════════════════════════
+   DOCS — manager/exec only, gated the same way as Recaps/Reports
+   ══════════════════════════════════════════════════════════════ */
+.dw-crumbs{font-size:11.5px;color:#7A9088;margin-bottom:12px}
+.dw-hd{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+.dw-title{font-family:var(--disp,'Trebuchet MS');font-size:24px;font-weight:700;letter-spacing:-.02em;
+  color:var(--text);margin:0}
+.dw-meta{font-size:11.5px;color:var(--text3);margin:6px 0 18px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+.dw-cat{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;
+  border-radius:20px;background:var(--surface2);color:var(--text2);display:inline-block;margin-right:6px}
+.dw-body{font-size:13.5px;color:var(--text2);line-height:1.75;white-space:pre-wrap;max-width:72ch}
+.dw-attach{display:flex;align-items:center;gap:10px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--rl);padding:12px 14px;margin-top:18px;max-width:420px}
+.dw-attach-ic{font-size:20px;flex-shrink:0}
+.dw-attach-name{font-size:12.5px;font-weight:600;color:var(--text)}
+.dw-attach-size{font-size:10.5px;color:var(--text3)}
+.dw-empty{padding:60px 20px;text-align:center;color:var(--text3)}
+.dw-page-thumb{width:100%;max-width:420px;border-radius:var(--r);border:1px solid var(--border);margin-top:14px;display:block}
 
 @media (max-width:860px){
   .ch-wrap{margin:-12px;height:calc(100% + 24px)}
@@ -1493,6 +1506,12 @@ function wsAreas() {
     areas.push({ id:'reports', icon:'📈', label:T('Reports','Reportes'), screens:[
       { id:'reports', icon:'📈', label:T('Reports','Reportes') }
     ]});
+    // Manager/exec only, per explicit request — SOPs, playbooks and
+    // uploaded documents aren't something a client rep or field crew
+    // needs in their nav.
+    areas.push({ id:'docs', icon:'📚', label:T('Docs','Documentos'), custom:'docs', screens:[
+      { id:'docs', icon:'📚', label:T('Docs','Documentos') }
+    ]});
   }
   if (ocCrew) {
     areas.push({ id:'crew', icon:'🗓', label:T('Field Crew','Cuadrilla'), screens:[
@@ -1544,6 +1563,9 @@ function buildWorkspaceNav() {
   // Chat replaces the flat screen list with its channel + DM list, since
   // "which channel" is the real navigation inside that area.
   if (active.custom === 'chat') { nav.innerHTML = chSidebarHtml(); return; }
+  // Same idea for Docs — the page library, grouped by category, is the
+  // real navigation there.
+  if (active.custom === 'docs') { nav.innerHTML = docSidebarHtml(); return; }
 
   nav.innerHTML = '<div class="ws-grp">' + esc(active.label) + '</div>'
     + active.screens.map(s =>
@@ -1725,6 +1747,7 @@ function renderScreen(screen) {
     'reports':      { title:'Reports',             fn: renderReports },
     'saturday-schedule': { title: T('Saturday Schedule', 'Horario del Sábado'), fn: renderSaturdaySchedule },
     'chat':           { title: T('Chat','Chat'),           fn: renderChat },
+    'docs':           { title: T('Docs','Documentos'),     fn: renderDocs },
   };
   const s = screens[screen];
   if (!s) return;
@@ -8254,7 +8277,7 @@ async function satOverrideSlot(dateStr, slotIndex, name) {
 }
 
 // ══════════════════════════════════════════════════
-// CHAT  (Phase 2 — preview only)
+// CHAT
 // ══════════════════════════════════════════════════
 // Everything here is ADDITIVE: new collections only. No existing
 // collection (users, weekly_items, weekly_submissions, saturday_*) is
@@ -9466,6 +9489,267 @@ async function chSaveIssue() {
     document.getElementById('ch-issue-modal').remove();
     toast('✓ ' + T('Issue reported','Problema reportado'));
   } catch (e) { toast('Could not submit — ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════════════
+// DOCS — manager/exec only
+// ══════════════════════════════════════════════════
+// A single 'docs' collection, additive like everything in Chat — no
+// existing collection is touched. Branch visibility mirrors
+// chVisibleChannels exactly: OC sees OC+ALL, LA sees LA+ALL, admin/exec
+// see everything, so a page created for one branch doesn't leak to the
+// other by default.
+//
+// File attachments are stored as base64 data URIs directly on the doc,
+// the same pattern uploadUserPhoto already uses for profile photos —
+// no Firebase Storage needed, which means no new billing/infrastructure
+// decision to ship this today. The real tradeoff of that approach is
+// Firestore's hard 1 MiB per-document ceiling; the source file is capped
+// well under that (650KB) to leave room for base64's ~33% size inflation
+// plus the rest of the document's fields. A file bigger than that needs
+// Firebase Storage, which is a separate, explicit decision — not
+// something to silently fail on.
+const DOC_MAX_FILE_BYTES = 650000;
+
+function docCanSeeAll() { return CD.role === 'admin' || CD.role === 'exec_viewer'; }
+
+function docVisiblePages(all) {
+  const branch = CD.branch;
+  return (all || []).filter(d => {
+    if (!d.branch || d.branch === 'ALL') return true;
+    if (docCanSeeAll()) return true;
+    return d.branch === branch;
+  });
+}
+
+window._docPages = [];
+window._docActive = null;
+
+async function renderDocs() {
+  const ca = document.getElementById('content-area');
+  const isManager = ROLES[CD.role]?.isManager || CD.role === 'admin';
+  const isExec = CD.role === 'exec_viewer';
+  if (!isManager && !isExec) { ca.innerHTML = '<div class="empty">' + T('Docs is only available to managers and executives.','Documentos solo está disponible para gerentes y ejecutivos.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const snap = await db.collection('docs').get();
+    window._docPages = docVisiblePages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    if (!window._docActive || !window._docPages.some(p => p.id === window._docActive)) {
+      window._docActive = window._docPages[0] ? window._docPages[0].id : null;
+    }
+    buildWorkspaceNav(); // page list lives in the sidebar, same as chat's channel list
+    docPaint();
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load Docs</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderDocs()">Retry</button></div>';
+  }
+}
+
+function docSidebarHtml() {
+  const pages = window._docPages || [];
+  const cats = {};
+  pages.forEach(p => { const c = p.category || T('General','General'); (cats[c] = cats[c] || []).push(p); });
+  const catNames = Object.keys(cats).sort();
+  let html = '<button class="ws-nav" onclick="docOpenNew()"><span class="ws-nav-ic">＋</span>' + T('New Page','Nueva Página') + '</button>';
+  catNames.forEach(cat => {
+    html += '<div class="ws-grp">' + esc(cat) + '</div>';
+    html += cats[cat].sort((a,b) => (a.title||'').localeCompare(b.title||'')).map(p =>
+      '<button class="ws-nav' + (p.id === window._docActive ? ' active' : '') + '" onclick="docSelect(\'' + p.id + '\')">'
+      + '<span class="ws-nav-ic">' + (p.attachment ? '📎' : '📄') + '</span>'
+      + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(p.title || '') + '</span>'
+      + (p.branch && p.branch !== 'ALL'
+          ? '<span class="ws-nav-dot" style="background:' + (p.branch === 'OC' ? '#C93D00' : '#005A9C') + '"></span>' : '')
+      + '</button>'
+    ).join('');
+  });
+  if (!pages.length) html += '<div style="padding:10px;font-size:11.5px;color:var(--text3)">' + T('No pages yet.','Sin páginas todavía.') + '</div>';
+  return html;
+}
+
+function docSelect(id) { window._docActive = id; buildWorkspaceNav(); docPaint(); }
+
+function docPaint() {
+  const ca = document.getElementById('content-area');
+  const p = (window._docPages || []).find(x => x.id === window._docActive);
+  if (!p) {
+    ca.innerHTML = '<div class="dw-empty">📄 ' + T('Select a page, or create a new one.','Selecciona una página, o crea una nueva.') + '</div>';
+    return;
+  }
+  const canEdit = CD.role === 'admin' || p.createdBy === CU.uid || ROLES[CD.role]?.isManager;
+  const isImage = p.attachment && p.attachment.type && p.attachment.type.startsWith('image/');
+  ca.innerHTML = '<div class="dw-crumbs">' + T('Docs','Documentos') + ' / ' + esc(p.category || T('General','General')) + '</div>'
+    + '<div class="dw-hd"><div class="dw-title">' + esc(p.title || '') + '</div>'
+    + (canEdit ? '<button class="btn sm" onclick="docOpenEdit(\'' + p.id + '\')">✎ ' + T('Edit','Editar') + '</button>' : '')
+    + '</div>'
+    + '<div class="dw-meta">'
+    + '<span class="dw-cat">' + esc(p.category || T('General','General')) + '</span>'
+    + (p.branch && p.branch !== 'ALL' ? '<span class="badge ' + p.branch.toLowerCase() + '">' + p.branch + '</span> ' : '')
+    + esc(p.createdByName || '') + (p.updatedByName && p.updatedByName !== p.createdByName ? ' · ' + T('edited by','editado por') + ' ' + esc(p.updatedByName) : '')
+    + '</div>'
+    + '<div class="dw-body">' + esc(p.body || '') + '</div>'
+    + (p.attachment ? (
+        isImage
+          ? '<img class="dw-page-thumb" src="' + esc(p.attachment.dataUrl) + '" alt="' + esc(p.attachment.name) + '">'
+          : '<a class="dw-attach" href="' + esc(p.attachment.dataUrl) + '" download="' + esc(p.attachment.name) + '" style="text-decoration:none">'
+            + '<span class="dw-attach-ic">📎</span><div><div class="dw-attach-name">' + esc(p.attachment.name) + '</div>'
+            + '<div class="dw-attach-size">' + docFmtBytes(p.attachment.size) + ' · ' + T('Click to download','Clic para descargar') + '</div></div></a>'
+      ) : '');
+}
+
+function docFmtBytes(n) {
+  if (!n) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return Math.round(n / 1024) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+
+function docExistingCategories() {
+  return [...new Set((window._docPages || []).map(p => p.category).filter(Boolean))].sort();
+}
+
+function docOpenNew() {
+  const ex = document.getElementById('doc-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'doc-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:480px;max-width:100%;max-height:80vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">📄 ' + T('New Page','Nueva Página') + '</div>'
+    + '<button onclick="document.getElementById(\'doc-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div class="fg"><label>' + T('Title','Título') + '<span class="req">*</span></label><input type="text" id="dm-title" placeholder="' + T('e.g. Water-off protocol','p. ej. Protocolo de cierre de agua') + '"></div>'
+    + '<div class="g2">'
+    + '<div class="fg"><label>' + T('Category','Categoría') + '</label><input type="text" id="dm-cat" list="dm-cat-list" placeholder="' + T('e.g. Field SOPs','p. ej. Procedimientos de Campo') + '">'
+    + '<datalist id="dm-cat-list">' + docExistingCategories().map(c => '<option value="' + esc(c) + '">').join('') + '</datalist></div>'
+    + '<div class="fg"><label>' + T('Branch','Sucursal') + '</label><select id="dm-branch">'
+    + '<option value="ALL">' + T('All / Company-wide','Todos / Compañía') + '</option>'
+    + '<option value="OC">OC</option><option value="LA">LA</option></select></div>'
+    + '</div>'
+    + '<div class="fg"><label>' + T('Content','Contenido') + '</label><textarea id="dm-body" rows="6" placeholder="' + T('Write the page…','Escribe la página…') + '"></textarea></div>'
+    + '<div class="fg"><label>' + T('Attach a file (optional)','Adjuntar un archivo (opcional)') + '<span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">' + T('up to 650KB','hasta 650KB') + '</span></label>'
+    + '<input type="file" id="dm-file"></div>'
+    + '<div style="display:flex;gap:8px;margin-top:6px">'
+    + '<button class="btn primary" id="dm-save-btn" onclick="docSaveNew()">' + T('Create','Crear') + '</button>'
+    + '<button class="btn" onclick="document.getElementById(\'doc-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+// Shared by create and edit — validates size, reads the file if present,
+// and returns the attachment object (or null) via callback so both save
+// paths can stay simple async/await instead of duplicating FileReader
+// plumbing.
+function docReadAttachment(inputEl) {
+  return new Promise((resolve, reject) => {
+    const file = inputEl && inputEl.files && inputEl.files[0];
+    if (!file) { resolve(null); return; }
+    if (file.size > DOC_MAX_FILE_BYTES) {
+      reject(new Error(T('File must be under 650KB — larger files need Firebase Storage set up first.',
+        'El archivo debe pesar menos de 650KB — archivos más grandes necesitan configurar Firebase Storage primero.')));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => resolve({ name: file.name, type: file.type, size: file.size, dataUrl: e.target.result });
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function docSaveNew() {
+  const title = document.getElementById('dm-title').value.trim();
+  const category = document.getElementById('dm-cat').value.trim();
+  const branch = document.getElementById('dm-branch').value;
+  const body = document.getElementById('dm-body').value.trim();
+  if (!title) { toast(T('Title is required','El título es obligatorio'), 'err'); return; }
+  const btn = document.getElementById('dm-save-btn');
+  btn.disabled = true; btn.textContent = T('Saving…','Guardando…');
+  try {
+    const attachment = await docReadAttachment(document.getElementById('dm-file'));
+    await db.collection('docs').add({
+      title, category: category || null, branch, body,
+      attachment: attachment || null,
+      createdBy: CU.uid, createdByName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    document.getElementById('doc-modal').remove();
+    toast('✓ ' + T('Page created','Página creada'));
+    renderDocs();
+  } catch (e) {
+    toast(e.message || 'Could not save', 'err');
+    btn.disabled = false; btn.textContent = T('Create','Crear');
+  }
+}
+
+function docOpenEdit(id) {
+  const p = (window._docPages || []).find(x => x.id === id);
+  if (!p) return;
+  const ex = document.getElementById('doc-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'doc-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:480px;max-width:100%;max-height:80vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">✎ ' + T('Edit Page','Editar Página') + '</div>'
+    + '<button onclick="document.getElementById(\'doc-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div class="fg"><label>' + T('Title','Título') + '<span class="req">*</span></label><input type="text" id="dm-title" value="' + esc(p.title || '') + '"></div>'
+    + '<div class="g2">'
+    + '<div class="fg"><label>' + T('Category','Categoría') + '</label><input type="text" id="dm-cat" value="' + esc(p.category || '') + '" list="dm-cat-list">'
+    + '<datalist id="dm-cat-list">' + docExistingCategories().map(c => '<option value="' + esc(c) + '">').join('') + '</datalist></div>'
+    + '<div class="fg"><label>' + T('Branch','Sucursal') + '</label><select id="dm-branch">'
+    + ['ALL','OC','LA'].map(b => '<option value="' + b + '"' + ((p.branch||'ALL') === b ? ' selected' : '') + '>' + (b === 'ALL' ? T('All / Company-wide','Todos / Compañía') : b) + '</option>').join('')
+    + '</select></div>'
+    + '</div>'
+    + '<div class="fg"><label>' + T('Content','Contenido') + '</label><textarea id="dm-body" rows="6">' + esc(p.body || '') + '</textarea></div>'
+    + (p.attachment ? '<div style="font-size:11px;color:var(--text3);margin-bottom:6px">' + T('Current attachment','Archivo actual') + ': ' + esc(p.attachment.name) + '</div>' : '')
+    + '<div class="fg"><label>' + T('Replace attachment (optional)','Reemplazar archivo (opcional)') + '<span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">' + T('up to 650KB','hasta 650KB') + '</span></label>'
+    + '<input type="file" id="dm-file"></div>'
+    + '<div style="display:flex;gap:8px;margin-top:6px">'
+    + '<button class="btn primary" id="dm-save-btn" onclick="docSaveEdit(\'' + id + '\')">' + T('Save','Guardar') + '</button>'
+    + '<button class="btn" onclick="document.getElementById(\'doc-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
+    + (CD.role === 'admin' ? '<button class="btn" style="margin-left:auto;color:var(--danger)" onclick="docDelete(\'' + id + '\')">' + T('Delete','Eliminar') + '</button>' : '')
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+async function docSaveEdit(id) {
+  const p = (window._docPages || []).find(x => x.id === id);
+  const title = document.getElementById('dm-title').value.trim();
+  const category = document.getElementById('dm-cat').value.trim();
+  const branch = document.getElementById('dm-branch').value;
+  const body = document.getElementById('dm-body').value.trim();
+  if (!title) { toast(T('Title is required','El título es obligatorio'), 'err'); return; }
+  const btn = document.getElementById('dm-save-btn');
+  btn.disabled = true; btn.textContent = T('Saving…','Guardando…');
+  try {
+    const newAttachment = await docReadAttachment(document.getElementById('dm-file'));
+    const update = {
+      title, category: category || null, branch, body,
+      updatedBy: CU.uid, updatedByName: CD.name,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    if (newAttachment) update.attachment = newAttachment; // keep existing one untouched if no new file chosen
+    await db.collection('docs').doc(id).update(update);
+    document.getElementById('doc-modal').remove();
+    toast('✓ ' + T('Saved','Guardado'));
+    renderDocs();
+  } catch (e) {
+    toast(e.message || 'Could not save', 'err');
+    btn.disabled = false; btn.textContent = T('Save','Guardar');
+  }
+}
+
+async function docDelete(id) {
+  if (CD.role !== 'admin') return;
+  if (!confirm(T('Delete this page? This cannot be undone.','¿Eliminar esta página? Esto no se puede deshacer.'))) return;
+  try {
+    await db.collection('docs').doc(id).delete();
+    document.getElementById('doc-modal').remove();
+    window._docActive = null;
+    toast('✓ ' + T('Deleted','Eliminado'));
+    renderDocs();
+  } catch (e) { toast('Could not delete — ' + e.message, 'err'); }
 }
 
 </script>
