@@ -805,6 +805,13 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .ws-nav-badge{margin-left:auto;background:#C93D00;color:#fff;font-size:9px;font-weight:700;
   border-radius:9px;padding:1px 6px;flex-shrink:0}
 .ws-nav-dot{margin-left:auto;width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.ws-nav-wrap{position:relative}
+.ws-nav-leave{position:absolute;right:5px;top:50%;transform:translateY(-50%);opacity:0;
+  background:none;border:none;color:#9BADA2;cursor:pointer;font-size:11px;padding:3px 5px;
+  border-radius:5px;transition:opacity .12s;line-height:1}
+.ws-nav-wrap:hover .ws-nav-leave{opacity:1}
+.ws-nav-leave:hover{color:#B42318;background:rgba(180,35,24,.08)}
+.ch-dm-check{width:14px;flex-shrink:0;font-size:13px}
 
 .content-area:not(.theme-white) .ch-wrap{background:#1E1E1E}
 .content-area:not(.theme-white) .ch-hd{border-bottom-color:#2E2E2E}
@@ -1570,46 +1577,109 @@ function chSidebarHtml() {
   const chans = visible.filter(c => c.kind !== 'dm')
     .sort((a,b) => (a.name||'').localeCompare(b.name||''));
   const dms = visible.filter(c => c.kind === 'dm');
-  const row = (c) => {
+  const row = (c, leavable) => {
     const unread = c.id === window._chActive ? 0 : ((window._chUnread || {})[c.id] || 0);
-    return '<button class="ws-nav' + (c.id === window._chActive ? ' active' : '') + (unread ? ' unread' : '')
-      + '" onclick="chSelect(\'' + c.id + '\')">'
+    const btn = '<button class="ws-nav' + (c.id === window._chActive ? ' active' : '') + (unread ? ' unread' : '') + '"'
+      + (leavable ? ' style="padding-right:26px"' : '')
+      + ' onclick="chSelect(\'' + c.id + '\')">'
       + '<span class="ws-nav-ic">' + (c.kind === 'dm' ? '👤' : '#') + '</span>'
       + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(c.kind === 'dm' ? chLabel(c) : c.name) + '</span>'
       + (unread ? '<span class="ws-nav-badge">' + (unread > 30 ? '30+' : unread) + '</span>'
           : (c.branch && c.branch !== 'ALL'
               ? '<span class="ws-nav-dot" style="background:' + (c.branch === 'OC' ? '#C93D00' : '#005A9C') + '"></span>' : ''))
       + '</button>';
+    // A leave control has to sit outside the row's own <button> — buttons
+    // can't nest — so a leavable row gets a positioning wrapper with the
+    // leave button absolutely placed over it, revealed on hover.
+    if (!leavable) return btn;
+    return '<div class="ws-nav-wrap">' + btn
+      + '<button class="ws-nav-leave" title="' + T('Leave conversation','Salir de la conversación') + '"'
+      + ' onclick="event.stopPropagation();chLeaveDm(\'' + c.id + '\')">✕</button></div>';
   };
   return '<div class="ws-grp">' + T('Channels','Canales') + '</div>'
-    + chans.map(row).join('')
+    + chans.map(c => row(c, false)).join('')
     + '<div class="ws-grp">' + T('Direct messages','Mensajes directos') + '</div>'
-    + dms.map(row).join('')
+    + dms.map(c => row(c, true)).join('')
     + '<button class="ws-nav" onclick="chPickDm()"><span class="ws-nav-ic">＋</span>'
     + T('New message','Nuevo mensaje') + '</button>';
 }
 
+// Hides this DM from MY sidebar only — never touches `members`, so the
+// conversation and its full history are untouched for everyone else.
+// Reopening it (chOpenDmGroup, by messaging the same people again) or a
+// new message arriving from someone else (chSend) un-hides it, the same
+// way closing a DM in Slack works.
+async function chLeaveDm(channelId) {
+  if (!confirm(T('Leave this conversation? You can start it again later by messaging the same people.',
+    '¿Salir de esta conversación? Puedes iniciarla de nuevo más tarde escribiendo a las mismas personas.'))) return;
+  try {
+    await db.collection('channels').doc(channelId).update({
+      hiddenFor: firebase.firestore.FieldValue.arrayUnion(CU.uid)
+    });
+    const ch = (window._chChannels || []).find(c => c.id === channelId);
+    if (ch) ch.hiddenFor = [...(ch.hiddenFor || []), CU.uid];
+    if (window._chActive === channelId) {
+      window._chActive = null;
+      renderChat(); // falls back to the first still-visible channel
+    } else {
+      buildWorkspaceNav();
+    }
+    toast('✓ ' + T('Left conversation','Saliste de la conversación'));
+  } catch (e) { toast('Could not leave — ' + e.message, 'err'); }
+}
+
 // Anyone can start a DM with anyone — this is how the team reaches the
 // executive directly, and how the executive reaches any branch.
+// Multi-select: picking several people starts one group conversation with
+// all of them, not a separate 1:1 with each. window._chDmPicked tracks the
+// selection across clicks; the Start button stays disabled until at least
+// one person is checked.
 async function chPickDm() {
   const ex = document.getElementById('ch-dm-modal'); if (ex) ex.remove();
   let users = [];
   try { users = await chDmCandidates(); }
   catch (e) { toast('Could not load people — ' + e.message, 'err'); return; }
+  window._chDmPicked = new Set();
   const m = document.createElement('div');
   m.id = 'ch-dm-modal';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
   m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:22px;width:380px;max-width:100%;max-height:70vh;overflow-y:auto;box-shadow:var(--shm)">'
-    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
     + '<div style="font-size:14px;font-weight:700">' + T('New message','Nuevo mensaje') + '</div>'
     + '<button onclick="document.getElementById(\'ch-dm-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
-    + users.map(u => '<button class="ws-nav" style="width:100%" onclick="document.getElementById(\'ch-dm-modal\').remove();chOpenDm(\''
-        + u.id + '\',\'' + esc(u.name).replace(/'/g,"\\'") + '\')">'
+    + '<div style="font-size:11px;color:var(--text3);margin-bottom:10px">' + T('Select one or more people','Selecciona una o más personas') + '</div>'
+    + '<div id="ch-dm-list">' + users.map(u =>
+        '<button class="ws-nav" style="width:100%" data-uid="' + u.id + '" data-name="' + esc(u.name).replace(/"/g,'&quot;') + '" onclick="chToggleDmPick(this)">'
+        + '<span class="ch-dm-check">☐</span>'
         + avatarHtml(u.id, u.name, 24, 'ch-av') + esc(u.name)
         + '<span style="margin-left:auto;font-size:10px;color:var(--text3)">' + esc(u.branch || '') + '</span>'
-        + '</button>').join('')
+        + '</button>').join('') + '</div>'
+    + '<button class="btn primary" id="ch-dm-start-btn" style="width:100%;margin-top:12px" disabled onclick="chStartDm()">'
+    + T('Start conversation','Iniciar conversación') + '</button>'
     + '</div>';
   document.body.appendChild(m);
+}
+
+function chToggleDmPick(btn) {
+  const uid = btn.dataset.uid;
+  const set = window._chDmPicked;
+  if (!set) return;
+  const check = btn.querySelector('.ch-dm-check');
+  if (set.has(uid)) { set.delete(uid); btn.classList.remove('active'); if (check) check.textContent = '☐'; }
+  else { set.add(uid); btn.classList.add('active'); if (check) check.textContent = '☑'; }
+  const startBtn = document.getElementById('ch-dm-start-btn');
+  if (startBtn) startBtn.disabled = set.size === 0;
+}
+
+async function chStartDm() {
+  const set = window._chDmPicked;
+  if (!set || !set.size) return;
+  const namesMap = {};
+  document.querySelectorAll('#ch-dm-list [data-uid]').forEach(r => {
+    if (set.has(r.dataset.uid)) namesMap[r.dataset.uid] = r.dataset.name;
+  });
+  const modal = document.getElementById('ch-dm-modal'); if (modal) modal.remove();
+  await chOpenDmGroup([...set], namesMap);
 }
 
 function wsGoArea(areaId) {
@@ -8307,7 +8377,13 @@ function chCanSeeAll() { return CD.role === 'admin' || CD.role === 'exec_viewer'
 function chVisibleChannels() {
   const branch = CD.branch;
   return (window._chChannels || []).filter(c => {
-    if (c.kind === 'dm') return (c.members || []).includes(CU.uid);
+    if (c.kind === 'dm') {
+      // hiddenFor is a per-user "I left/closed this" list (chLeaveDm) — it
+      // never removes anyone from members, so the conversation and its
+      // history are untouched for everyone else, and reopening it later
+      // (chOpenDmGroup) or a new message arriving (chSend) un-hides it.
+      return (c.members || []).includes(CU.uid) && !(c.hiddenFor || []).includes(CU.uid);
+    }
     if (c.branch === 'ALL') return true;
     if (chCanSeeAll()) return true;      // executive / admin overview
     return c.branch === branch;
@@ -8354,29 +8430,46 @@ async function chLoadChannels() {
   } catch(e) { window._chReads = {}; }
 }
 
-function chDmKey(a, b) { return [a, b].sort().join('__'); }
+// Sorts the FULL member set (including self) so the same group of people
+// always resolves to the same conversation regardless of who started it
+// or in what order they were picked — a 2-person key is just the n=2 case
+// of this, not a separate concept.
+function chDmKey(uids) { return [...uids].sort().join('__'); }
 
-async function chOpenDm(otherUid, otherName) {
-  const key = chDmKey(CU.uid, otherUid);
+// otherUids/namesMap cover everyone EXCEPT the caller — chOpenDmGroup adds
+// self to form the full member list. Reopening a conversation you'd
+// previously left (see chLeaveDm) un-hides it instead of creating a
+// duplicate with the same people.
+async function chOpenDmGroup(otherUids, namesMap) {
+  if (!otherUids || !otherUids.length) return;
+  const allMembers = [CU.uid, ...otherUids];
+  const key = chDmKey(allMembers);
   let ch = (window._chChannels || []).find(c => c.kind === 'dm' && c.dmKey === key);
   if (!ch) {
+    const memberNames = { [CU.uid]: CD.name, ...namesMap };
     const ref = await db.collection('channels').add({
       kind:'dm', dmKey:key, branch:'ALL',
-      members:[CU.uid, otherUid],
-      memberNames:{ [CU.uid]: CD.name, [otherUid]: otherName },
+      members: allMembers, memberNames, hiddenFor: [],
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    ch = { id:ref.id, kind:'dm', dmKey:key, members:[CU.uid, otherUid],
-           memberNames:{ [CU.uid]: CD.name, [otherUid]: otherName } };
+    ch = { id:ref.id, kind:'dm', dmKey:key, members:allMembers, memberNames, hiddenFor: [] };
     window._chChannels.push(ch);
+  } else if ((ch.hiddenFor || []).includes(CU.uid)) {
+    try {
+      await db.collection('channels').doc(ch.id).update({ hiddenFor: firebase.firestore.FieldValue.arrayRemove(CU.uid) });
+    } catch (e) { /* worst case it just stays hidden until the next message arrives */ }
+    ch.hiddenFor = (ch.hiddenFor || []).filter(u => u !== CU.uid);
   }
   chSelect(ch.id);
 }
 
 function chLabel(c) {
   if (c.kind !== 'dm') return '# ' + c.name;
-  const other = (c.members || []).find(u => u !== CU.uid);
-  return (c.memberNames && c.memberNames[other]) || 'Direct message';
+  const others = (c.members || []).filter(u => u !== CU.uid);
+  const names = others.map(u => (c.memberNames && c.memberNames[u]) || '?');
+  if (!names.length) return T('Direct message','Mensaje directo');
+  if (names.length <= 2) return names.join(' & ');
+  return names[0] + ', ' + names[1] + ' +' + (names.length - 2);
 }
 
 function chSelect(id) {
@@ -8773,9 +8866,12 @@ async function chEmailForMessage(text) {
     await chQueueEmail(uid, subject, CD.name + ': ' + text);
   }
   if (ch.kind === 'dm') {
-    const other = (ch.members || []).find(u => u !== CU.uid);
-    if (other && !mentioned.has(other)) {
-      await chQueueEmail(other, T('New message from','Nuevo mensaje de') + ' ' + CD.name, text);
+    // Group DMs have more than one "other" member — everyone gets
+    // notified of a new message, same as being messaged 1:1.
+    const others = (ch.members || []).filter(u => u !== CU.uid);
+    for (const uid of others) {
+      if (mentioned.has(uid)) continue; // already queued above
+      await chQueueEmail(uid, T('New message from','Nuevo mensaje de') + ' ' + CD.name, text);
     }
   }
 }
@@ -9322,6 +9418,14 @@ async function chSend() {
       text, uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    // A new message reopens a DM for anyone who'd left it — same as
+    // closing a DM in Slack, where it comes back the moment someone
+    // writes in it again.
+    const ch = (window._chChannels || []).find(c => c.id === window._chActive);
+    if (ch && ch.kind === 'dm' && (ch.hiddenFor || []).length) {
+      await db.collection('channels').doc(window._chActive).update({ hiddenFor: [] });
+      ch.hiddenFor = [];
+    }
   } catch (e) { toast('Could not send — ' + e.message, 'err'); el.value = text; }
 }
 
