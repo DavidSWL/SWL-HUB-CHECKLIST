@@ -899,6 +899,14 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   50% { opacity:.3; transform:scale(.75); }
 }
 .live-dot { display:inline-block; animation: liveDotPulse 1.4s ease-in-out infinite; }
+/* The truck/tool icon sitting at a ticket's current stage on the Ticket
+   Progress tracker gets a gentle bob, so it reads as "sitting right
+   here, right now" rather than a static pin. */
+@keyframes progressIconBob {
+  0%,100% { transform:translateY(0); }
+  50% { transform:translateY(-3px); }
+}
+.progress-icon-bob { display:inline-block; animation: progressIconBob 1s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -9983,6 +9991,9 @@ function shopAssetTypeLabel(t) {
   return T({vehicle:'Vehicle',heavy_equipment:'Heavy Equipment',power_tool:'Power Tool',lawn_equipment:'Lawn Equipment',trailer:'Trailer'}[t] || t,
            {vehicle:'Vehículo',heavy_equipment:'Equipo Pesado',power_tool:'Herramienta Eléctrica',lawn_equipment:'Equipo de Jardín',trailer:'Remolque'}[t] || t);
 }
+function shopAssetTypeIcon(t) {
+  return { vehicle:'🚚', heavy_equipment:'🚜', power_tool:'🔧', lawn_equipment:'🌿', trailer:'🚛' }[t] || '🎫';
+}
 function shopStatusLabel(s) {
   return T({active:'Active',down:'Down',retired:'Retired'}[s] || s,
            {active:'Activo',down:'Fuera de Servicio',retired:'Retirado'}[s] || s);
@@ -10425,6 +10436,36 @@ async function renderShopTicketProgress() {
 
 function shopSetProgressFilter(val) { window._shopProgressFilter = val; shopPaintTicketProgress(); }
 
+// A small horizontal stepper — Submitted / In Shop / Ready / Picked Up —
+// with the asset's own icon (truck for a vehicle, wrench for a power
+// tool, etc., via shopAssetTypeIcon) sitting at whichever stage it's
+// actually at right now, gently bobbing so it reads as "here, right now"
+// rather than a static status word. Skipped for cancelled/not-repairable
+// tickets — those didn't move through stages, they just stopped.
+function shopProgressTracker(t) {
+  const idx = { submitted:0, acknowledged:0, in_progress:1, ready_pickup:2, closed:3 }[t.status];
+  if (idx === undefined) return '';
+  const icon = shopAssetTypeIcon(t.assetType);
+  const stages = [T('Submitted','Enviado'), T('In Shop','En el Taller'), T('Ready','Listo'), T('Picked Up','Recogido')];
+  const dots = stages.map((label, i) => {
+    const pos = 4 + (i / (stages.length - 1)) * 92;
+    const done = i < idx, current = i === idx;
+    return '<div style="position:absolute;top:2px;left:' + pos + '%;transform:translateX(-50%)">'
+      + (current
+          ? '<span class="progress-icon-bob" style="font-size:15px">' + icon + '</span>'
+          : '<div style="width:11px;height:11px;border-radius:50%;background:' + (done ? 'var(--success)' : 'var(--surface2)') + ';border:2px solid ' + (done ? 'var(--success)' : 'var(--border2)') + '"></div>')
+      + '</div>';
+  }).join('');
+  return '<div style="margin-top:10px;position:relative;height:20px">'
+    + '<div style="position:absolute;top:6.5px;left:4%;right:4%;height:2px;background:var(--border)"></div>'
+    + '<div style="position:absolute;top:6.5px;left:4%;height:2px;background:var(--success);width:' + (idx / (stages.length - 1) * 92) + '%;transition:width .4s"></div>'
+    + dots
+    + '</div>'
+    + '<div style="display:flex;margin-top:2px">'
+    + stages.map((label, i) => '<div style="flex:1;text-align:center;font-size:9px;color:' + (i===idx?'var(--text)':'var(--text3)') + ';font-weight:' + (i===idx?'700':'400') + '">' + label + '</div>').join('')
+    + '</div>';
+}
+
 function shopPaintTicketProgress() {
   const ca = document.getElementById('content-area');
   const filter = window._shopProgressFilter;
@@ -10453,7 +10494,8 @@ function shopPaintTicketProgress() {
         const partsBadge = t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '';
         const outsourcedBadge = t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Outside Shop','Taller Externo') + '</span>' : '';
         const flashCls = flashIds.has(t.id) ? ' yard-flash-new' : '';
-        return '<div class="' + flashCls.trim() + '" style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;border-radius:10px" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
+        return '<div class="' + flashCls.trim() + '" style="padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;border-radius:10px" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
+          + '<div style="display:flex;align-items:flex-start;gap:12px">'
           + '<div style="flex:1;min-width:0">'
           + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + priorityBadge + partsBadge + outsourcedBadge + '</div>'
           + '<div style="font-size:12.5px;color:var(--text2);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.issue || '') + '</div>'
@@ -10467,6 +10509,8 @@ function shopPaintTicketProgress() {
               : (t.estimatedPickupDate ? '<span>·</span><span>🕐 ' + T('Est. pickup','Recogida est.') + ' ' + shopFmtDateOnly(t.estimatedPickupDate) + '</span>' : ''))
           + '</div></div>'
           + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
+          + '</div>'
+          + shopProgressTracker(t)
           + '</div>';
       }).join('') : '<div class="empty">' + T('No tickets here.','No hay boletos aquí.') + '</div>')
     + '</div>';
@@ -10567,7 +10611,7 @@ async function shopSaveTicket() {
   btn.disabled = true; btn.textContent = T('Submitting…','Enviando…');
   try {
     const ref = await db.collection('shop_tickets').add({
-      assetId, unitNumber: asset?.unitNumber || '', divisionId,
+      assetId, unitNumber: asset?.unitNumber || '', assetType: asset?.assetType || null, divisionId,
       issue, priority, status: 'submitted', partsPending: false,
       estimatedDropoffDate, requestedReturnDate,
       submittedByUserId: CU.uid, submittedByName: CD.name,
