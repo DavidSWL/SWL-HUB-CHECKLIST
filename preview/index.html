@@ -883,6 +883,14 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   50% { border-color:var(--danger); background:var(--danger-l); }
 }
 .yard-urgent-pulse { animation: yardUrgentPulse 1.3s ease-in-out infinite; }
+/* Ticket Progress — a steadily pulsing dot on the "Live" badge so the
+   screen reads as watching, not static, plus the same one-time flash
+   the kiosk uses, reused here for a row whose status just changed. */
+@keyframes liveDotPulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50% { opacity:.3; transform:scale(.75); }
+}
+.live-dot { display:inline-block; animation: liveDotPulse 1.4s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -10379,16 +10387,28 @@ function shopSetTicketFilter(val) { window._shopTicketFilter = val; shopPaintTic
 window._shopProgressUnsub = null;
 window._shopProgressTickets = [];
 window._shopProgressFilter = 'open';
+window._shopProgressLastStatus = null; // null until the first snapshot — nothing to compare against yet, so nothing flashes on cold load
+window._shopProgressFlashIds = new Set();
 
 async function renderShopTicketProgress() {
   const ca = document.getElementById('content-area');
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   if (window._shopProgressUnsub) { window._shopProgressUnsub(); window._shopProgressUnsub = null; }
+  window._shopProgressLastStatus = null;
   window._shopProgressUnsub = db.collection('shop_tickets').where('submittedByUserId','==',CU.uid)
     .onSnapshot(snap => {
-      window._shopProgressTickets = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+      const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() }))
         .sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
-      window._shopTickets = window._shopProgressTickets;
+      // A row whose status changed since the last snapshot gets a one-time
+      // flash — the visible proof that this screen really is live, not
+      // just a badge that says so.
+      if (window._shopProgressLastStatus) {
+        const changed = tickets.filter(t => window._shopProgressLastStatus.get(t.id) !== t.status);
+        if (changed.length) window._shopProgressFlashIds = new Set(changed.map(t => t.id));
+      }
+      window._shopProgressLastStatus = new Map(tickets.map(t => [t.id, t.status]));
+      window._shopProgressTickets = tickets;
+      window._shopTickets = tickets;
       shopPaintTicketProgress();
     }, err => {
       ca.innerHTML = '<div class="empty">' + esc(err.message) + '</div>';
@@ -10400,6 +10420,7 @@ function shopSetProgressFilter(val) { window._shopProgressFilter = val; shopPain
 function shopPaintTicketProgress() {
   const ca = document.getElementById('content-area');
   const filter = window._shopProgressFilter;
+  const flashIds = window._shopProgressFlashIds || new Set();
   const openStatuses = ['submitted','acknowledged','in_progress'];
   const list = (window._shopProgressTickets || []).filter(t => {
     if (filter === 'open') return openStatuses.includes(t.status);
@@ -10414,7 +10435,7 @@ function shopPaintTicketProgress() {
 
   ca.innerHTML = '<div class="card">'
     + '<div class="card-header"><div class="card-title">📡 ' + T('Ticket Progress','Progreso del Boleto')
-      + ' <span style="font-size:10px;font-weight:700;color:var(--success);background:var(--success-l);padding:2px 8px;border-radius:20px;margin-left:6px">● ' + T('Live','En Vivo') + '</span></div></div>'
+      + ' <span style="font-size:10px;font-weight:700;color:var(--success);background:var(--success-l);padding:2px 8px;border-radius:20px;margin-left:6px"><span class="live-dot">●</span> ' + T('Live','En Vivo') + '</span></div></div>'
     + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:14px">' + T('Updates automatically as your request moves through the shop — no need to refresh.','Se actualiza automáticamente a medida que tu solicitud avanza — no necesitas actualizar.') + '</div>'
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
     + chips.map(([k,label]) => '<button class="btn sm' + (filter===k?' primary':'') + '" onclick="shopSetProgressFilter(\'' + k + '\')">' + label + '</button>').join('')
@@ -10423,7 +10444,8 @@ function shopPaintTicketProgress() {
         const priorityBadge = t.priority === 'urgent' ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('URGENT','URGENTE') + '</span>' : '';
         const partsBadge = t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '';
         const outsourcedBadge = t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Outside Shop','Taller Externo') + '</span>' : '';
-        return '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
+        const flashCls = flashIds.has(t.id) ? ' yard-flash-new' : '';
+        return '<div class="' + flashCls.trim() + '" style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;border-radius:10px" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
           + '<div style="flex:1;min-width:0">'
           + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + priorityBadge + partsBadge + outsourcedBadge + '</div>'
           + '<div style="font-size:12.5px;color:var(--text2);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.issue || '') + '</div>'
@@ -10440,6 +10462,10 @@ function shopPaintTicketProgress() {
           + '</div>';
       }).join('') : '<div class="empty">' + T('No tickets here.','No hay boletos aquí.') + '</div>')
     + '</div>';
+
+  // Same rule as the kiosk's flash — fire once for this paint (already
+  // baked into the HTML above), not on every later unrelated repaint.
+  window._shopProgressFlashIds = new Set();
 }
 
 // One-click unblock for "the New Ticket picker is empty" — creates a real,
