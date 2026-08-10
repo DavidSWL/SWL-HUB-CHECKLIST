@@ -9895,13 +9895,13 @@ const SHOP_DEFAULT_BRANCHES = [
   { code:'NV', name:'Nevada' }
 ];
 
-const SHOP_ASSET_TYPES = ['vehicle','equipment','tool'];
+const SHOP_ASSET_TYPES = ['vehicle','heavy_equipment','power_tool','lawn_equipment','trailer'];
 const SHOP_METER_TYPES = ['odometer','hours','none'];
 const SHOP_ASSET_STATUSES = ['active','down','retired'];
 
 function shopAssetTypeLabel(t) {
-  return T({vehicle:'Vehicle',equipment:'Equipment',tool:'Tool'}[t] || t,
-           {vehicle:'Vehículo',equipment:'Equipo',tool:'Herramienta'}[t] || t);
+  return T({vehicle:'Vehicle',heavy_equipment:'Heavy Equipment',power_tool:'Power Tool',lawn_equipment:'Lawn Equipment',trailer:'Trailer'}[t] || t,
+           {vehicle:'Vehículo',heavy_equipment:'Equipo Pesado',power_tool:'Herramienta Eléctrica',lawn_equipment:'Equipo de Jardín',trailer:'Remolque'}[t] || t);
 }
 function shopStatusLabel(s) {
   return T({active:'Active',down:'Down',retired:'Retired'}[s] || s,
