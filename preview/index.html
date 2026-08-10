@@ -1031,7 +1031,10 @@ const ROLES = {
   // screen the same way ops_specialist_oc is, so a shared yard account
   // (build plan §11.4, still open) never sees any other nav — tap-only,
   // no menus, per the build plan's kiosk spec.
-  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)', restrictedTo:'yard-kiosk' }
+  // Chat included (not just the kiosk) so a shared yard account can still
+  // report issues — David: "the only things he needs to see is yard kiosk
+  // and the chat... he does not need or get access to anything else."
+  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)', restrictedTo:['yard-kiosk','chat'] }
 };
 
 const TEAM = [
@@ -1410,7 +1413,10 @@ function enterApp() {
   // the user to open Chat, so the rail badge is ambient the way Slack's
   // is — visible from any screen, not just when Chat happens to be open.
   chBootstrapUnread();
-  navigateTo(ROLES[CD.role]?.restrictedTo || 'dashboard');
+  {
+    const rt = ROLES[CD.role]?.restrictedTo;
+    navigateTo((Array.isArray(rt) ? rt[0] : rt) || 'dashboard');
+  }
 }
 
 async function chBootstrapUnread() {
@@ -1440,6 +1446,7 @@ async function doSignOut() {
   window._chUnread = {};
   if (window._chUnsub) { window._chUnsub(); window._chUnsub = null; }
   if (window._shopYardUnsub) { window._shopYardUnsub(); window._shopYardUnsub = null; }
+  if (window._shopProgressUnsub) { window._shopProgressUnsub(); window._shopProgressUnsub = null; }
   await auth.signOut();
   // Tear the Spanish observer down — otherwise it survives into the next
   // sign-in on the same tab and would keep translating for an English user.
@@ -1541,18 +1548,22 @@ function wsAreas() {
     ]});
   }
   // Shop Tickets — Phase 1 (asset registry) + Phase 2 (ticket core). Per
-  // the build plan's own role table: Admin has everything, Manager can
-  // submit tickets and add equipment, Executive is read-only reports/
-  // exceptions (nothing built for exec yet, so not shown to them until
-  // there's something to see), Yard supervisor is a separate kiosk UI
+  // the build plan's own role table: Manager can submit tickets and track
+  // them, Admin has everything, Executive is read-only oversight (Asset
+  // Registry + Pending Review, same as admin sees, but no submit/track —
+  // that's a requestor thing), Yard supervisor is a separate kiosk UI
   // (Phase 3), never this nav.
-  if (isManager) {
-    const shopScreens = [
-      { id:'shop-tickets', icon:'🎫', label:T('Submit Ticket','Enviar Boleto') },
-      { id:'shop-assets', icon:'🚚', label:T('Asset Registry','Registro de Activos') }
-    ];
-    if (role === 'admin') shopScreens.push({ id:'shop-pending', icon:'⏳', label:T('Pending Review','Revisión Pendiente') });
-    areas.push({ id:'shop', icon:'🎫', label:T('Shop Tickets','Boletos del Taller'), screens: shopScreens });
+  {
+    const shopScreens = [];
+    if (isManager) {
+      shopScreens.push({ id:'shop-tickets', icon:'🎫', label:T('Submit Ticket','Enviar Boleto') });
+      shopScreens.push({ id:'shop-progress', icon:'📡', label:T('Ticket Progress','Progreso del Boleto') });
+    }
+    if (role === 'admin' || isExec) {
+      shopScreens.push({ id:'shop-assets', icon:'🚚', label:T('Asset Registry','Registro de Activos') });
+      shopScreens.push({ id:'shop-pending', icon:'⏳', label:T('Pending Review','Revisión Pendiente') });
+    }
+    if (shopScreens.length) areas.push({ id:'shop', icon:'🎫', label:T('Shop Tickets','Boletos del Taller'), screens: shopScreens });
   }
   // Phase 3 kiosk — the yard role's ONLY screen (enforced below via
   // restrictedTo). Also shown to admin, additively, purely so David can
@@ -1573,10 +1584,15 @@ function wsAreas() {
     ]});
   }
 
-  // A role locked to a single screen only ever sees the one area that
-  // contains it — same guarantee the old single-icon branch gave.
+  // A role locked to specific screens only ever sees the area(s) that
+  // contain them — same guarantee the old single-icon branch gave, now
+  // generalized to a list rather than exactly one screen (the yard role
+  // needs both the kiosk and Chat, nothing else).
   const restrictedTo = ROLES[role]?.restrictedTo;
-  if (restrictedTo) return areas.filter(a => a.screens.some(s => s.id === restrictedTo));
+  if (restrictedTo) {
+    const allowed = Array.isArray(restrictedTo) ? restrictedTo : [restrictedTo];
+    return areas.filter(a => a.screens.some(s => allowed.includes(s.id)));
+  }
   return areas;
 }
 
@@ -1801,12 +1817,15 @@ document.addEventListener('click', closeAllMenus);
 // NAVIGATION — NO scroll reset
 // ══════════════════════════════════════════════════
 function navigateTo(screen) {
-  // A role locked to a single screen (e.g. ops_specialist_oc) has no nav
-  // buttons pointing anywhere else, but defend against stale bookmarks/
-  // browser history/leftover pending-nav state trying to reach anything
-  // outside their one allowed screen.
+  // A role locked to specific screens (e.g. ops_specialist_oc, yard) has
+  // no nav buttons pointing anywhere else, but defend against stale
+  // bookmarks/browser history/leftover pending-nav state trying to reach
+  // anything outside their allowed set.
   const restrictedTo = ROLES[CD?.role]?.restrictedTo;
-  if (restrictedTo && screen !== restrictedTo) screen = restrictedTo;
+  if (restrictedTo) {
+    const allowed = Array.isArray(restrictedTo) ? restrictedTo : [restrictedTo];
+    if (!allowed.includes(screen)) screen = allowed[0];
+  }
   activeScreen = screen;
   // Rebuild the rail + sidebar so the active area and screen highlight
   // follow, including for screens reached without a nav click (dashboard
@@ -1861,6 +1880,7 @@ function renderScreen(screen) {
     'chat':           { title: T('Chat','Chat'),           fn: renderChat },
     'docs':           { title: T('Docs','Documentos'),     fn: renderDocs },
     'shop-tickets':   { title: T('Submit Ticket','Enviar Boleto'),        fn: renderShopTickets },
+    'shop-progress':  { title: T('Ticket Progress','Progreso del Boleto'), fn: renderShopTicketProgress },
     'shop-assets':    { title: T('Asset Registry','Registro de Activos'), fn: renderShopAssets },
     'shop-pending':   { title: T('Pending Review','Revisión Pendiente'),  fn: renderShopPending },
     'yard-kiosk':     { title: T('Yard Kiosk','Kiosco de Patio'),        fn: renderYardKiosk },
@@ -9960,8 +9980,11 @@ window._shopAssets = [];
 
 async function renderShopAssets() {
   const ca = document.getElementById('content-area');
-  const isManager = ROLES[CD.role]?.isManager || CD.role === 'admin';
-  if (!isManager) { ca.innerHTML = '<div class="empty">' + T('Shop Tickets is only available to managers and admin.','Boletos del Taller solo está disponible para gerentes y admin.') + '</div>'; return; }
+  // Nav access is already admin/exec-only; this is defense in depth
+  // against a stale link, matching the actual gate exactly rather than
+  // the broader isManager check that used to let any manager in here.
+  const canView = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!canView) { ca.innerHTML = '<div class="empty">' + T('Asset Registry is only available to admin and executives.','El Registro de Activos solo está disponible para admin y ejecutivos.') + '</div>'; return; }
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   try {
     const snap = await db.collection('shop_assets').get();
@@ -9988,7 +10011,7 @@ function shopPaintAssets() {
   ca.innerHTML = '<div class="card" style="margin-bottom:16px">'
     + '<div class="card-header"><div class="card-title">🚚 ' + T('Asset Registry','Registro de Activos') + '</div>'
     + '<div style="display:flex;gap:8px;align-items:center">'
-    + (CD.role === 'admin' && pendingCount ? '<button class="btn sm" style="background:var(--warn-l);color:var(--warn);border-color:transparent" onclick="wsGoScreen(\'shop-pending\')">⏳ ' + pendingCount + ' ' + T('pending','pendientes') + '</button>' : '')
+    + ((CD.role === 'admin' || CD.role === 'exec_viewer') && pendingCount ? '<button class="btn sm" style="background:var(--warn-l);color:var(--warn);border-color:transparent" onclick="wsGoScreen(\'shop-pending\')">⏳ ' + pendingCount + ' ' + T('pending','pendientes') + '</button>' : '')
     + '<button class="btn primary" onclick="shopOpenAssetForm()">+ ' + T('Add Asset','Agregar Activo') + '</button>'
     + '</div></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
@@ -10163,7 +10186,8 @@ async function shopSaveAsset(assetId) {
 // ══ Pending review queue (admin only) ══
 async function renderShopPending() {
   const ca = document.getElementById('content-area');
-  if (CD.role !== 'admin') { ca.innerHTML = '<div class="empty">Admin only.</div>'; return; }
+  const canView = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!canView) { ca.innerHTML = '<div class="empty">' + T('Admin and executives only.','Solo admin y ejecutivos.') + '</div>'; return; }
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   try {
     const snap = await db.collection('shop_assets').where('pendingReview','==',true).get();
@@ -10181,8 +10205,8 @@ async function renderShopPending() {
           + esc([a.make,a.model,a.year].filter(Boolean).join(' ') || '—') + ' · ' + esc(shopDivisionName(a.divisionId)) + '</div>'
           + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + T('Added by','Agregado por') + ' ' + esc(a.addedByUserName || '—') + '</div>'
           + '</div>'
-          + '<button class="btn sm" style="background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopConfirmAsset(\'' + a.id + '\')">✓ ' + T('Confirm','Confirmar') + '</button>'
-          + '<button class="btn sm" style="background:var(--danger-l);color:var(--danger);border-color:transparent" onclick="shopRejectAsset(\'' + a.id + '\',\'' + esc(a.unitNumber).replace(/'/g,"\\'") + '\')">' + T('Reject','Rechazar') + '</button>'
+          + (CD.role === 'admin' ? '<button class="btn sm" style="background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopConfirmAsset(\'' + a.id + '\')">✓ ' + T('Confirm','Confirmar') + '</button>'
+              + '<button class="btn sm" style="background:var(--danger-l);color:var(--danger);border-color:transparent" onclick="shopRejectAsset(\'' + a.id + '\',\'' + esc(a.unitNumber).replace(/'/g,"\\'") + '\')">' + T('Reject','Rechazar') + '</button>' : '')
           + '</div>'
         ).join('') : '<div class="empty">' + T('Nothing pending.','Nada pendiente.') + '</div>')
       + '</div>';
@@ -10343,6 +10367,81 @@ function shopPaintTickets() {
 
 function shopSetTicketFilter(val) { window._shopTicketFilter = val; shopPaintTickets(); }
 
+// ══════════════════════════════════════════════════════════════════════
+// Ticket Progress — a live-updating variant of Submit Ticket's list.
+// Queries only this user's tickets server-side (where submittedByUserId
+// == uid) rather than loading everyone's and filtering client-side, then
+// stays subscribed so a status change from the Yard Kiosk shows up here
+// without a manual refresh — same onSnapshot pattern the kiosk itself
+// uses. Shares window._shopTickets with Submit Ticket so shopOpenTicket-
+// Detail works unmodified regardless of which screen opened it.
+// ══════════════════════════════════════════════════════════════════════
+window._shopProgressUnsub = null;
+window._shopProgressTickets = [];
+window._shopProgressFilter = 'open';
+
+async function renderShopTicketProgress() {
+  const ca = document.getElementById('content-area');
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  if (window._shopProgressUnsub) { window._shopProgressUnsub(); window._shopProgressUnsub = null; }
+  window._shopProgressUnsub = db.collection('shop_tickets').where('submittedByUserId','==',CU.uid)
+    .onSnapshot(snap => {
+      window._shopProgressTickets = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+        .sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+      window._shopTickets = window._shopProgressTickets;
+      shopPaintTicketProgress();
+    }, err => {
+      ca.innerHTML = '<div class="empty">' + esc(err.message) + '</div>';
+    });
+}
+
+function shopSetProgressFilter(val) { window._shopProgressFilter = val; shopPaintTicketProgress(); }
+
+function shopPaintTicketProgress() {
+  const ca = document.getElementById('content-area');
+  const filter = window._shopProgressFilter;
+  const openStatuses = ['submitted','acknowledged','in_progress'];
+  const list = (window._shopProgressTickets || []).filter(t => {
+    if (filter === 'open') return openStatuses.includes(t.status);
+    if (filter === 'ready_pickup') return t.status === 'ready_pickup';
+    if (filter === 'closed') return t.status === 'closed' || t.status === 'cancelled' || t.status === 'not_repairable';
+    return true;
+  });
+  const chips = [
+    ['open', T('Open','Abiertos')], ['ready_pickup', T('Ready for Pickup','Listos para Recoger')],
+    ['closed', T('Closed','Cerrados')], ['all', T('All','Todos')]
+  ];
+
+  ca.innerHTML = '<div class="card">'
+    + '<div class="card-header"><div class="card-title">📡 ' + T('Ticket Progress','Progreso del Boleto')
+      + ' <span style="font-size:10px;font-weight:700;color:var(--success);background:var(--success-l);padding:2px 8px;border-radius:20px;margin-left:6px">● ' + T('Live','En Vivo') + '</span></div></div>'
+    + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:14px">' + T('Updates automatically as your request moves through the shop — no need to refresh.','Se actualiza automáticamente a medida que tu solicitud avanza — no necesitas actualizar.') + '</div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
+    + chips.map(([k,label]) => '<button class="btn sm' + (filter===k?' primary':'') + '" onclick="shopSetProgressFilter(\'' + k + '\')">' + label + '</button>').join('')
+    + '</div>'
+    + (list.length ? list.map(t => {
+        const priorityBadge = t.priority === 'urgent' ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('URGENT','URGENTE') + '</span>' : '';
+        const partsBadge = t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '';
+        const outsourcedBadge = t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Outside Shop','Taller Externo') + '</span>' : '';
+        return '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + priorityBadge + partsBadge + outsourcedBadge + '</div>'
+          + '<div style="font-size:12.5px;color:var(--text2);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.issue || '') + '</div>'
+          + '<div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+          + shopDivisionChip(t.divisionId)
+          + '<span>·</span><span>' + shopFmtWhen(t.createdAt) + '</span>'
+          + (t.estimatedDropoffDate ? '<span>·</span><span>📅 ' + T('Drop-off','Entrega') + ' ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</span>' : '')
+          + (t.requestedReturnDate ? '<span>·</span><span>↩ ' + T('Needed by','Se necesita para') + ' ' + shopFmtDateOnly(t.requestedReturnDate) + '</span>' : '')
+          + (t.estimatedFixDate ? '<span>·</span><span>🔧 ' + T('Est. fix','Reparación est.') + ' ' + shopFmtDateOnly(t.estimatedFixDate) + '</span>' : '')
+          + (t.pickupDate ? '<span>·</span><span>🕐 ' + T('Pickup','Recogida') + ' ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</span>'
+              : (t.estimatedPickupDate ? '<span>·</span><span>🕐 ' + T('Est. pickup','Recogida est.') + ' ' + shopFmtDateOnly(t.estimatedPickupDate) + '</span>' : ''))
+          + '</div></div>'
+          + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
+          + '</div>';
+      }).join('') : '<div class="empty">' + T('No tickets here.','No hay boletos aquí.') + '</div>')
+    + '</div>';
+}
+
 // One-click unblock for "the New Ticket picker is empty" — creates a real,
 // confirmed registry entry (never a free-text ticket) so the picker has
 // something to select, then reopens the ticket form with it available.
@@ -10395,8 +10494,8 @@ function shopOpenTicketForm() {
     + SHOP_TICKET_PRIORITIES.map(p => '<option value="' + p + '"' + (p==='normal'?' selected':'') + '>' + shopPriorityLabel(p) + '</option>').join('')
     + '</select></div>'
     + '<div class="g2">'
-    + '<div class="fg"><label>' + T('Estimated Drop-off Date','Fecha Estimada de Entrega') + '</label><input type="date" id="st-dropoff"></div>'
-    + '<div class="fg"><label>' + T('Requested Return Date','Fecha de Regreso Solicitada') + '</label><input type="date" id="st-return"></div>'
+    + '<div class="fg"><label>' + T('Estimated Drop-off Date','Fecha Estimada de Entrega') + '<span class="req">*</span></label><input type="date" id="st-dropoff"></div>'
+    + '<div class="fg"><label>' + T('Requested Return Date','Fecha de Regreso Solicitada') + '<span class="req">*</span></label><input type="date" id="st-return"></div>'
     + '</div>'
     + '<div style="display:flex;gap:8px;margin-top:8px">'
     + '<button class="btn primary" id="st-save-btn" onclick="shopSaveTicket()">' + T('Submit','Enviar') + '</button>'
@@ -10427,6 +10526,8 @@ async function shopSaveTicket() {
   const requestedReturnDate = document.getElementById('st-return').value || null;
   if (!assetId) { toast(T('Select an asset','Selecciona un activo'), 'err'); return; }
   if (!issue) { toast(T('Describe the issue','Describe el problema'), 'err'); return; }
+  if (!estimatedDropoffDate) { toast(T('Estimated Drop-off Date is required','La Fecha Estimada de Entrega es obligatoria'), 'err'); return; }
+  if (!requestedReturnDate) { toast(T('Requested Return Date is required','La Fecha de Regreso Solicitada es obligatoria'), 'err'); return; }
   const asset = (window._shopAssets || []).find(a => a.id === assetId);
   const btn = document.getElementById('st-save-btn');
   btn.disabled = true; btn.textContent = T('Submitting…','Enviando…');
@@ -10582,9 +10683,10 @@ window._shopYardUnsub = null;
 window._shopYardSeenIds = null; // null until the first snapshot lands — that first one is the existing backlog, not "new arrivals"
 window._shopYardFlashIds = new Set();
 
-// Two-tone chime via Web Audio, not an audio file — nothing to host, and
-// it still needs a user gesture to have happened on the page first (true
-// here: they had to tap into this screen), or browsers block autoplay.
+// Two-tone chime via Web Audio, not an audio file — nothing to host. The
+// context itself is created/unlocked in renderYardKiosk() (inside the nav
+// click that got you here); this just plays a tone on that already-live
+// context, which works fine from an async callback like onSnapshot.
 function shopYardBeep() {
   try {
     if (!window._shopAudioCtx) window._shopAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -10606,6 +10708,16 @@ function shopYardBeep() {
 async function renderYardKiosk() {
   const ca = document.getElementById('content-area');
   if (CD.role !== 'yard' && CD.role !== 'admin') { ca.innerHTML = '<div class="empty">Acceso restringido.</div>'; return; }
+  // Browsers only allow creating/resuming an AudioContext during an actual
+  // user gesture — a Firestore onSnapshot callback later doesn't count,
+  // which is exactly why the beep was silently failing. This function is
+  // only ever reached via a nav click, so creating (and resuming) the
+  // context HERE, before any await, keeps it inside that gesture's call
+  // stack. shopYardBeep() later just reuses this already-unlocked context.
+  try {
+    if (!window._shopAudioCtx) window._shopAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (window._shopAudioCtx.state === 'suspended') window._shopAudioCtx.resume();
+  } catch (e) { /* no audio available — the flash still shows on its own */ }
   ca.innerHTML = '<div class="empty">Cargando…</div>';
   if (window._shopYardUnsub) { window._shopYardUnsub(); window._shopYardUnsub = null; }
   window._shopYardSeenIds = null;
@@ -10625,13 +10737,26 @@ async function renderYardKiosk() {
   window._shopYardUnsub = db.collection('shop_tickets').orderBy('createdAt','desc')
     .onSnapshot(snap => {
       window._shopTickets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      if (window._shopYardSeenIds) {
-        const arrived = window._shopTickets.filter(t =>
-          !window._shopYardSeenIds.has(t.id) && (t.status === 'submitted' || t.status === 'acknowledged'));
-        if (arrived.length) {
-          window._shopYardFlashIds = new Set(arrived.map(t => t.id));
-          shopYardBeep();
+      const isFirstSnapshot = !window._shopYardSeenIds;
+      const now = Date.now();
+      const arrived = window._shopTickets.filter(t => {
+        if (t.status !== 'submitted' && t.status !== 'acknowledged') return false;
+        if (window._shopYardSeenIds && window._shopYardSeenIds.has(t.id)) return false;
+        // On a cold screen-open there's no "seen" set yet to compare
+        // against, so treat the whole backlog as already-seen EXCEPT
+        // anything submitted in roughly the last couple minutes — covers
+        // "I just submitted this from Submit Ticket and switched straight
+        // to the kiosk" without beeping through the entire day's backlog
+        // every time the screen loads.
+        if (isFirstSnapshot) {
+          const created = t.createdAt?.toDate ? t.createdAt.toDate().getTime() : 0;
+          return created && (now - created) < 120000;
         }
+        return true;
+      });
+      if (arrived.length) {
+        window._shopYardFlashIds = new Set(arrived.map(t => t.id));
+        shopYardBeep();
       }
       window._shopYardSeenIds = new Set(window._shopTickets.map(t => t.id));
       shopPaintYardKiosk();
@@ -10730,7 +10855,8 @@ async function shopPaintYardConfirm(ticketId, kind) {
     + '<div style="text-align:center">'
     + '<div style="font-size:22px;font-weight:800;margin-bottom:4px">' + esc(t.unitNumber || '—') + '</div>'
     + '<div style="font-size:13px;color:var(--text2);margin-bottom:6px">' + esc(t.issue || '') + '</div>'
-    + (t.issue ? '<button onclick="shopYardTranslateIssue(\'' + ticketId + '\')" style="background:none;border:none;color:var(--info);font-size:12px;font-weight:700;cursor:pointer;margin-bottom:8px">🌐 Traducir</button>' : '')
+    + (t.issue ? '<button onclick="shopYardTranslateIssue(\'' + ticketId + '\')" style="background:none;border:none;color:var(--info);font-size:12px;font-weight:700;cursor:pointer">🌐 Traducir</button>'
+        + '<div id="syd-tr-' + ticketId + '" style="font-size:13px;color:var(--info);font-style:italic;margin-top:4px;margin-bottom:6px"></div>' : '')
     + (badges ? '<div style="margin-bottom:12px">' + badges + '</div>' : '')
     + '</div>'
     + (kind === 'ready' ? shopYardProgressBlock(ticketId, t) : '')
@@ -10754,15 +10880,22 @@ async function shopPaintYardConfirm(ticketId, kind) {
     + '<button onclick="shopYardDoConfirm(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:18px;font-size:17px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ ' + actionLabel + '</button>';
 }
 
-// Opens Google Translate pre-filled with the ticket's issue text, English
-// to Spanish — same no-API-key pattern swlOpenTranslate already uses for
-// weekly summaries. A manager may well write the issue in English; the
-// yard supervisor's screen is Spanish-only, so this bridges that gap
-// without needing a translation API/billing decision.
-function shopYardTranslateIssue(ticketId) {
+// Translates in place — no navigating away from the kiosk. Uses Google's
+// public (unofficial, no-key-needed) translate endpoint, the same one
+// countless free client-side translate widgets rely on; there's no billing
+// decision or API key to wire up here, and if it's ever unavailable this
+// just fails quietly and the original English text is still right there.
+async function shopYardTranslateIssue(ticketId) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
-  if (!t || !t.issue) return;
-  window.open('https://translate.google.com/?sl=en&tl=es&op=translate&text=' + encodeURIComponent(t.issue), '_blank', 'noopener');
+  const el = document.getElementById('syd-tr-' + ticketId);
+  if (!t || !t.issue || !el) return;
+  el.textContent = 'Traduciendo…';
+  try {
+    const res = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=es&dt=t&q=' + encodeURIComponent(t.issue));
+    const data = await res.json();
+    const translated = (data[0] || []).map(seg => seg[0]).join('');
+    el.textContent = translated || 'No se pudo traducir.';
+  } catch (e) { el.textContent = 'No se pudo traducir.'; }
 }
 
 async function shopYardAddNote(ticketId, kind) {
