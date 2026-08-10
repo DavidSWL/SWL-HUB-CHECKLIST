@@ -1012,7 +1012,11 @@ const ROLES = {
   // employee access (dashboard, check-in form, weekly items). This one is
   // deliberately locked down to a single read-only screen, so it's a
   // separate role rather than a branch variant of the same one.
-  ops_specialist_oc:    { label:'Operations Specialist (OC)', branch:'OC', canViewAll:false, isManager:false, color:'var(--oc)', restrictedTo:'saturday-schedule' }
+  ops_specialist_oc:    { label:'Operations Specialist (OC)', branch:'OC', canViewAll:false, isManager:false, color:'var(--oc)', restrictedTo:'saturday-schedule' },
+  // Shop Tickets (Central Shop) — kiosk-only role, added ahead of the
+  // kiosk UI itself (that's Phase 3) so ROLES/admin user-creation already
+  // recognize it once a shared yard account exists (see build plan §11.4).
+  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)' }
 };
 
 const TEAM = [
@@ -1520,6 +1524,16 @@ function wsAreas() {
       { id:'docs', icon:'📚', label:T('Docs','Documentos') }
     ]});
   }
+  // Shop Tickets — Phase 1 only (asset registry). Per the build plan's own
+  // role table: Admin has everything, Manager can submit tickets and add
+  // equipment, Executive is read-only reports/exceptions (nothing built
+  // for exec yet, so not shown to them until there's something to see),
+  // Yard supervisor is a separate kiosk UI (Phase 3), never this nav.
+  if (isManager) {
+    const shopScreens = [{ id:'shop-assets', icon:'🚚', label:T('Asset Registry','Registro de Activos') }];
+    if (role === 'admin') shopScreens.push({ id:'shop-pending', icon:'⏳', label:T('Pending Review','Revisión Pendiente') });
+    areas.push({ id:'shop', icon:'🔧', label:T('Shop Tickets','Boletos del Taller'), screens: shopScreens });
+  }
   if (ocCrew) {
     areas.push({ id:'crew', icon:'🗓', label:T('Field Crew','Cuadrilla'), screens:[
       { id:'saturday-schedule', icon:'🗓', label:T('Saturday Schedule','Horario del Sábado') }
@@ -1818,6 +1832,8 @@ function renderScreen(screen) {
     'saturday-schedule': { title: T('Saturday Schedule', 'Horario del Sábado'), fn: renderSaturdaySchedule },
     'chat':           { title: T('Chat','Chat'),           fn: renderChat },
     'docs':           { title: T('Docs','Documentos'),     fn: renderDocs },
+    'shop-assets':    { title: T('Asset Registry','Registro de Activos'), fn: renderShopAssets },
+    'shop-pending':   { title: T('Pending Review','Revisión Pendiente'),  fn: renderShopPending },
   };
   const s = screens[screen];
   if (!s) return;
@@ -9854,6 +9870,338 @@ async function docDelete(id) {
     toast('✓ ' + T('Deleted','Eliminado'));
     renderDocs();
   } catch (e) { toast('Could not delete — ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════════════
+// SHOP TICKETS — Phase 1: foundation (branches, assets, pending review)
+// ══════════════════════════════════════════════════
+// Per the build plan: "Nothing else works without a clean asset list."
+// This is Phase 1 of 6 ONLY — the asset registry and its review queue.
+// Tickets, the yard kiosk, alerts, reports and mileage are separate,
+// later phases and are not touched here.
+//
+// All new collections, prefixed shop_ throughout so nothing here can
+// collide with the existing landscape-hub collections (users, weekly_
+// items, saturday_*, channels, docs). shop_branches is a DIFFERENT,
+// wider set of branches (OC/LA/IE/SB/NV) than the 2-branch CD.branch
+// system used everywhere else in this app — the build plan is explicit
+// this is a 5-branch shop operation, so it gets its own branch list
+// rather than overloading the existing OC/LA one.
+const SHOP_DEFAULT_BRANCHES = [
+  { code:'OC', name:'Orange County' },
+  { code:'LA', name:'Los Angeles' },
+  { code:'IE', name:'Inland Empire' },
+  { code:'SB', name:'San Bernardino' },
+  { code:'NV', name:'Nevada' }
+];
+
+const SHOP_ASSET_TYPES = ['vehicle','equipment','tool'];
+const SHOP_METER_TYPES = ['odometer','hours','none'];
+const SHOP_ASSET_STATUSES = ['active','down','retired'];
+
+function shopAssetTypeLabel(t) {
+  return T({vehicle:'Vehicle',equipment:'Equipment',tool:'Tool'}[t] || t,
+           {vehicle:'Vehículo',equipment:'Equipo',tool:'Herramienta'}[t] || t);
+}
+function shopStatusLabel(s) {
+  return T({active:'Active',down:'Down',retired:'Retired'}[s] || s,
+           {active:'Activo',down:'Fuera de Servicio',retired:'Retirado'}[s] || s);
+}
+function shopMeterLabel(m) {
+  return T({odometer:'Odometer',hours:'Hours',none:'None'}[m] || m,
+           {odometer:'Odómetro',hours:'Horas',none:'Ninguno'}[m] || m);
+}
+
+window._shopBranches = [];
+window._shopAssets = [];
+
+async function shopEnsureBranchesSeeded() {
+  const snap = await db.collection('shop_branches').get();
+  const have = new Set(snap.docs.map(d => d.data().code));
+  const missing = SHOP_DEFAULT_BRANCHES.filter(b => !have.has(b.code));
+  if (!missing.length) return;
+  const batch = db.batch();
+  missing.forEach(b => {
+    batch.set(db.collection('shop_branches').doc(), {
+      ...b, managerUserId: null, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  });
+  await batch.commit();
+}
+
+async function shopLoadBranches() {
+  const snap = await db.collection('shop_branches').get();
+  window._shopBranches = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+    .sort((a,b) => (a.code||'').localeCompare(b.code||''));
+}
+
+function shopBranchName(id) {
+  const b = (window._shopBranches || []).find(x => x.id === id);
+  return b ? b.code + ' — ' + b.name : '—';
+}
+
+async function renderShopAssets() {
+  const ca = document.getElementById('content-area');
+  const isManager = ROLES[CD.role]?.isManager || CD.role === 'admin';
+  if (!isManager) { ca.innerHTML = '<div class="empty">' + T('Shop Tickets is only available to managers and admin.','Boletos del Taller solo está disponible para gerentes y admin.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    await shopEnsureBranchesSeeded();
+    await shopLoadBranches();
+    const snap = await db.collection('shop_assets').get();
+    window._shopAssets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    window._shopFilterBranch = window._shopFilterBranch || '';
+    window._shopFilterType = window._shopFilterType || '';
+    shopPaintAssets();
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load Asset Registry</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderShopAssets()">Retry</button></div>';
+  }
+}
+
+function shopPaintAssets() {
+  const ca = document.getElementById('content-area');
+  const branch = window._shopFilterBranch, type = window._shopFilterType;
+  const list = (window._shopAssets || []).filter(a =>
+    (!branch || a.branchId === branch) && (!type || a.assetType === type)
+  ).sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
+  const pendingCount = (window._shopAssets || []).filter(a => a.pendingReview).length;
+
+  ca.innerHTML = '<div class="card" style="margin-bottom:16px">'
+    + '<div class="card-header"><div class="card-title">🚚 ' + T('Asset Registry','Registro de Activos') + '</div>'
+    + '<div style="display:flex;gap:8px;align-items:center">'
+    + (CD.role === 'admin' && pendingCount ? '<button class="btn sm" style="background:var(--warn-l);color:var(--warn);border-color:transparent" onclick="wsGoScreen(\'shop-pending\')">⏳ ' + pendingCount + ' ' + T('pending','pendientes') + '</button>' : '')
+    + '<button class="btn primary" onclick="shopOpenAssetForm()">+ ' + T('Add Asset','Agregar Activo') + '</button>'
+    + '</div></div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
+    + '<select id="shop-f-branch" onchange="shopSetFilter(\'branch\',this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
+    + '<option value="">' + T('All branches','Todas las sucursales') + '</option>'
+    + (window._shopBranches || []).map(b => '<option value="' + b.id + '"' + (branch === b.id ? ' selected' : '') + '>' + esc(b.code) + ' — ' + esc(b.name) + '</option>').join('')
+    + '</select>'
+    + '<select id="shop-f-type" onchange="shopSetFilter(\'type\',this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
+    + '<option value="">' + T('All types','Todos los tipos') + '</option>'
+    + SHOP_ASSET_TYPES.map(t => '<option value="' + t + '"' + (type === t ? ' selected' : '') + '>' + shopAssetTypeLabel(t) + '</option>').join('')
+    + '</select>'
+    + '</div>'
+    + '<div style="overflow-x:auto">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:640px">'
+    + '<thead><tr>'
+    + ['Unit #','Type','Make / Model','Branch','Status','Meter'].map((h,i) => {
+        const hEs = ['Unidad #','Tipo','Marca / Modelo','Sucursal','Estado','Medidor'][i];
+        return '<th style="text-align:left;padding:7px 10px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,hEs) + '</th>';
+      }).join('')
+    + '</tr></thead><tbody>'
+    + (list.length ? list.map(a => {
+        const statusColor = a.status === 'down' ? 'var(--danger)' : a.status === 'retired' ? 'var(--text3)' : 'var(--success)';
+        const statusBg = a.status === 'down' ? 'var(--danger-l)' : a.status === 'retired' ? 'var(--surface2)' : 'var(--success-l)';
+        return '<tr style="cursor:' + (CD.role === 'admin' ? 'pointer' : 'default') + '"' + (CD.role === 'admin' ? ' onclick="shopOpenAssetForm(\'' + a.id + '\')"' : '') + '>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);font-weight:700;color:var(--text)">' + esc(a.unitNumber || '')
+          + (a.pendingReview ? ' <span class="badge warn" style="font-size:9px">' + T('pending','pendiente') + '</span>' : '') + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopAssetTypeLabel(a.assetType) + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + esc([a.make,a.model,a.year].filter(Boolean).join(' ')) + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + esc(shopBranchName(a.branchId)) + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + statusColor + ';background:' + statusBg + '">' + shopStatusLabel(a.status) + '</span></td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + (a.meterType && a.meterType !== 'none' ? (a.currentMeter != null ? a.currentMeter : '—') + ' ' + shopMeterLabel(a.meterType) : '—') + '</td>'
+          + '</tr>';
+      }).join('') : '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text3)">' + T('No assets match this filter.','No hay activos que coincidan con este filtro.') + '</td></tr>')
+    + '</tbody></table></div></div>';
+}
+
+function shopSetFilter(kind, val) {
+  if (kind === 'branch') window._shopFilterBranch = val;
+  if (kind === 'type') window._shopFilterType = val;
+  shopPaintAssets();
+}
+
+function shopOpenAssetForm(assetId) {
+  // Managers can only ever create — editing an existing asset is admin
+  // only, so the registry can't silently drift out of sync with itself.
+  const editing = assetId && CD.role === 'admin';
+  const a = editing ? (window._shopAssets || []).find(x => x.id === assetId) : null;
+  if (assetId && !editing) return;
+  const ex = document.getElementById('shop-asset-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'shop-asset-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:520px;max-width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">🚚 ' + (a ? T('Edit Asset','Editar Activo') : T('Add Asset','Agregar Activo')) + '</div>'
+    + '<button onclick="document.getElementById(\'shop-asset-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + (!a && CD.role !== 'admin' ? '<div style="font-size:11.5px;color:var(--text2);background:var(--warn-l);padding:8px 11px;border-radius:var(--r);margin-bottom:14px">' + T('This will be added as pending review until admin confirms it.','Esto se agregará como pendiente de revisión hasta que admin lo confirme.') + '</div>' : '')
+    + '<div class="g2">'
+    + '<div class="fg"><label>' + T('Unit Number','Número de Unidad') + '<span class="req">*</span></label><input type="text" id="sa-unit" placeholder="' + T('e.g. SW-T12','p. ej. SW-T12') + '" value="' + esc(a?.unitNumber || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Type','Tipo') + '</label><select id="sa-type">'
+    + SHOP_ASSET_TYPES.map(t => '<option value="' + t + '"' + ((a?.assetType||'vehicle') === t ? ' selected' : '') + '>' + shopAssetTypeLabel(t) + '</option>').join('')
+    + '</select></div></div>'
+    + '<div class="g3">'
+    + '<div class="fg"><label>' + T('Make','Marca') + '</label><input type="text" id="sa-make" value="' + esc(a?.make || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Model','Modelo') + '</label><input type="text" id="sa-model" value="' + esc(a?.model || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Year','Año') + '</label><input type="number" id="sa-year" value="' + (a?.year || '') + '"></div>'
+    + '</div>'
+    + '<div class="g2">'
+    + '<div class="fg"><label>' + T('VIN / Serial','VIN / Serie') + '</label><input type="text" id="sa-vin" value="' + esc(a?.vinOrSerial || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Color Code','Código de Color') + '<span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">' + T('meaning TBD','significado por definir') + '</span></label><input type="text" id="sa-color" value="' + esc(a?.colorCode || '') + '"></div>'
+    + '</div>'
+    + '<div class="g2">'
+    + '<div class="fg"><label>' + T('Branch','Sucursal') + '</label><select id="sa-branch">'
+    + '<option value="">' + T('Unassigned','Sin asignar') + '</option>'
+    + (window._shopBranches || []).map(b => '<option value="' + b.id + '"' + ((a?.branchId||'') === b.id ? ' selected' : '') + '>' + esc(b.code) + ' — ' + esc(b.name) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="fg"><label>' + T('Status','Estado') + '</label><select id="sa-status">'
+    + SHOP_ASSET_STATUSES.map(s => '<option value="' + s + '"' + ((a?.status||'active') === s ? ' selected' : '') + '>' + shopStatusLabel(s) + '</option>').join('')
+    + '</select></div></div>'
+    + '<div class="g3">'
+    + '<div class="fg"><label>' + T('Meter Type','Tipo de Medidor') + '</label><select id="sa-metertype" onchange="document.getElementById(\'sa-meter\').disabled = (this.value===\'none\')">'
+    + SHOP_METER_TYPES.map(mt => '<option value="' + mt + '"' + ((a?.meterType||'none') === mt ? ' selected' : '') + '>' + shopMeterLabel(mt) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="fg"><label>' + T('Current Meter','Medidor Actual') + '</label><input type="number" id="sa-meter" value="' + (a?.currentMeter != null ? a.currentMeter : '') + '"' + ((a?.meterType||'none') === 'none' ? ' disabled' : '') + '></div>'
+    + '<div class="fg"><label>' + T('Ticketable','Genera Boletos') + '<span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">' + T('§11.2','§11.2') + '</span></label>'
+    + '<select id="sa-ticketable"><option value="1"' + ((a?.ticketable !== false) ? ' selected' : '') + '>' + T('Yes','Sí') + '</option><option value="0"' + (a?.ticketable === false ? ' selected' : '') + '>' + T('No','No') + '</option></select></div>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:8px">'
+    + '<button class="btn primary" id="sa-save-btn" onclick="shopSaveAsset(' + (a ? "'" + a.id + "'" : 'null') + ')">' + (a ? T('Save','Guardar') : T('Add Asset','Agregar Activo')) + '</button>'
+    + '<button class="btn" onclick="document.getElementById(\'shop-asset-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+async function shopSaveAsset(assetId) {
+  const unitNumber = document.getElementById('sa-unit').value.trim();
+  if (!unitNumber) { toast(T('Unit Number is required','El Número de Unidad es obligatorio'), 'err'); return; }
+  const assetType = document.getElementById('sa-type').value;
+  const make = document.getElementById('sa-make').value.trim();
+  const model = document.getElementById('sa-model').value.trim();
+  const yearRaw = document.getElementById('sa-year').value;
+  const vinOrSerial = document.getElementById('sa-vin').value.trim();
+  const colorCode = document.getElementById('sa-color').value.trim();
+  const branchId = document.getElementById('sa-branch').value || null;
+  const status = document.getElementById('sa-status').value;
+  const meterType = document.getElementById('sa-metertype').value;
+  const meterRaw = document.getElementById('sa-meter').value;
+  const ticketable = document.getElementById('sa-ticketable').value === '1';
+
+  // Uniqueness check (case/whitespace-insensitive), excluding this doc
+  // when editing. "Never free text on a ticket — always selected from
+  // here" only holds if this list can't quietly grow duplicates.
+  const dupe = (window._shopAssets || []).some(a =>
+    a.id !== assetId && (a.unitNumber || '').trim().toLowerCase() === unitNumber.toLowerCase());
+  if (dupe) { toast(T('That unit number already exists','Ese número de unidad ya existe'), 'err'); return; }
+
+  const btn = document.getElementById('sa-save-btn');
+  btn.disabled = true; btn.textContent = T('Saving…','Guardando…');
+  const data = {
+    unitNumber, assetType, make, model,
+    year: yearRaw ? parseInt(yearRaw, 10) : null,
+    vinOrSerial: vinOrSerial || null,
+    colorCode: colorCode || null,
+    branchId, status,
+    meterType, currentMeter: (meterType !== 'none' && meterRaw !== '') ? parseInt(meterRaw, 10) : null,
+    ticketable,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  try {
+    if (assetId) {
+      // Branch reassignment keeps history — close out the prior span and
+      // open a new one — so per-branch downtime reporting (a later phase)
+      // doesn't get corrupted by a mid-year reassignment.
+      const existing = (window._shopAssets || []).find(a => a.id === assetId);
+      if (existing && existing.branchId !== branchId) {
+        const today = new Date().toISOString().split('T')[0];
+        const openHist = await db.collection('shop_asset_branch_history')
+          .where('assetId','==',assetId).where('toDate','==',null).get();
+        const histBatch = db.batch();
+        openHist.docs.forEach(d => histBatch.update(d.ref, { toDate: today }));
+        if (branchId) {
+          histBatch.set(db.collection('shop_asset_branch_history').doc(), {
+            assetId, branchId, fromDate: today, toDate: null,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+        await histBatch.commit();
+      }
+      await db.collection('shop_assets').doc(assetId).update(data);
+      toast('✓ ' + T('Saved','Guardado'));
+    } else {
+      const pendingReview = CD.role !== 'admin';
+      await db.collection('shop_assets').add({
+        ...data, pendingReview,
+        addedByUserId: CU.uid, addedByUserName: CD.name,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      if (branchId) {
+        const today = new Date().toISOString().split('T')[0];
+        await db.collection('shop_asset_branch_history').add({
+          assetId: null, branchId, fromDate: today, toDate: null,
+          note: 'Set at creation — assetId backfilled not required for Phase 1 reporting',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+      toast(pendingReview ? '✓ ' + T('Added — pending admin review','Agregado — pendiente de revisión') : '✓ ' + T('Asset added','Activo agregado'));
+    }
+    document.getElementById('shop-asset-modal').remove();
+    renderShopAssets();
+  } catch (e) {
+    toast(e.message || 'Could not save', 'err');
+    btn.disabled = false; btn.textContent = T('Save','Guardar');
+  }
+}
+
+// ══ Pending review queue (admin only) ══
+async function renderShopPending() {
+  const ca = document.getElementById('content-area');
+  if (CD.role !== 'admin') { ca.innerHTML = '<div class="empty">Admin only.</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    await shopLoadBranches();
+    const snap = await db.collection('shop_assets').where('pendingReview','==',true).get();
+    const pending = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+      .sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
+    ca.innerHTML = '<div class="card">'
+      + '<div class="card-header"><div class="card-title">⏳ ' + T('Pending Review','Revisión Pendiente') + '</div>'
+      + '<button class="btn sm" onclick="renderShopAssets()">← ' + T('Back to Registry','Volver al Registro') + '</button></div>'
+      + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:14px">' + T('Assets added by managers wait here until confirmed, so the same unit doesn\'t end up listed three different ways.','Los activos agregados por gerentes esperan aquí hasta ser confirmados, para que la misma unidad no termine listada de tres formas distintas.') + '</div>'
+      + (pending.length ? pending.map(a =>
+          '<div style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border)">'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(a.unitNumber || '') + '</div>'
+          + '<div style="font-size:11.5px;color:var(--text3);margin-top:2px">' + shopAssetTypeLabel(a.assetType) + ' · '
+          + esc([a.make,a.model,a.year].filter(Boolean).join(' ') || '—') + ' · ' + esc(shopBranchName(a.branchId)) + '</div>'
+          + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + T('Added by','Agregado por') + ' ' + esc(a.addedByUserName || '—') + '</div>'
+          + '</div>'
+          + '<button class="btn sm" style="background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopConfirmAsset(\'' + a.id + '\')">✓ ' + T('Confirm','Confirmar') + '</button>'
+          + '<button class="btn sm" style="background:var(--danger-l);color:var(--danger);border-color:transparent" onclick="shopRejectAsset(\'' + a.id + '\',\'' + esc(a.unitNumber).replace(/'/g,"\\'") + '\')">' + T('Reject','Rechazar') + '</button>'
+          + '</div>'
+        ).join('') : '<div class="empty">' + T('Nothing pending.','Nada pendiente.') + '</div>')
+      + '</div>';
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderShopPending()">Retry</button></div>';
+  }
+}
+
+async function shopConfirmAsset(assetId) {
+  try {
+    await db.collection('shop_assets').doc(assetId).update({ pendingReview: false });
+    toast('✓ ' + T('Confirmed','Confirmado'));
+    renderShopPending();
+  } catch (e) { toast('Could not confirm — ' + e.message, 'err'); }
+}
+
+// Safe to hard-delete here specifically because nothing in Phase 1 can
+// reference an asset yet (no tickets exist until Phase 2) — once tickets
+// exist, a rejected/duplicate asset will need a real merge action instead
+// of deletion, so ticket history isn't orphaned.
+async function shopRejectAsset(assetId, unitNumber) {
+  if (!confirm(T('Reject and remove "' + unitNumber + '"? This cannot be undone.', '¿Rechazar y eliminar "' + unitNumber + '"? Esto no se puede deshacer.'))) return;
+  try {
+    await db.collection('shop_assets').doc(assetId).delete();
+    toast('✓ ' + T('Rejected','Rechazado'));
+    renderShopPending();
+  } catch (e) { toast('Could not reject — ' + e.message, 'err'); }
 }
 
 </script>
