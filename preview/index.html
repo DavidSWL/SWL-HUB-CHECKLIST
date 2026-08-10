@@ -10257,6 +10257,12 @@ function shopFmtDateOnly(s) {
   const [y,mo,d] = s.split('-').map(Number);
   return new Date(y, mo-1, d).toLocaleDateString('en-US',{month:'short',day:'numeric'});
 }
+// For the plain 'HH:MM' strings a <input type=time> field stores.
+function shopFmtTimeOnly(s) {
+  if (!s) return '';
+  const [h,m] = s.split(':').map(Number);
+  return new Date(2000,0,1,h,m).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+}
 
 window._shopTickets = [];
 window._shopTicketFilter = 'open';
@@ -10286,20 +10292,27 @@ function shopPaintTickets() {
   const ca = document.getElementById('content-area');
   const filter = window._shopTicketFilter;
   const openStatuses = ['submitted','acknowledged','in_progress'];
-  const list = (window._shopTickets || []).filter(t => {
+  // Keep it simple: a ticket is visible here only to the person who
+  // submitted it (so requesting something and tracking its progress is a
+  // personal list, not a shared firehose of every branch's tickets) — admin
+  // is the one exception, since someone has to be able to see everything
+  // to actually dispatch and manage the shop.
+  const scoped = CD.role === 'admin' ? (window._shopTickets || [])
+    : (window._shopTickets || []).filter(t => t.submittedByUserId === CU.uid);
+  const list = scoped.filter(t => {
     if (filter === 'open') return openStatuses.includes(t.status);
     if (filter === 'ready_pickup') return t.status === 'ready_pickup';
     if (filter === 'closed') return t.status === 'closed' || t.status === 'cancelled';
     return true;
   });
-  const openCount = (window._shopTickets || []).filter(t => openStatuses.includes(t.status)).length;
+  const openCount = scoped.filter(t => openStatuses.includes(t.status)).length;
   const chips = [
     ['open', T('Open','Abiertos')], ['ready_pickup', T('Ready for Pickup','Listos para Recoger')],
     ['closed', T('Closed','Cerrados')], ['all', T('All','Todos')]
   ];
 
   ca.innerHTML = '<div class="card" style="margin-bottom:16px">'
-    + '<div class="card-header"><div class="card-title">🎫 ' + T('Tickets','Boletos') + (openCount ? ' <span style="font-size:11px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 8px;border-radius:20px;margin-left:6px">' + openCount + ' ' + T('open','abiertos') + '</span>' : '') + '</div>'
+    + '<div class="card-header"><div class="card-title">🎫 ' + (CD.role === 'admin' ? T('Tickets','Boletos') : T('My Tickets','Mis Boletos')) + (openCount ? ' <span style="font-size:11px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 8px;border-radius:20px;margin-left:6px">' + openCount + ' ' + T('open','abiertos') + '</span>' : '') + '</div>'
     + '<button class="btn primary" onclick="shopOpenTicketForm()">+ ' + T('New Ticket','Nuevo Boleto') + '</button>'
     + '</div>'
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
@@ -10318,6 +10331,7 @@ function shopPaintTickets() {
           + '<span>·</span><span>' + shopFmtWhen(t.createdAt) + '</span>'
           + (t.estimatedDropoffDate ? '<span>·</span><span>📅 ' + T('Drop-off','Entrega') + ' ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</span>' : '')
           + (t.requestedReturnDate ? '<span>·</span><span>↩ ' + T('Needed by','Se necesita para') + ' ' + shopFmtDateOnly(t.requestedReturnDate) + '</span>' : '')
+          + (t.pickupDate ? '<span>·</span><span>🕐 ' + T('Pickup','Recogida') + ' ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</span>' : '')
           + '</div></div>'
           + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
           + '</div>';
@@ -10439,6 +10453,13 @@ async function shopOpenTicketDetail(ticketId) {
   const ex = document.getElementById('shop-ticket-detail-modal'); if (ex) ex.remove();
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
+  // Defense in depth — the list itself is already scoped to admin-sees-all/
+  // everyone-else-sees-their-own, so this only matters against a stale id,
+  // but it's cheap insurance against ever leaking someone else's ticket.
+  if (CD.role !== 'admin' && t.submittedByUserId !== CU.uid) {
+    toast(T('You can only view tickets you submitted','Solo puedes ver los boletos que enviaste'), 'err');
+    return;
+  }
   const m = document.createElement('div');
   m.id = 'shop-ticket-detail-modal';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -10477,6 +10498,11 @@ async function shopPaintTicketDetail(ticketId) {
         + (t.requestedReturnDate ? '<div>↩ ' + T('Needed back','Se necesita de vuelta') + ': <b>' + shopFmtDateOnly(t.requestedReturnDate) + '</b></div>' : '')
         + '</div>' : '')
     + '<div style="font-size:11px;color:var(--text3);margin-bottom:14px">' + T('Submitted by','Enviado por') + ' ' + esc(t.submittedByName || '—') + ' · ' + shopFmtWhen(t.createdAt) + '</div>'
+    + (t.status === 'ready_pickup' ? '<div class="g2" style="margin-bottom:14px">'
+        + '<div class="fg"><label>' + T('Pickup Date','Fecha de Recogida') + '</label><input type="date" id="st-pickup-date-' + ticketId + '" value="' + esc(t.pickupDate || '') + '"></div>'
+        + '<div class="fg"><label>' + T('Pickup Time','Hora de Recogida') + '</label><input type="time" id="st-pickup-time-' + ticketId + '" value="' + esc(t.pickupTime || '') + '"></div>'
+        + '<button class="btn sm" style="grid-column:1/-1" onclick="shopSetPickupSchedule(\'' + ticketId + '\')">' + T('Save Pickup Time','Guardar Hora de Recogida') + '</button>'
+        + '</div>' : '')
     + (!isTerminal ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">'
         + nextActions.map(([status,label]) => '<button class="btn sm' + (status==='cancelled'?'':' primary') + '" onclick="shopAdvanceTicket(\'' + ticketId + '\',\'' + status + '\')">' + label + '</button>').join('')
         + '<button class="btn sm" onclick="shopToggleParts(\'' + ticketId + '\')">' + (t.partsPending ? T('Clear Parts Pending','Quitar Piezas Pendientes') : T('Flag Parts Pending','Marcar Piezas Pendientes')) + '</button>'
@@ -10532,6 +10558,27 @@ async function shopToggleParts(ticketId) {
     shopPaintTickets();
     await shopPaintTicketDetail(ticketId);
   } catch (e) { toast('Could not update — ' + e.message, 'err'); }
+}
+
+// Decoupled from the Ready for Pickup status change itself — the exact
+// time isn't always known the moment something's marked ready (might get
+// set or changed later after a call/text with whoever's picking it up).
+async function shopSetPickupSchedule(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const pickupDate = document.getElementById('st-pickup-date-' + ticketId).value || null;
+  const pickupTime = document.getElementById('st-pickup-time-' + ticketId).value || null;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ pickupDate, pickupTime, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: T('Pickup scheduled','Recogida programada') + ': ' + (pickupDate ? shopFmtDateOnly(pickupDate) : '—') + (pickupTime ? ' ' + shopFmtTimeOnly(pickupTime) : ''),
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.pickupDate = pickupDate; t.pickupTime = pickupTime;
+    toast('✓ ' + T('Pickup time saved','Hora de recogida guardada'));
+    shopPaintTickets();
+    await shopPaintTicketDetail(ticketId);
+  } catch (e) { toast('Could not save — ' + e.message, 'err'); }
 }
 
 async function shopAddTicketNote(ticketId) {
@@ -10643,6 +10690,7 @@ function shopPaintYardKiosk() {
       + '<div style="font-size:13.5px;color:var(--text);margin-top:8px;line-height:1.5">' + esc(t.issue || '') + '</div>'
       + (t.estimatedDropoffDate ? '<div style="font-size:12px;color:var(--text3);margin-top:8px">📅 Entrega estimada: ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</div>' : '')
       + (t.requestedReturnDate ? '<div style="font-size:12px;color:var(--text3);margin-top:2px">↩ Se necesita: ' + shopFmtDateOnly(t.requestedReturnDate) + '</div>' : '')
+      + (kind === 'pickup' && t.pickupDate ? '<div style="font-size:12px;color:var(--text3);margin-top:2px">🕐 Recogida programada: ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</div>' : '')
       + '</button>';
   };
   ca.innerHTML = (CD.role === 'admin' ? '<div style="font-size:12px;color:var(--text);background:var(--info-l);padding:10px 14px;border-radius:var(--r);margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'
@@ -10664,23 +10712,73 @@ function shopPaintYardKiosk() {
   window._shopYardFlashIds = new Set();
 }
 
+// Tapping a card opens this: unit info, a read-only timeline, and a note
+// box, plus the one big confirm button for whatever this card's lane
+// means. Deliberately not the full manager detail modal (no status-jump
+// buttons, no parts flag) — "keep it simple," per David — but the yard
+// supervisor can see what's been happening and leave a note either way.
 function shopYardConfirm(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
   const ex = document.getElementById('shop-yard-modal'); if (ex) ex.remove();
   const m = document.createElement('div');
   m.id = 'shop-yard-modal';
-  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:20px;padding:26px;width:440px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div id="syd-body">Cargando…</div></div>';
+  document.body.appendChild(m);
+  shopPaintYardConfirm(ticketId, kind);
+}
+
+async function shopPaintYardConfirm(ticketId, kind) {
+  const body = document.getElementById('syd-body');
+  if (!body) return;
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  let events = [];
+  try {
+    const snap = await db.collection('shop_tickets').doc(ticketId).collection('events').orderBy('createdAt','asc').get();
+    events = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+  } catch (e) { /* timeline is best-effort — confirm still works without it */ }
+
   const actionLabel = { dropoff:'Confirmar Entrega en el Patio', ready:'Marcar Listo para Recoger', pickup:'Confirmar Recogida' }[kind];
   const question = { dropoff:'¿Confirmar que esta herramienta, equipo o vehículo fue entregado en el patio?', ready:'¿Confirmar que esta herramienta, equipo o vehículo está lista para recoger?', pickup:'¿Confirmar que esta herramienta, equipo o vehículo fue recogido?' }[kind];
-  m.innerHTML = '<div style="background:var(--surface);border-radius:20px;padding:26px;width:420px;max-width:100%;box-shadow:var(--shm);text-align:center">'
+
+  body.innerHTML = '<div style="text-align:center">'
     + '<div style="font-size:22px;font-weight:800;margin-bottom:4px">' + esc(t.unitNumber || '—') + '</div>'
-    + '<div style="font-size:13px;color:var(--text2);margin-bottom:18px">' + esc(t.issue || '') + '</div>'
-    + '<div style="font-size:15px;color:var(--text);margin-bottom:22px">' + question + '</div>'
+    + '<div style="font-size:13px;color:var(--text2);margin-bottom:16px">' + esc(t.issue || '') + '</div>'
+    + '</div>'
+    + '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Cronología</div>'
+    + '<div style="max-height:140px;overflow-y:auto;margin-bottom:14px;text-align:left">'
+    + (events.length ? events.map(ev => {
+        let line;
+        if (ev.type === 'created') line = 'Boleto enviado';
+        else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus);
+        else if (ev.type === 'parts') line = ev.partsPending ? 'Marcado piezas pendientes' : 'Piezas pendientes eliminado';
+        else line = esc(ev.text || '');
+        return '<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">'
+          + '<span style="color:var(--text)">' + line + '</span>'
+          + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
+      }).join('') : '<div style="font-size:11.5px;color:var(--text3)">Sin actividad aún.</div>')
+    + '</div>'
+    + '<textarea id="syd-note-' + ticketId + '" rows="2" placeholder="Nota para la cuadrilla o admin…" style="width:100%;font-size:13px;padding:8px 11px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:8px;resize:vertical"></textarea>'
+    + '<button onclick="shopYardAddNote(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:12px;font-size:13px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer;margin-bottom:18px">+ Agregar Nota</button>'
+    + '<div style="text-align:center;font-size:15px;color:var(--text);margin-bottom:16px">' + question + '</div>'
     + '<button onclick="shopYardDoConfirm(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:18px;font-size:17px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer;margin-bottom:10px">✅ ' + actionLabel + '</button>'
-    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="width:100%;padding:14px;font-size:14px;font-weight:700;background:none;border:2px solid var(--border2);color:var(--text2);border-radius:14px;cursor:pointer">Cancelar</button>'
-    + '</div>';
-  document.body.appendChild(m);
+    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="width:100%;padding:14px;font-size:14px;font-weight:700;background:none;border:2px solid var(--border2);color:var(--text2);border-radius:14px;cursor:pointer">Cancelar</button>';
+}
+
+async function shopYardAddNote(ticketId, kind) {
+  const ta = document.getElementById('syd-note-' + ticketId);
+  const text = ta ? ta.value.trim() : '';
+  if (!text) return;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text, userId: CU.uid, userName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await shopPaintYardConfirm(ticketId, kind);
+  } catch (e) { toast('No se pudo agregar — ' + e.message, 'err'); }
 }
 
 async function shopYardDoConfirm(ticketId, kind) {
