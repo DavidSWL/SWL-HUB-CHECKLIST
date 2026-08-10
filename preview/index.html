@@ -1524,13 +1524,17 @@ function wsAreas() {
       { id:'docs', icon:'📚', label:T('Docs','Documentos') }
     ]});
   }
-  // Shop Tickets — Phase 1 only (asset registry). Per the build plan's own
-  // role table: Admin has everything, Manager can submit tickets and add
-  // equipment, Executive is read-only reports/exceptions (nothing built
-  // for exec yet, so not shown to them until there's something to see),
-  // Yard supervisor is a separate kiosk UI (Phase 3), never this nav.
+  // Shop Tickets — Phase 1 (asset registry) + Phase 2 (ticket core). Per
+  // the build plan's own role table: Admin has everything, Manager can
+  // submit tickets and add equipment, Executive is read-only reports/
+  // exceptions (nothing built for exec yet, so not shown to them until
+  // there's something to see), Yard supervisor is a separate kiosk UI
+  // (Phase 3), never this nav.
   if (isManager) {
-    const shopScreens = [{ id:'shop-assets', icon:'🚚', label:T('Asset Registry','Registro de Activos') }];
+    const shopScreens = [
+      { id:'shop-tickets', icon:'🎫', label:T('Tickets','Boletos') },
+      { id:'shop-assets', icon:'🚚', label:T('Asset Registry','Registro de Activos') }
+    ];
     if (role === 'admin') shopScreens.push({ id:'shop-pending', icon:'⏳', label:T('Pending Review','Revisión Pendiente') });
     areas.push({ id:'shop', icon:'🔧', label:T('Shop Tickets','Boletos del Taller'), screens: shopScreens });
   }
@@ -1832,6 +1836,7 @@ function renderScreen(screen) {
     'saturday-schedule': { title: T('Saturday Schedule', 'Horario del Sábado'), fn: renderSaturdaySchedule },
     'chat':           { title: T('Chat','Chat'),           fn: renderChat },
     'docs':           { title: T('Docs','Documentos'),     fn: renderDocs },
+    'shop-tickets':   { title: T('Tickets','Boletos'),                    fn: renderShopTickets },
     'shop-assets':    { title: T('Asset Registry','Registro de Activos'), fn: renderShopAssets },
     'shop-pending':   { title: T('Pending Review','Revisión Pendiente'),  fn: renderShopPending },
   };
@@ -9882,18 +9887,32 @@ async function docDelete(id) {
 //
 // All new collections, prefixed shop_ throughout so nothing here can
 // collide with the existing landscape-hub collections (users, weekly_
-// items, saturday_*, channels, docs). shop_branches is a DIFFERENT,
-// wider set of branches (OC/LA/IE/SB/NV) than the 2-branch CD.branch
-// system used everywhere else in this app — the build plan is explicit
-// this is a 5-branch shop operation, so it gets its own branch list
-// rather than overloading the existing OC/LA one.
-const SHOP_DEFAULT_BRANCHES = [
-  { code:'OC', name:'Orange County' },
-  { code:'LA', name:'Los Angeles' },
-  { code:'IE', name:'Inland Empire' },
-  { code:'SB', name:'San Bernardino' },
-  { code:'NV', name:'Nevada' }
+// items, saturday_*, channels, docs).
+//
+// Open item 11.1 (what color_code means) is resolved: it's the asset's
+// division, visualized as a color. Fixed 5-value list per David — not
+// Firestore-seeded like Phase 1's branches were, since this is a closed
+// set with colors intrinsic to what each division IS, not something
+// anyone should be renaming later. Replaces the earlier OC/LA/IE/SB/NV
+// branch list entirely — division is the unit that actually owns
+// equipment day to day, branch alone wasn't specific enough.
+const SHOP_DIVISIONS = [
+  { id:'maint_oc',     name:'Maintenance OC', nameEs:'Mantenimiento OC', color:'#EA580C' },
+  { id:'maint_la',     name:'Maintenance LA', nameEs:'Mantenimiento LA', color:'#2563EB' },
+  { id:'maint_ie',     name:'Maintenance IE', nameEs:'Mantenimiento IE', color:'#6B7280' },
+  { id:'trees',        name:'Trees',          nameEs:'Árboles',          color:'#16A34A' },
+  { id:'enhancements', name:'Enhancements',   nameEs:'Mejoras',          color:'#9333EA' }
 ];
+function shopDivision(id) { return SHOP_DIVISIONS.find(d => d.id === id) || null; }
+function shopDivisionName(id) {
+  const d = shopDivision(id);
+  return d ? T(d.name, d.nameEs) : '—';
+}
+function shopDivisionChip(id) {
+  const d = shopDivision(id);
+  if (!d) return '<span style="color:var(--text3)">—</span>';
+  return '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:50%;background:' + d.color + ';flex:none"></span>' + esc(T(d.name, d.nameEs)) + '</span>';
+}
 
 const SHOP_ASSET_TYPES = ['vehicle','heavy_equipment','power_tool','lawn_equipment','trailer'];
 const SHOP_METER_TYPES = ['odometer','hours','none'];
@@ -9912,33 +9931,7 @@ function shopMeterLabel(m) {
            {odometer:'Odómetro',hours:'Horas',none:'Ninguno'}[m] || m);
 }
 
-window._shopBranches = [];
 window._shopAssets = [];
-
-async function shopEnsureBranchesSeeded() {
-  const snap = await db.collection('shop_branches').get();
-  const have = new Set(snap.docs.map(d => d.data().code));
-  const missing = SHOP_DEFAULT_BRANCHES.filter(b => !have.has(b.code));
-  if (!missing.length) return;
-  const batch = db.batch();
-  missing.forEach(b => {
-    batch.set(db.collection('shop_branches').doc(), {
-      ...b, managerUserId: null, createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-  });
-  await batch.commit();
-}
-
-async function shopLoadBranches() {
-  const snap = await db.collection('shop_branches').get();
-  window._shopBranches = snap.docs.map(d => ({ id:d.id, ...d.data() }))
-    .sort((a,b) => (a.code||'').localeCompare(b.code||''));
-}
-
-function shopBranchName(id) {
-  const b = (window._shopBranches || []).find(x => x.id === id);
-  return b ? b.code + ' — ' + b.name : '—';
-}
 
 async function renderShopAssets() {
   const ca = document.getElementById('content-area');
@@ -9946,11 +9939,9 @@ async function renderShopAssets() {
   if (!isManager) { ca.innerHTML = '<div class="empty">' + T('Shop Tickets is only available to managers and admin.','Boletos del Taller solo está disponible para gerentes y admin.') + '</div>'; return; }
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   try {
-    await shopEnsureBranchesSeeded();
-    await shopLoadBranches();
     const snap = await db.collection('shop_assets').get();
     window._shopAssets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-    window._shopFilterBranch = window._shopFilterBranch || '';
+    window._shopFilterDivision = window._shopFilterDivision || '';
     window._shopFilterType = window._shopFilterType || '';
     shopPaintAssets();
   } catch (e) {
@@ -9963,9 +9954,9 @@ async function renderShopAssets() {
 
 function shopPaintAssets() {
   const ca = document.getElementById('content-area');
-  const branch = window._shopFilterBranch, type = window._shopFilterType;
+  const division = window._shopFilterDivision, type = window._shopFilterType;
   const list = (window._shopAssets || []).filter(a =>
-    (!branch || a.branchId === branch) && (!type || a.assetType === type)
+    (!division || a.divisionId === division) && (!type || a.assetType === type)
   ).sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
   const pendingCount = (window._shopAssets || []).filter(a => a.pendingReview).length;
 
@@ -9976,9 +9967,9 @@ function shopPaintAssets() {
     + '<button class="btn primary" onclick="shopOpenAssetForm()">+ ' + T('Add Asset','Agregar Activo') + '</button>'
     + '</div></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
-    + '<select id="shop-f-branch" onchange="shopSetFilter(\'branch\',this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
-    + '<option value="">' + T('All branches','Todas las sucursales') + '</option>'
-    + (window._shopBranches || []).map(b => '<option value="' + b.id + '"' + (branch === b.id ? ' selected' : '') + '>' + esc(b.code) + ' — ' + esc(b.name) + '</option>').join('')
+    + '<select id="shop-f-division" onchange="shopSetFilter(\'division\',this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
+    + '<option value="">' + T('All divisions','Todas las divisiones') + '</option>'
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + (division === d.id ? ' selected' : '') + '>' + esc(T(d.name,d.nameEs)) + '</option>').join('')
     + '</select>'
     + '<select id="shop-f-type" onchange="shopSetFilter(\'type\',this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
     + '<option value="">' + T('All types','Todos los tipos') + '</option>'
@@ -9988,8 +9979,8 @@ function shopPaintAssets() {
     + '<div style="overflow-x:auto">'
     + '<table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:640px">'
     + '<thead><tr>'
-    + ['Unit #','Type','Make / Model','Branch','Status','Meter'].map((h,i) => {
-        const hEs = ['Unidad #','Tipo','Marca / Modelo','Sucursal','Estado','Medidor'][i];
+    + ['Unit #','Type','Make / Model','Division','Status','Meter'].map((h,i) => {
+        const hEs = ['Unidad #','Tipo','Marca / Modelo','División','Estado','Medidor'][i];
         return '<th style="text-align:left;padding:7px 10px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,hEs) + '</th>';
       }).join('')
     + '</tr></thead><tbody>'
@@ -10001,7 +9992,7 @@ function shopPaintAssets() {
           + (a.pendingReview ? ' <span class="badge warn" style="font-size:9px">' + T('pending','pendiente') + '</span>' : '') + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopAssetTypeLabel(a.assetType) + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + esc([a.make,a.model,a.year].filter(Boolean).join(' ')) + '</td>'
-          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + esc(shopBranchName(a.branchId)) + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopDivisionChip(a.divisionId) + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + statusColor + ';background:' + statusBg + '">' + shopStatusLabel(a.status) + '</span></td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + (a.meterType && a.meterType !== 'none' ? (a.currentMeter != null ? a.currentMeter : '—') + ' ' + shopMeterLabel(a.meterType) : '—') + '</td>'
           + '</tr>';
@@ -10010,7 +10001,7 @@ function shopPaintAssets() {
 }
 
 function shopSetFilter(kind, val) {
-  if (kind === 'branch') window._shopFilterBranch = val;
+  if (kind === 'division') window._shopFilterDivision = val;
   if (kind === 'type') window._shopFilterType = val;
   shopPaintAssets();
 }
@@ -10040,18 +10031,16 @@ function shopOpenAssetForm(assetId) {
     + '<div class="fg"><label>' + T('Model','Modelo') + '</label><input type="text" id="sa-model" value="' + esc(a?.model || '') + '"></div>'
     + '<div class="fg"><label>' + T('Year','Año') + '</label><input type="number" id="sa-year" value="' + (a?.year || '') + '"></div>'
     + '</div>'
-    + '<div class="g2">'
+    + '<div class="g3">'
     + '<div class="fg"><label>' + T('VIN / Serial','VIN / Serie') + '</label><input type="text" id="sa-vin" value="' + esc(a?.vinOrSerial || '') + '"></div>'
-    + '<div class="fg"><label>' + T('Color Code','Código de Color') + '<span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">' + T('meaning TBD','significado por definir') + '</span></label><input type="text" id="sa-color" value="' + esc(a?.colorCode || '') + '"></div>'
-    + '</div>'
-    + '<div class="g2">'
-    + '<div class="fg"><label>' + T('Branch','Sucursal') + '</label><select id="sa-branch">'
+    + '<div class="fg"><label>' + T('Division','División') + '</label><select id="sa-division">'
     + '<option value="">' + T('Unassigned','Sin asignar') + '</option>'
-    + (window._shopBranches || []).map(b => '<option value="' + b.id + '"' + ((a?.branchId||'') === b.id ? ' selected' : '') + '>' + esc(b.code) + ' — ' + esc(b.name) + '</option>').join('')
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + ((a?.divisionId||'') === d.id ? ' selected' : '') + '>' + esc(T(d.name,d.nameEs)) + '</option>').join('')
     + '</select></div>'
     + '<div class="fg"><label>' + T('Status','Estado') + '</label><select id="sa-status">'
     + SHOP_ASSET_STATUSES.map(s => '<option value="' + s + '"' + ((a?.status||'active') === s ? ' selected' : '') + '>' + shopStatusLabel(s) + '</option>').join('')
-    + '</select></div></div>'
+    + '</select></div>'
+    + '</div>'
     + '<div class="g3">'
     + '<div class="fg"><label>' + T('Meter Type','Tipo de Medidor') + '</label><select id="sa-metertype" onchange="document.getElementById(\'sa-meter\').disabled = (this.value===\'none\')">'
     + SHOP_METER_TYPES.map(mt => '<option value="' + mt + '"' + ((a?.meterType||'none') === mt ? ' selected' : '') + '>' + shopMeterLabel(mt) + '</option>').join('')
@@ -10075,8 +10064,7 @@ async function shopSaveAsset(assetId) {
   const model = document.getElementById('sa-model').value.trim();
   const yearRaw = document.getElementById('sa-year').value;
   const vinOrSerial = document.getElementById('sa-vin').value.trim();
-  const colorCode = document.getElementById('sa-color').value.trim();
-  const branchId = document.getElementById('sa-branch').value || null;
+  const divisionId = document.getElementById('sa-division').value || null;
   const status = document.getElementById('sa-status').value;
   const meterType = document.getElementById('sa-metertype').value;
   const meterRaw = document.getElementById('sa-meter').value;
@@ -10095,27 +10083,26 @@ async function shopSaveAsset(assetId) {
     unitNumber, assetType, make, model,
     year: yearRaw ? parseInt(yearRaw, 10) : null,
     vinOrSerial: vinOrSerial || null,
-    colorCode: colorCode || null,
-    branchId, status,
+    divisionId, status,
     meterType, currentMeter: (meterType !== 'none' && meterRaw !== '') ? parseInt(meterRaw, 10) : null,
     ticketable,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   try {
     if (assetId) {
-      // Branch reassignment keeps history — close out the prior span and
-      // open a new one — so per-branch downtime reporting (a later phase)
+      // Division reassignment keeps history — close out the prior span and
+      // open a new one — so per-division downtime reporting (a later phase)
       // doesn't get corrupted by a mid-year reassignment.
       const existing = (window._shopAssets || []).find(a => a.id === assetId);
-      if (existing && existing.branchId !== branchId) {
+      if (existing && existing.divisionId !== divisionId) {
         const today = new Date().toISOString().split('T')[0];
-        const openHist = await db.collection('shop_asset_branch_history')
+        const openHist = await db.collection('shop_asset_division_history')
           .where('assetId','==',assetId).where('toDate','==',null).get();
         const histBatch = db.batch();
         openHist.docs.forEach(d => histBatch.update(d.ref, { toDate: today }));
-        if (branchId) {
-          histBatch.set(db.collection('shop_asset_branch_history').doc(), {
-            assetId, branchId, fromDate: today, toDate: null,
+        if (divisionId) {
+          histBatch.set(db.collection('shop_asset_division_history').doc(), {
+            assetId, divisionId, fromDate: today, toDate: null,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });
         }
@@ -10130,10 +10117,10 @@ async function shopSaveAsset(assetId) {
         addedByUserId: CU.uid, addedByUserName: CD.name,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-      if (branchId) {
+      if (divisionId) {
         const today = new Date().toISOString().split('T')[0];
-        await db.collection('shop_asset_branch_history').add({
-          assetId: null, branchId, fromDate: today, toDate: null,
+        await db.collection('shop_asset_division_history').add({
+          assetId: null, divisionId, fromDate: today, toDate: null,
           note: 'Set at creation — assetId backfilled not required for Phase 1 reporting',
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -10154,7 +10141,6 @@ async function renderShopPending() {
   if (CD.role !== 'admin') { ca.innerHTML = '<div class="empty">Admin only.</div>'; return; }
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   try {
-    await shopLoadBranches();
     const snap = await db.collection('shop_assets').where('pendingReview','==',true).get();
     const pending = snap.docs.map(d => ({ id:d.id, ...d.data() }))
       .sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
@@ -10167,7 +10153,7 @@ async function renderShopPending() {
           + '<div style="flex:1;min-width:0">'
           + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(a.unitNumber || '') + '</div>'
           + '<div style="font-size:11.5px;color:var(--text3);margin-top:2px">' + shopAssetTypeLabel(a.assetType) + ' · '
-          + esc([a.make,a.model,a.year].filter(Boolean).join(' ') || '—') + ' · ' + esc(shopBranchName(a.branchId)) + '</div>'
+          + esc([a.make,a.model,a.year].filter(Boolean).join(' ') || '—') + ' · ' + esc(shopDivisionName(a.divisionId)) + '</div>'
           + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + T('Added by','Agregado por') + ' ' + esc(a.addedByUserName || '—') + '</div>'
           + '</div>'
           + '<button class="btn sm" style="background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopConfirmAsset(\'' + a.id + '\')">✓ ' + T('Confirm','Confirmar') + '</button>'
@@ -10191,10 +10177,10 @@ async function shopConfirmAsset(assetId) {
   } catch (e) { toast('Could not confirm — ' + e.message, 'err'); }
 }
 
-// Safe to hard-delete here specifically because nothing in Phase 1 can
-// reference an asset yet (no tickets exist until Phase 2) — once tickets
-// exist, a rejected/duplicate asset will need a real merge action instead
-// of deletion, so ticket history isn't orphaned.
+// Safe to hard-delete here because a pending (unconfirmed) asset can never
+// have a ticket against it — the ticket form's asset picker only offers
+// confirmed assets. If that invariant ever changes, this needs to become
+// a real merge action instead of deletion, so ticket history isn't orphaned.
 async function shopRejectAsset(assetId, unitNumber) {
   if (!confirm(T('Reject and remove "' + unitNumber + '"? This cannot be undone.', '¿Rechazar y eliminar "' + unitNumber + '"? Esto no se puede deshacer.'))) return;
   try {
@@ -10202,6 +10188,285 @@ async function shopRejectAsset(assetId, unitNumber) {
     toast('✓ ' + T('Rejected','Rechazado'));
     renderShopPending();
   } catch (e) { toast('Could not reject — ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Shop Tickets — Phase 2: ticket core (submission, stages, timeline).
+// Nothing here talks to chat/notifications yet — that's Phase 4 (Alerts)
+// in the build plan, on purpose, so this stays scoped to "can a repair
+// get entered and moved through its stages."
+//
+// shop_tickets holds one doc per repair request, denormalizing unitNumber
+// and divisionId from the asset at submit time (so the list/board never
+// needs a join). shop_tickets/{id}/events is a SUBCOLLECTION per ticket,
+// same trick used for chat messages elsewhere in this file — it lets the
+// timeline query with a plain orderBy('createdAt') with no composite
+// index, instead of where(ticketId)+orderBy needing one.
+// ══════════════════════════════════════════════════════════════════════
+
+const SHOP_TICKET_STATUSES = ['submitted','acknowledged','in_progress','ready_pickup','closed','cancelled'];
+const SHOP_TICKET_PRIORITIES = ['normal','urgent'];
+
+function shopTicketStatusLabel(s) {
+  return T({submitted:'Submitted',acknowledged:'Acknowledged',in_progress:'In Progress',ready_pickup:'Ready for Pickup',closed:'Closed',cancelled:'Cancelled'}[s] || s,
+           {submitted:'Enviado',acknowledged:'Reconocido',in_progress:'En Progreso',ready_pickup:'Listo para Recoger',closed:'Cerrado',cancelled:'Cancelado'}[s] || s);
+}
+function shopTicketStatusColor(s) {
+  return { submitted:'var(--text3)', acknowledged:'var(--info)', in_progress:'var(--warn)', ready_pickup:'var(--success)', closed:'var(--text3)', cancelled:'var(--danger)' }[s] || 'var(--text3)';
+}
+function shopTicketStatusBg(s) {
+  return { submitted:'var(--surface2)', acknowledged:'var(--info-l)', in_progress:'var(--warn-l)', ready_pickup:'var(--success-l)', closed:'var(--surface2)', cancelled:'var(--danger-l)' }[s] || 'var(--surface2)';
+}
+function shopPriorityLabel(p) {
+  return T({normal:'Normal',urgent:'Urgent'}[p] || p, {normal:'Normal',urgent:'Urgente'}[p] || p);
+}
+function shopFmtWhen(ts) {
+  if (!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+}
+
+window._shopTickets = [];
+window._shopTicketFilter = 'open';
+
+async function renderShopTickets() {
+  const ca = document.getElementById('content-area');
+  const isManager = ROLES[CD.role]?.isManager || CD.role === 'admin';
+  if (!isManager) { ca.innerHTML = '<div class="empty">' + T('Shop Tickets is only available to managers and admin.','Boletos del Taller solo está disponible para gerentes y admin.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const [assetSnap, ticketSnap] = await Promise.all([
+      db.collection('shop_assets').get(),
+      db.collection('shop_tickets').orderBy('createdAt','desc').get()
+    ]);
+    window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    window._shopTickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    shopPaintTickets();
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load Tickets</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderShopTickets()">Retry</button></div>';
+  }
+}
+
+function shopPaintTickets() {
+  const ca = document.getElementById('content-area');
+  const filter = window._shopTicketFilter;
+  const openStatuses = ['submitted','acknowledged','in_progress'];
+  const list = (window._shopTickets || []).filter(t => {
+    if (filter === 'open') return openStatuses.includes(t.status);
+    if (filter === 'ready_pickup') return t.status === 'ready_pickup';
+    if (filter === 'closed') return t.status === 'closed' || t.status === 'cancelled';
+    return true;
+  });
+  const openCount = (window._shopTickets || []).filter(t => openStatuses.includes(t.status)).length;
+  const chips = [
+    ['open', T('Open','Abiertos')], ['ready_pickup', T('Ready for Pickup','Listos para Recoger')],
+    ['closed', T('Closed','Cerrados')], ['all', T('All','Todos')]
+  ];
+
+  ca.innerHTML = '<div class="card" style="margin-bottom:16px">'
+    + '<div class="card-header"><div class="card-title">🎫 ' + T('Tickets','Boletos') + (openCount ? ' <span style="font-size:11px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 8px;border-radius:20px;margin-left:6px">' + openCount + ' ' + T('open','abiertos') + '</span>' : '') + '</div>'
+    + '<button class="btn primary" onclick="shopOpenTicketForm()">+ ' + T('New Ticket','Nuevo Boleto') + '</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
+    + chips.map(([k,label]) => '<button class="btn sm' + (filter===k?' primary':'') + '" onclick="shopSetTicketFilter(\'' + k + '\')">' + label + '</button>').join('')
+    + '</div>'
+    + (list.length ? list.map(t => {
+        const priorityBadge = t.priority === 'urgent' ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('URGENT','URGENTE') + '</span>' : '';
+        const partsBadge = t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '';
+        return '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + priorityBadge + partsBadge + '</div>'
+          + '<div style="font-size:12.5px;color:var(--text2);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.issue || '') + '</div>'
+          + '<div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+          + shopDivisionChip(t.divisionId)
+          + '<span>·</span><span>' + T('Submitted by','Enviado por') + ' ' + esc(t.submittedByName || '—') + '</span>'
+          + '<span>·</span><span>' + shopFmtWhen(t.createdAt) + '</span>'
+          + '</div></div>'
+          + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
+          + '</div>';
+      }).join('') : '<div class="empty">' + T('No tickets here.','No hay boletos aquí.') + '</div>')
+    + '</div>';
+}
+
+function shopSetTicketFilter(val) { window._shopTicketFilter = val; shopPaintTickets(); }
+
+function shopOpenTicketForm() {
+  const ex = document.getElementById('shop-ticket-modal'); if (ex) ex.remove();
+  const assets = (window._shopAssets || []).filter(a => !a.pendingReview && a.ticketable !== false)
+    .sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
+  const m = document.createElement('div');
+  m.id = 'shop-ticket-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:480px;max-width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">🎫 ' + T('New Ticket','Nuevo Boleto') + '</div>'
+    + '<button onclick="document.getElementById(\'shop-ticket-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + (assets.length ? '' : '<div style="font-size:11.5px;color:var(--text2);background:var(--warn-l);padding:8px 11px;border-radius:var(--r);margin-bottom:14px">' + T('No ticketable assets in the registry yet.','Aún no hay activos que generen boletos en el registro.') + '</div>')
+    + '<div class="fg"><label>' + T('Asset','Activo') + '<span class="req">*</span></label><select id="st-asset">'
+    + '<option value="">' + T('Select a unit…','Selecciona una unidad…') + '</option>'
+    + assets.map(a => '<option value="' + a.id + '">' + esc(a.unitNumber) + ' — ' + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType)) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="fg"><label>' + T('What\'s wrong?','¿Qué está mal?') + '<span class="req">*</span></label><textarea id="st-issue" rows="3" placeholder="' + T('Describe the issue…','Describe el problema…') + '"></textarea></div>'
+    + '<div class="fg"><label>' + T('Priority','Prioridad') + '</label><select id="st-priority">'
+    + SHOP_TICKET_PRIORITIES.map(p => '<option value="' + p + '"' + (p==='normal'?' selected':'') + '>' + shopPriorityLabel(p) + '</option>').join('')
+    + '</select></div>'
+    + '<div style="display:flex;gap:8px;margin-top:8px">'
+    + '<button class="btn primary" id="st-save-btn" onclick="shopSaveTicket()">' + T('Submit','Enviar') + '</button>'
+    + '<button class="btn" onclick="document.getElementById(\'shop-ticket-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+async function shopSaveTicket() {
+  const assetId = document.getElementById('st-asset').value;
+  const issue = document.getElementById('st-issue').value.trim();
+  const priority = document.getElementById('st-priority').value;
+  if (!assetId) { toast(T('Select an asset','Selecciona un activo'), 'err'); return; }
+  if (!issue) { toast(T('Describe the issue','Describe el problema'), 'err'); return; }
+  const asset = (window._shopAssets || []).find(a => a.id === assetId);
+  const btn = document.getElementById('st-save-btn');
+  btn.disabled = true; btn.textContent = T('Submitting…','Enviando…');
+  try {
+    const ref = await db.collection('shop_tickets').add({
+      assetId, unitNumber: asset?.unitNumber || '', divisionId: asset?.divisionId || null,
+      issue, priority, status: 'submitted', partsPending: false,
+      submittedByUserId: CU.uid, submittedByName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await ref.collection('events').add({
+      type: 'created', userId: CU.uid, userName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    toast('✓ ' + T('Ticket submitted','Boleto enviado'));
+    document.getElementById('shop-ticket-modal').remove();
+    renderShopTickets();
+  } catch (e) {
+    toast(e.message || 'Could not submit', 'err');
+    btn.disabled = false; btn.textContent = T('Submit','Enviar');
+  }
+}
+
+// Which status buttons are valid from each current status — keeps the
+// detail modal from ever offering a jump that skips or reverses a stage
+// by accident.
+const SHOP_TICKET_NEXT = {
+  submitted:    [['acknowledged', T('Acknowledge','Reconocer')], ['cancelled', T('Cancel','Cancelar')]],
+  acknowledged: [['in_progress', T('Start Work','Iniciar Trabajo')], ['cancelled', T('Cancel','Cancelar')]],
+  in_progress:  [['ready_pickup', T('Ready for Pickup','Listo para Recoger')], ['cancelled', T('Cancel','Cancelar')]],
+  ready_pickup: [['closed', T('Picked Up / Close','Recogido / Cerrar')], ['in_progress', T('Back to In Progress','Volver a En Progreso')]],
+  closed: [], cancelled: []
+};
+
+async function shopOpenTicketDetail(ticketId) {
+  const ex = document.getElementById('shop-ticket-detail-modal'); if (ex) ex.remove();
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const m = document.createElement('div');
+  m.id = 'shop-ticket-detail-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:560px;max-width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div id="std-body">' + T('Loading…','Cargando…') + '</div></div>';
+  document.body.appendChild(m);
+  await shopPaintTicketDetail(ticketId);
+}
+
+async function shopPaintTicketDetail(ticketId) {
+  const body = document.getElementById('std-body');
+  if (!body) return;
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  let events = [];
+  try {
+    const snap = await db.collection('shop_tickets').doc(ticketId).collection('events').orderBy('createdAt','asc').get();
+    events = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+  } catch (e) { /* timeline is best-effort; ticket state above still renders */ }
+
+  const nextActions = SHOP_TICKET_NEXT[t.status] || [];
+  const isTerminal = t.status === 'closed' || t.status === 'cancelled';
+
+  body.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+    + '<div><div style="font-size:15px;font-weight:700">🎫 ' + esc(t.unitNumber || '—') + '</div>'
+    + '<div style="margin-top:4px">' + shopDivisionChip(t.divisionId) + '</div></div>'
+    + '<button onclick="document.getElementById(\'shop-ticket-detail-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div style="display:flex;gap:6px;align-items:center;margin:10px 0">'
+    + '<span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + '">' + shopTicketStatusLabel(t.status) + '</span>'
+    + (t.priority === 'urgent' ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:3px 8px;border-radius:20px">' + T('URGENT','URGENTE') + '</span>' : '')
+    + (t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:3px 8px;border-radius:20px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '')
+    + '</div>'
+    + '<div style="font-size:13px;color:var(--text);background:var(--surface2);padding:10px 12px;border-radius:var(--r);margin-bottom:14px;white-space:pre-wrap">' + esc(t.issue || '') + '</div>'
+    + '<div style="font-size:11px;color:var(--text3);margin-bottom:14px">' + T('Submitted by','Enviado por') + ' ' + esc(t.submittedByName || '—') + ' · ' + shopFmtWhen(t.createdAt) + '</div>'
+    + (!isTerminal ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">'
+        + nextActions.map(([status,label]) => '<button class="btn sm' + (status==='cancelled'?'':' primary') + '" onclick="shopAdvanceTicket(\'' + ticketId + '\',\'' + status + '\')">' + label + '</button>').join('')
+        + '<button class="btn sm" onclick="shopToggleParts(\'' + ticketId + '\')">' + (t.partsPending ? T('Clear Parts Pending','Quitar Piezas Pendientes') : T('Flag Parts Pending','Marcar Piezas Pendientes')) + '</button>'
+        + '</div>' : '')
+    + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:8px">' + T('Timeline','Cronología') + '</div>'
+    + '<div style="max-height:200px;overflow-y:auto;margin-bottom:14px">'
+    + (events.length ? events.map(ev => {
+        let line;
+        if (ev.type === 'created') line = T('Ticket submitted','Boleto enviado');
+        else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus);
+        else if (ev.type === 'parts') line = ev.partsPending ? T('Flagged parts pending','Marcado piezas pendientes') : T('Cleared parts pending','Piezas pendientes eliminado');
+        else line = esc(ev.text || '');
+        return '<div style="padding:7px 0;border-bottom:1px solid var(--border);font-size:12px">'
+          + '<span style="color:var(--text)">' + line + '</span>'
+          + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
+      }).join('') : '<div style="font-size:11.5px;color:var(--text3)">' + T('No activity yet.','Sin actividad aún.') + '</div>')
+    + '</div>'
+    + (!isTerminal ? '<div class="fg"><label>' + T('Add a note','Agregar una nota') + '</label>'
+        + '<textarea id="st-note-' + ticketId + '" rows="2" placeholder="' + T('Notes for the crew or admin…','Notas para la cuadrilla o admin…') + '"></textarea>'
+        + '<button class="btn sm" style="margin-top:6px" onclick="shopAddTicketNote(\'' + ticketId + '\')">' + T('Add Note','Agregar Nota') + '</button></div>' : '');
+}
+
+async function shopAdvanceTicket(ticketId, toStatus) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const fromStatus = t.status;
+  try {
+    const update = { status: toStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+    if (toStatus === 'closed' || toStatus === 'cancelled') update.closedAt = firebase.firestore.FieldValue.serverTimestamp();
+    await db.collection('shop_tickets').doc(ticketId).update(update);
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'status', fromStatus, toStatus, userId: CU.uid, userName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.status = toStatus;
+    toast('✓ ' + shopTicketStatusLabel(toStatus));
+    shopPaintTickets();
+    await shopPaintTicketDetail(ticketId);
+  } catch (e) { toast('Could not update — ' + e.message, 'err'); }
+}
+
+async function shopToggleParts(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const partsPending = !t.partsPending;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ partsPending, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'parts', partsPending, userId: CU.uid, userName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.partsPending = partsPending;
+    shopPaintTickets();
+    await shopPaintTicketDetail(ticketId);
+  } catch (e) { toast('Could not update — ' + e.message, 'err'); }
+}
+
+async function shopAddTicketNote(ticketId) {
+  const ta = document.getElementById('st-note-' + ticketId);
+  const text = ta ? ta.value.trim() : '';
+  if (!text) return;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text, userId: CU.uid, userName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await shopPaintTicketDetail(ticketId);
+  } catch (e) { toast('Could not add note — ' + e.message, 'err'); }
 }
 
 </script>
