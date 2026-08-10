@@ -1013,10 +1013,11 @@ const ROLES = {
   // deliberately locked down to a single read-only screen, so it's a
   // separate role rather than a branch variant of the same one.
   ops_specialist_oc:    { label:'Operations Specialist (OC)', branch:'OC', canViewAll:false, isManager:false, color:'var(--oc)', restrictedTo:'saturday-schedule' },
-  // Shop Tickets (Central Shop) — kiosk-only role, added ahead of the
-  // kiosk UI itself (that's Phase 3) so ROLES/admin user-creation already
-  // recognize it once a shared yard account exists (see build plan §11.4).
-  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)' }
+  // Shop Tickets (Central Shop) — kiosk-only role. Locked to the one
+  // screen the same way ops_specialist_oc is, so a shared yard account
+  // (build plan §11.4, still open) never sees any other nav — tap-only,
+  // no menus, per the build plan's kiosk spec.
+  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)', restrictedTo:'yard-kiosk' }
 };
 
 const TEAM = [
@@ -1538,6 +1539,14 @@ function wsAreas() {
     if (role === 'admin') shopScreens.push({ id:'shop-pending', icon:'⏳', label:T('Pending Review','Revisión Pendiente') });
     areas.push({ id:'shop', icon:'🔧', label:T('Shop Tickets','Boletos del Taller'), screens: shopScreens });
   }
+  // Phase 3 kiosk — the yard role's ONLY screen (enforced below via
+  // restrictedTo). Also shown to admin, additively, purely so David can
+  // preview it without needing a separate yard login.
+  if (role === 'yard' || role === 'admin') {
+    areas.push({ id:'yard-kiosk', icon:'🧰', label:T('Yard Kiosk','Kiosco de Taller'), screens:[
+      { id:'yard-kiosk', icon:'🧰', label:T('Yard Kiosk','Kiosco de Taller') }
+    ]});
+  }
   if (ocCrew) {
     areas.push({ id:'crew', icon:'🗓', label:T('Field Crew','Cuadrilla'), screens:[
       { id:'saturday-schedule', icon:'🗓', label:T('Saturday Schedule','Horario del Sábado') }
@@ -1839,6 +1848,7 @@ function renderScreen(screen) {
     'shop-tickets':   { title: T('Tickets','Boletos'),                    fn: renderShopTickets },
     'shop-assets':    { title: T('Asset Registry','Registro de Activos'), fn: renderShopAssets },
     'shop-pending':   { title: T('Pending Review','Revisión Pendiente'),  fn: renderShopPending },
+    'yard-kiosk':     { title: T('Yard Kiosk','Kiosco de Taller'),        fn: renderYardKiosk },
   };
   const s = screens[screen];
   if (!s) return;
@@ -10225,6 +10235,13 @@ function shopFmtWhen(ts) {
   const d = ts.toDate ? ts.toDate() : new Date(ts);
   return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
 }
+// For the plain 'YYYY-MM-DD' strings the two date <input type=date> fields
+// store — different from shopFmtWhen, which expects a Firestore Timestamp.
+function shopFmtDateOnly(s) {
+  if (!s) return '—';
+  const [y,mo,d] = s.split('-').map(Number);
+  return new Date(y, mo-1, d).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
 
 window._shopTickets = [];
 window._shopTicketFilter = 'open';
@@ -10284,6 +10301,8 @@ function shopPaintTickets() {
           + shopDivisionChip(t.divisionId)
           + '<span>·</span><span>' + T('Submitted by','Enviado por') + ' ' + esc(t.submittedByName || '—') + '</span>'
           + '<span>·</span><span>' + shopFmtWhen(t.createdAt) + '</span>'
+          + (t.estimatedDropoffDate ? '<span>·</span><span>📅 ' + T('Drop-off','Entrega') + ' ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</span>' : '')
+          + (t.requestedReturnDate ? '<span>·</span><span>↩ ' + T('Needed by','Se necesita para') + ' ' + shopFmtDateOnly(t.requestedReturnDate) + '</span>' : '')
           + '</div></div>'
           + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
           + '</div>';
@@ -10313,6 +10332,10 @@ function shopOpenTicketForm() {
     + '<div class="fg"><label>' + T('Priority','Prioridad') + '</label><select id="st-priority">'
     + SHOP_TICKET_PRIORITIES.map(p => '<option value="' + p + '"' + (p==='normal'?' selected':'') + '>' + shopPriorityLabel(p) + '</option>').join('')
     + '</select></div>'
+    + '<div class="g2">'
+    + '<div class="fg"><label>' + T('Estimated Drop-off Date','Fecha Estimada de Entrega') + '</label><input type="date" id="st-dropoff"></div>'
+    + '<div class="fg"><label>' + T('Requested Return Date','Fecha de Regreso Solicitada') + '</label><input type="date" id="st-return"></div>'
+    + '</div>'
     + '<div style="display:flex;gap:8px;margin-top:8px">'
     + '<button class="btn primary" id="st-save-btn" onclick="shopSaveTicket()">' + T('Submit','Enviar') + '</button>'
     + '<button class="btn" onclick="document.getElementById(\'shop-ticket-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
@@ -10324,6 +10347,8 @@ async function shopSaveTicket() {
   const assetId = document.getElementById('st-asset').value;
   const issue = document.getElementById('st-issue').value.trim();
   const priority = document.getElementById('st-priority').value;
+  const estimatedDropoffDate = document.getElementById('st-dropoff').value || null;
+  const requestedReturnDate = document.getElementById('st-return').value || null;
   if (!assetId) { toast(T('Select an asset','Selecciona un activo'), 'err'); return; }
   if (!issue) { toast(T('Describe the issue','Describe el problema'), 'err'); return; }
   const asset = (window._shopAssets || []).find(a => a.id === assetId);
@@ -10333,6 +10358,7 @@ async function shopSaveTicket() {
     const ref = await db.collection('shop_tickets').add({
       assetId, unitNumber: asset?.unitNumber || '', divisionId: asset?.divisionId || null,
       issue, priority, status: 'submitted', partsPending: false,
+      estimatedDropoffDate, requestedReturnDate,
       submittedByUserId: CU.uid, submittedByName: CD.name,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -10343,7 +10369,10 @@ async function shopSaveTicket() {
     });
     toast('✓ ' + T('Ticket submitted','Boleto enviado'));
     document.getElementById('shop-ticket-modal').remove();
-    renderShopTickets();
+    // Refresh whichever shop screen is actually on screen (Tickets board or
+    // the Yard Kiosk preview) rather than assuming — this form can be
+    // opened from either.
+    renderScreen(activeScreen);
   } catch (e) {
     toast(e.message || 'Could not submit', 'err');
     btn.disabled = false; btn.textContent = T('Submit','Enviar');
@@ -10398,6 +10427,10 @@ async function shopPaintTicketDetail(ticketId) {
     + (t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:3px 8px;border-radius:20px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '')
     + '</div>'
     + '<div style="font-size:13px;color:var(--text);background:var(--surface2);padding:10px 12px;border-radius:var(--r);margin-bottom:14px;white-space:pre-wrap">' + esc(t.issue || '') + '</div>'
+    + ((t.estimatedDropoffDate || t.requestedReturnDate) ? '<div style="display:flex;gap:18px;font-size:12px;color:var(--text2);margin-bottom:10px">'
+        + (t.estimatedDropoffDate ? '<div>📅 ' + T('Drop-off','Entrega') + ': <b>' + shopFmtDateOnly(t.estimatedDropoffDate) + '</b></div>' : '')
+        + (t.requestedReturnDate ? '<div>↩ ' + T('Needed back','Se necesita de vuelta') + ': <b>' + shopFmtDateOnly(t.requestedReturnDate) + '</b></div>' : '')
+        + '</div>' : '')
     + '<div style="font-size:11px;color:var(--text3);margin-bottom:14px">' + T('Submitted by','Enviado por') + ' ' + esc(t.submittedByName || '—') + ' · ' + shopFmtWhen(t.createdAt) + '</div>'
     + (!isTerminal ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">'
         + nextActions.map(([status,label]) => '<button class="btn sm' + (status==='cancelled'?'':' primary') + '" onclick="shopAdvanceTicket(\'' + ticketId + '\',\'' + status + '\')">' + label + '</button>').join('')
@@ -10467,6 +10500,118 @@ async function shopAddTicketNote(ticketId) {
     });
     await shopPaintTicketDetail(ticketId);
   } catch (e) { toast('Could not add note — ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Shop Tickets — Phase 3: Yard Supervisor kiosk.
+//
+// Per the build plan this is the ONE screen a shared yard account ever
+// sees (enforced by ROLES.yard.restrictedTo), Spanish-only regardless of
+// the viewer's language setting (hardcoded strings below, not T() — the
+// person on this screen is always Spanish-speaking per the plan), and
+// tap-only: no forms, no free text, no menus. Every action is "tap a
+// card, confirm on one big button." Also reachable by admin so David can
+// preview it without a separate yard login — the admin-only banner and
+// "+ Add Test Ticket" button below never show for the real yard role.
+// ══════════════════════════════════════════════════════════════════════
+
+async function renderYardKiosk() {
+  const ca = document.getElementById('content-area');
+  if (CD.role !== 'yard' && CD.role !== 'admin') { ca.innerHTML = '<div class="empty">Acceso restringido.</div>'; return; }
+  ca.innerHTML = '<div class="empty">Cargando…</div>';
+  try {
+    const [assetSnap, ticketSnap] = await Promise.all([
+      db.collection('shop_assets').get(),
+      db.collection('shop_tickets').orderBy('createdAt','desc').get()
+    ]);
+    window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    window._shopTickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    shopPaintYardKiosk();
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ No se pudo cargar</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderYardKiosk()">Reintentar</button></div>';
+  }
+}
+
+function shopPaintYardKiosk() {
+  const ca = document.getElementById('content-area');
+  const tickets = window._shopTickets || [];
+  const incoming = tickets.filter(t => t.status === 'submitted' || t.status === 'acknowledged')
+    .sort((a,b) => (a.estimatedDropoffDate||'9999').localeCompare(b.estimatedDropoffDate||'9999'));
+  const inProgress = tickets.filter(t => t.status === 'in_progress');
+  const readyPickup = tickets.filter(t => t.status === 'ready_pickup');
+
+  const tapCard = (t, kind) => {
+    const urgent = t.priority === 'urgent';
+    return '<button onclick="shopYardConfirm(\'' + t.id + '\',\'' + kind + '\')" style="display:block;width:100%;text-align:left;background:var(--surface);border:2px solid ' + (urgent ? 'var(--danger)' : 'var(--border2)') + ';border-radius:14px;padding:16px 18px;margin-bottom:12px;cursor:pointer;font-family:inherit">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      + '<div style="font-size:18px;font-weight:800;color:var(--text)">' + esc(t.unitNumber || '—') + '</div>'
+      + (urgent ? '<span style="font-size:10px;font-weight:800;color:var(--danger);background:var(--danger-l);padding:3px 10px;border-radius:20px;white-space:nowrap">URGENTE</span>' : '')
+      + '</div>'
+      + '<div style="font-size:13px;margin-top:4px">' + shopDivisionChip(t.divisionId) + '</div>'
+      + '<div style="font-size:13.5px;color:var(--text);margin-top:8px;line-height:1.5">' + esc(t.issue || '') + '</div>'
+      + (t.estimatedDropoffDate ? '<div style="font-size:12px;color:var(--text3);margin-top:8px">📅 Entrega estimada: ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</div>' : '')
+      + (t.requestedReturnDate ? '<div style="font-size:12px;color:var(--text3);margin-top:2px">↩ Se necesita: ' + shopFmtDateOnly(t.requestedReturnDate) + '</div>' : '')
+      + '</button>';
+  };
+  const infoCard = (t) => '<div style="background:var(--surface2);border-radius:14px;padding:14px 18px;margin-bottom:10px">'
+    + '<div style="font-size:15px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + '</div>'
+    + '<div style="font-size:12.5px;margin-top:3px">' + shopDivisionChip(t.divisionId) + '</div>'
+    + '</div>';
+
+  ca.innerHTML = (CD.role === 'admin' ? '<div style="font-size:12px;color:var(--text);background:var(--info-l);padding:10px 14px;border-radius:var(--r);margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'
+      + '<span>Vista previa de admin — esto es lo que ve el Supervisor de Patio. Diseño en español, solo con toques, sin menús.</span>'
+      + '<button class="btn sm primary" onclick="shopOpenTicketForm()">+ Add Test Ticket</button>'
+      + '</div>' : '')
+    + '<div style="font-size:22px;font-weight:800;margin-bottom:18px">🧰 Taller</div>'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">🚚 Equipo Entrante (' + incoming.length + ')</div>'
+    + (incoming.length ? incoming.map(t => tapCard(t,'dropoff')).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Nada entrante.</div>')
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:22px 0 10px">🔧 En Reparación (' + inProgress.length + ')</div>'
+    + (inProgress.length ? inProgress.map(infoCard).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Nada en reparación.</div>')
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:22px 0 10px">✅ Listo para Recoger (' + readyPickup.length + ')</div>'
+    + (readyPickup.length ? readyPickup.map(t => tapCard(t,'pickup')).join('') : '<div style="font-size:13px;color:var(--text3)">Nada listo.</div>');
+}
+
+function shopYardConfirm(ticketId, kind) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const ex = document.getElementById('shop-yard-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'shop-yard-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  const actionLabel = kind === 'dropoff' ? 'Confirmar Entrega en Taller' : 'Confirmar Recogida';
+  const question = kind === 'dropoff' ? '¿Confirmar que este equipo fue entregado en el taller?' : '¿Confirmar que este equipo fue recogido?';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:20px;padding:26px;width:420px;max-width:100%;box-shadow:var(--shm);text-align:center">'
+    + '<div style="font-size:22px;font-weight:800;margin-bottom:4px">' + esc(t.unitNumber || '—') + '</div>'
+    + '<div style="font-size:13px;color:var(--text2);margin-bottom:18px">' + esc(t.issue || '') + '</div>'
+    + '<div style="font-size:15px;color:var(--text);margin-bottom:22px">' + question + '</div>'
+    + '<button onclick="shopYardDoConfirm(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:18px;font-size:17px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer;margin-bottom:10px">✅ ' + actionLabel + '</button>'
+    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="width:100%;padding:14px;font-size:14px;font-weight:700;background:none;border:2px solid var(--border2);color:var(--text2);border-radius:14px;cursor:pointer">Cancelar</button>'
+    + '</div>';
+  document.body.appendChild(m);
+}
+
+async function shopYardDoConfirm(ticketId, kind) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const toStatus = kind === 'dropoff' ? 'in_progress' : 'closed';
+  const fromStatus = t.status;
+  try {
+    const update = { status: toStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+    if (toStatus === 'closed') update.closedAt = firebase.firestore.FieldValue.serverTimestamp();
+    await db.collection('shop_tickets').doc(ticketId).update(update);
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'status', fromStatus, toStatus, userId: CU.uid, userName: CD.name,
+      note: kind === 'dropoff' ? 'Confirmado por Supervisor de Patio' : 'Recogida confirmada por Supervisor de Patio',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.status = toStatus;
+    const modal = document.getElementById('shop-yard-modal'); if (modal) modal.remove();
+    toast('✓ Actualizado');
+    shopPaintYardKiosk();
+  } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
 }
 
 </script>
