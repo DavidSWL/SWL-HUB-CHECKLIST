@@ -4728,6 +4728,10 @@ async function renderReports() {
   if (isAdmin || isExec) tabs.push({ k:'accountability', l:'Accountability', fn: renderAccountability });
   if (isMgr || isExec) tabs.push({ k:'team', l:'Team Overview', fn: renderTeam });
   if (isExec) tabs.push({ k:'exec-dashboard', l:'Executive Dashboard', fn: renderExecDashboard });
+  // Same admin/exec gate as Asset Registry and Pending Review — this is
+  // shop-wide oversight, not something a regular manager needs here (they
+  // track their own requests on Ticket Progress instead).
+  if (isAdmin || isExec) tabs.push({ k:'yard-repairs', l:T('Yard Repairs','Reparaciones del Taller'), fn: renderYardRepairReport });
 
   if (!tabs.length) { ca.innerHTML = '<div class="empty">Reports access is restricted for your role.</div>'; return; }
 
@@ -10781,6 +10785,109 @@ function shopYardBeep() {
     };
     tone(880, 0, 0.16); tone(1175, 0.18, 0.22);
   } catch (e) { /* no audio available — the flash still shows on its own */ }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Reports — Yard Repairs tab. Lives inside the existing Reports screen
+// (renderReports' tab strip), not a separate Shop Tickets nav item —
+// admin/exec oversight across every ticket and asset in the shop.
+// ══════════════════════════════════════════════════════════════════════
+async function renderYardRepairReport() {
+  const ca = getContentTarget();
+  const canView = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!canView) { ca.innerHTML = '<div class="empty">' + T('Admin and executives only.','Solo admin y ejecutivos.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const [ticketSnap, assetSnap] = await Promise.all([
+      db.collection('shop_tickets').get(),
+      db.collection('shop_assets').get()
+    ]);
+    const tickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    const assets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    shopPaintYardRepairReport(tickets, assets);
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ ' + T('Could Not Load','No se Pudo Cargar') + '</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderYardRepairReport()">' + T('Retry','Reintentar') + '</button></div>';
+  }
+}
+
+function shopPaintYardRepairReport(tickets, assets) {
+  const ca = getContentTarget();
+  const openStatuses = ['submitted','acknowledged','in_progress','ready_pickup'];
+  const openTickets = tickets.filter(t => openStatuses.includes(t.status));
+  const urgentOpen = openTickets.filter(t => t.priority === 'urgent');
+  const readyNow = tickets.filter(t => t.status === 'ready_pickup');
+  const now = new Date();
+  const daysOpen = (t) => {
+    const created = t.createdAt?.toDate ? t.createdAt.toDate() : now;
+    return Math.max(0, Math.floor((now - created) / 86400000));
+  };
+  const closedThisMonth = tickets.filter(t => {
+    if (t.status !== 'closed' || !t.closedAt?.toDate) return false;
+    const d = t.closedAt.toDate();
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }).length;
+
+  const statusCounts = {};
+  SHOP_TICKET_STATUSES.forEach(s => statusCounts[s] = 0);
+  tickets.forEach(t => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
+  const maxStatusCount = Math.max(1, ...Object.values(statusCounts));
+
+  const divCounts = {};
+  SHOP_DIVISIONS.forEach(d => divCounts[d.id] = 0);
+  tickets.forEach(t => { if (t.divisionId && divCounts[t.divisionId] !== undefined) divCounts[t.divisionId]++; });
+  const maxDivCount = Math.max(1, ...Object.values(divCounts));
+
+  const downAssets = assets.filter(a => a.status === 'down');
+  const agingOpen = [...openTickets].sort((a,b) => daysOpen(b) - daysOpen(a)).slice(0, 12);
+
+  const bar = (label, count, max, color) => '<div style="margin-bottom:9px">'
+    + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="color:var(--text2)">' + label + '</span><span style="font-weight:700;color:var(--text)">' + count + '</span></div>'
+    + '<div style="height:7px;border-radius:4px;background:var(--surface2);overflow:hidden"><div style="height:100%;width:' + (count/max*100) + '%;background:' + color + ';border-radius:4px"></div></div>'
+    + '</div>';
+
+  ca.innerHTML = '<div style="font-size:11px;color:var(--text3);background:var(--surface2);padding:9px 13px;border-radius:var(--r);margin-bottom:16px">'
+      + T('First pass at this report — reach out if the breakdown here doesn\'t match what you had in mind and I\'ll adjust it.',
+          'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
+      + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
+      + '<div class="stat-card"><div class="stat-num">' + openTickets.length + '</div><div class="stat-lbl">' + T('Open Now','Abiertos Ahora') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--danger)"><div class="stat-num">' + urgentOpen.length + '</div><div class="stat-lbl">' + T('Urgent Open','Urgentes Abiertos') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--success)"><div class="stat-num">' + readyNow.length + '</div><div class="stat-lbl">' + T('Ready for Pickup','Listos para Recoger') + '</div></div>'
+      + '<div class="stat-card"><div class="stat-num">' + closedThisMonth + '</div><div class="stat-lbl">' + T('Closed This Month','Cerrados Este Mes') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--warn)"><div class="stat-num">' + downAssets.length + '</div><div class="stat-lbl">' + T('Assets Down','Activos Fuera de Servicio') + '</div></div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">'
+      + '<div class="card"><div class="card-title" style="margin-bottom:12px">' + T('Tickets by Status','Boletos por Estado') + '</div>'
+        + SHOP_TICKET_STATUSES.map(s => bar(shopTicketStatusLabel(s), statusCounts[s], maxStatusCount, shopTicketStatusColor(s))).join('')
+      + '</div>'
+      + '<div class="card"><div class="card-title" style="margin-bottom:12px">' + T('Tickets by Division','Boletos por División') + '</div>'
+        + SHOP_DIVISIONS.map(d => bar(T(d.name,d.nameEs), divCounts[d.id], maxDivCount, d.color)).join('')
+      + '</div>'
+    + '</div>'
+    + '<div class="card" style="margin-bottom:20px">'
+      + '<div class="card-title" style="margin-bottom:4px">' + T('Open Tickets — Oldest First','Boletos Abiertos — Más Antiguos Primero') + '</div>'
+      + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">' + T('Whatever\'s been sitting longest, so nothing quietly stalls.','Lo que lleva más tiempo esperando, para que nada se estanque sin darse cuenta.') + '</div>'
+      + (agingOpen.length ? '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:520px">'
+          + '<thead><tr>' + ['Unit','Division','Status','Days Open'].map((h,i) => '<th style="text-align:left;padding:6px 8px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,['Unidad','División','Estado','Días Abierto'][i]) + '</th>').join('') + '</tr></thead><tbody>'
+          + agingOpen.map(t => '<tr>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700">' + esc(t.unitNumber||'—') + (t.priority==='urgent' ? ' <span style="font-size:9px;color:var(--danger)">●URG</span>' : '') + '</td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)">' + esc(shopDivisionName(t.divisionId)) + '</td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + '">' + shopTicketStatusLabel(t.status) + '</span></td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700">' + daysOpen(t) + '</td>'
+              + '</tr>').join('')
+          + '</tbody></table></div>'
+        : '<div class="empty">' + T('Nothing open right now.','Nada abierto en este momento.') + '</div>')
+    + '</div>'
+    + '<div class="card">'
+      + '<div class="card-title" style="margin-bottom:12px">' + T('Assets Currently Down','Activos Actualmente Fuera de Servicio') + '</div>'
+      + (downAssets.length ? downAssets.map(a => '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px">'
+          + '<span style="font-weight:700">' + esc(a.unitNumber||'—') + '</span>'
+          + '<span style="color:var(--text3)">' + shopAssetTypeLabel(a.assetType) + ' · ' + esc(shopDivisionName(a.divisionId)) + '</span>'
+          + '</div>').join('') : '<div class="empty">' + T('No assets marked down.','No hay activos marcados como fuera de servicio.') + '</div>')
+    + '</div>';
 }
 
 async function renderYardKiosk() {
