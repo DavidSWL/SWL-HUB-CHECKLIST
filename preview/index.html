@@ -869,6 +869,20 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   .ws-top{padding:10px 12px}
   #tb-week{min-width:112px;font-size:10px}
 }
+/* Yard Kiosk — a brand-new ticket arriving flashes once so it's obvious
+   even at a glance; an urgent ticket keeps a slow pulse the whole time
+   it sits in the incoming queue, both paired with shopYardBeep(). */
+@keyframes yardFlashNew {
+  0%,100% { box-shadow:0 0 0 0 rgba(234,88,12,0); }
+  15%,45%,75% { box-shadow:0 0 0 6px rgba(234,88,12,.35); }
+  30%,60%,90% { box-shadow:0 0 0 0 rgba(234,88,12,0); }
+}
+.yard-flash-new { animation: yardFlashNew 1.8s ease-in-out 2; }
+@keyframes yardUrgentPulse {
+  0%,100% { border-color:var(--danger); background:var(--surface); }
+  50% { border-color:var(--danger); background:var(--danger-l); }
+}
+.yard-urgent-pulse { animation: yardUrgentPulse 1.3s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -1425,6 +1439,7 @@ async function doSignOut() {
   window._chLastMsgListeners = {};
   window._chUnread = {};
   if (window._chUnsub) { window._chUnsub(); window._chUnsub = null; }
+  if (window._shopYardUnsub) { window._shopYardUnsub(); window._shopYardUnsub = null; }
   await auth.signOut();
   // Tear the Spanish observer down — otherwise it survives into the next
   // sign-in on the same tab and would keep translating for an English user.
@@ -10312,6 +10327,30 @@ function shopPaintTickets() {
 
 function shopSetTicketFilter(val) { window._shopTicketFilter = val; shopPaintTickets(); }
 
+// One-click unblock for "the New Ticket picker is empty" — creates a real,
+// confirmed registry entry (never a free-text ticket) so the picker has
+// something to select, then reopens the ticket form with it available.
+// Admin-only in practice since it's only ever surfaced from admin-visible
+// screens (New Ticket's empty state, the Yard Kiosk admin preview banner).
+async function shopQuickAddTestAsset() {
+  try {
+    const n = (window._shopAssets || []).filter(a => (a.unitNumber||'').startsWith('TEST-')).length + 1;
+    const unitNumber = 'TEST-' + String(n).padStart(2,'0');
+    await db.collection('shop_assets').add({
+      unitNumber, assetType: 'vehicle', make: 'Test', model: 'Unit', year: null,
+      vinOrSerial: null, divisionId: null, status: 'active',
+      meterType: 'none', currentMeter: null, ticketable: true,
+      pendingReview: false, addedByUserId: CU.uid, addedByUserName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    const snap = await db.collection('shop_assets').get();
+    window._shopAssets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    toast('✓ ' + T('Test unit added','Unidad de prueba agregada') + ': ' + unitNumber);
+    shopOpenTicketForm();
+  } catch (e) { toast('Could not add — ' + e.message, 'err'); }
+}
+
 function shopOpenTicketForm() {
   const ex = document.getElementById('shop-ticket-modal'); if (ex) ex.remove();
   const assets = (window._shopAssets || []).filter(a => !a.pendingReview && a.ticketable !== false)
@@ -10323,7 +10362,10 @@ function shopOpenTicketForm() {
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
     + '<div style="font-size:14px;font-weight:700">🎫 ' + T('New Ticket','Nuevo Boleto') + '</div>'
     + '<button onclick="document.getElementById(\'shop-ticket-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
-    + (assets.length ? '' : '<div style="font-size:11.5px;color:var(--text2);background:var(--warn-l);padding:8px 11px;border-radius:var(--r);margin-bottom:14px">' + T('No ticketable assets in the registry yet.','Aún no hay activos que generen boletos en el registro.') + '</div>')
+    + (assets.length ? '' : '<div style="font-size:11.5px;color:var(--text2);background:var(--warn-l);padding:8px 11px;border-radius:var(--r);margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'
+        + '<span>' + T('No ticketable assets in the registry yet.','Aún no hay activos que generen boletos en el registro.') + '</span>'
+        + '<button class="btn sm" onclick="shopQuickAddTestAsset()">+ ' + T('Add a Test Unit','Agregar Unidad de Prueba') + '</button>'
+        + '</div>')
     + '<div class="fg"><label>' + T('Asset','Activo') + '<span class="req">*</span></label><select id="st-asset">'
     + '<option value="">' + T('Select a unit…','Selecciona una unidad…') + '</option>'
     + assets.map(a => '<option value="' + a.id + '">' + esc(a.unitNumber) + ' — ' + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType)) + '</option>').join('')
@@ -10369,10 +10411,13 @@ async function shopSaveTicket() {
     });
     toast('✓ ' + T('Ticket submitted','Boleto enviado'));
     document.getElementById('shop-ticket-modal').remove();
-    // Refresh whichever shop screen is actually on screen (Tickets board or
-    // the Yard Kiosk preview) rather than assuming — this form can be
-    // opened from either.
-    renderScreen(activeScreen);
+    // The Tickets board loads with a one-time .get(), so it needs an
+    // explicit refresh. The Yard Kiosk has a LIVE onSnapshot listener that
+    // already picks this ticket up on its own, complete with the flash/
+    // beep — forcing a refresh here would tear that listener down and
+    // rebuild it, which would wrongly treat this brand-new ticket as part
+    // of the existing backlog and silently skip the flash/beep.
+    if (activeScreen !== 'yard-kiosk') renderScreen(activeScreen);
   } catch (e) {
     toast(e.message || 'Could not submit', 'err');
     btn.disabled = false; btn.textContent = T('Submit','Enviar');
@@ -10515,29 +10560,72 @@ async function shopAddTicketNote(ticketId) {
 // "+ Add Test Ticket" button below never show for the real yard role.
 // ══════════════════════════════════════════════════════════════════════
 
+window._shopYardUnsub = null;
+window._shopYardSeenIds = null; // null until the first snapshot lands — that first one is the existing backlog, not "new arrivals"
+window._shopYardFlashIds = new Set();
+
+// Two-tone chime via Web Audio, not an audio file — nothing to host, and
+// it still needs a user gesture to have happened on the page first (true
+// here: they had to tap into this screen), or browsers block autoplay.
+function shopYardBeep() {
+  try {
+    if (!window._shopAudioCtx) window._shopAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = window._shopAudioCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+    const tone = (freq, start, dur) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + start); osc.stop(ctx.currentTime + start + dur + 0.05);
+    };
+    tone(880, 0, 0.16); tone(1175, 0.18, 0.22);
+  } catch (e) { /* no audio available — the flash still shows on its own */ }
+}
+
 async function renderYardKiosk() {
   const ca = document.getElementById('content-area');
   if (CD.role !== 'yard' && CD.role !== 'admin') { ca.innerHTML = '<div class="empty">Acceso restringido.</div>'; return; }
   ca.innerHTML = '<div class="empty">Cargando…</div>';
+  if (window._shopYardUnsub) { window._shopYardUnsub(); window._shopYardUnsub = null; }
+  window._shopYardSeenIds = null;
   try {
-    const [assetSnap, ticketSnap] = await Promise.all([
-      db.collection('shop_assets').get(),
-      db.collection('shop_tickets').orderBy('createdAt','desc').get()
-    ]);
+    const assetSnap = await db.collection('shop_assets').get();
     window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
-    window._shopTickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
-    shopPaintYardKiosk();
   } catch (e) {
     ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
       + '<div class="card-header"><div class="card-title">⚠ No se pudo cargar</div></div>'
       + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
       + '<button class="btn primary" onclick="renderYardKiosk()">Reintentar</button></div>';
+    return;
   }
+  // Live subscription — the whole point of a kiosk is nobody's sitting
+  // there clicking refresh, so a new ticket (or a status change made from
+  // the manager side) has to show up, flash and beep, on its own.
+  window._shopYardUnsub = db.collection('shop_tickets').orderBy('createdAt','desc')
+    .onSnapshot(snap => {
+      window._shopTickets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      if (window._shopYardSeenIds) {
+        const arrived = window._shopTickets.filter(t =>
+          !window._shopYardSeenIds.has(t.id) && (t.status === 'submitted' || t.status === 'acknowledged'));
+        if (arrived.length) {
+          window._shopYardFlashIds = new Set(arrived.map(t => t.id));
+          shopYardBeep();
+        }
+      }
+      window._shopYardSeenIds = new Set(window._shopTickets.map(t => t.id));
+      shopPaintYardKiosk();
+    }, err => {
+      ca.innerHTML = '<div class="empty">No se pudo conectar — ' + esc(err.message) + '</div>';
+    });
 }
 
 function shopPaintYardKiosk() {
   const ca = document.getElementById('content-area');
   const tickets = window._shopTickets || [];
+  const flashIds = window._shopYardFlashIds || new Set();
   const incoming = tickets.filter(t => t.status === 'submitted' || t.status === 'acknowledged')
     .sort((a,b) => (a.estimatedDropoffDate||'9999').localeCompare(b.estimatedDropoffDate||'9999'));
   const inProgress = tickets.filter(t => t.status === 'in_progress');
@@ -10545,7 +10633,8 @@ function shopPaintYardKiosk() {
 
   const tapCard = (t, kind) => {
     const urgent = t.priority === 'urgent';
-    return '<button onclick="shopYardConfirm(\'' + t.id + '\',\'' + kind + '\')" style="display:block;width:100%;text-align:left;background:var(--surface);border:2px solid ' + (urgent ? 'var(--danger)' : 'var(--border2)') + ';border-radius:14px;padding:16px 18px;margin-bottom:12px;cursor:pointer;font-family:inherit">'
+    const cls = (urgent ? ' yard-urgent-pulse' : '') + (flashIds.has(t.id) ? ' yard-flash-new' : '');
+    return '<button class="' + cls.trim() + '" onclick="shopYardConfirm(\'' + t.id + '\',\'' + kind + '\')" style="display:block;width:100%;text-align:left;background:var(--surface);border:2px solid ' + (urgent ? 'var(--danger)' : 'var(--border2)') + ';border-radius:14px;padding:16px 18px;margin-bottom:12px;cursor:pointer;font-family:inherit">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
       + '<div style="font-size:18px;font-weight:800;color:var(--text)">' + esc(t.unitNumber || '—') + '</div>'
       + (urgent ? '<span style="font-size:10px;font-weight:800;color:var(--danger);background:var(--danger-l);padding:3px 10px;border-radius:20px;white-space:nowrap">URGENTE</span>' : '')
@@ -10562,7 +10651,7 @@ function shopPaintYardKiosk() {
     + '</div>';
 
   ca.innerHTML = (CD.role === 'admin' ? '<div style="font-size:12px;color:var(--text);background:var(--info-l);padding:10px 14px;border-radius:var(--r);margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'
-      + '<span>Vista previa de admin — esto es lo que ve el Supervisor de Patio. Diseño en español, solo con toques, sin menús.</span>'
+      + '<span>Vista previa de admin — esto es lo que ve el Supervisor de Patio. Diseño en español, solo con toques, sin menús. Un boleto nuevo destella y suena, un boleto urgente sigue pulsando.</span>'
       + '<button class="btn sm primary" onclick="shopOpenTicketForm()">+ Add Test Ticket</button>'
       + '</div>' : '')
     + '<div style="font-size:22px;font-weight:800;margin-bottom:18px">🧰 Taller</div>'
@@ -10572,6 +10661,12 @@ function shopPaintYardKiosk() {
     + (inProgress.length ? inProgress.map(infoCard).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Nada en reparación.</div>')
     + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:22px 0 10px">✅ Listo para Recoger (' + readyPickup.length + ')</div>'
     + (readyPickup.length ? readyPickup.map(t => tapCard(t,'pickup')).join('') : '<div style="font-size:13px;color:var(--text3)">Nada listo.</div>');
+
+  // The flash class is meant to fire once per new arrival, not replay on
+  // every unrelated repaint (e.g. after confirming a different ticket) —
+  // clearing it here means the HTML already returned still has the class
+  // baked in for this paint, but the next paint won't re-add it.
+  window._shopYardFlashIds = new Set();
 }
 
 function shopYardConfirm(ticketId, kind) {
