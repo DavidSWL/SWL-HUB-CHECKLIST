@@ -238,6 +238,12 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .fg .hint{font-size:11px;color:var(--text3)}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.st-typeahead-dd{position:absolute;top:100%;left:0;right:0;z-index:80;margin-top:3px;
+  background:var(--surface);border:1.5px solid var(--border2);border-radius:var(--r);
+  max-height:220px;overflow-y:auto;box-shadow:var(--shm)}
+.st-ta-opt{padding:8px 11px;font-size:13px;cursor:pointer}
+.st-ta-opt:hover{background:var(--surface2)}
+.st-ta-empty{padding:9px 11px;font-size:12px;color:var(--text3);line-height:1.5}
 .g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px}
 .req{color:var(--danger);margin-left:2px}
 
@@ -10062,6 +10068,86 @@ function shopMeterLabel(m) {
 }
 
 window._shopAssets = [];
+window._shopForemen = [];
+async function shopLoadForemen() {
+  try {
+    const snap = await db.collection('shop_foremen').get();
+    window._shopForemen = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+  } catch (e) { /* roster is optional — forms fall back to free-text entry */ }
+  return window._shopForemen;
+}
+
+// ── Manage Foremen (admin) ──────────────────────────────────────────
+// A simple roster, not full user accounts — no login, no role, just a
+// name tied to a division so the New Ticket form's Foreman field can be
+// a fast type-to-filter list instead of scrolling or free-typing every
+// time. Deactivating (not deleting) a foreman keeps their name intact on
+// any ticket that already recorded it — tickets store foremanName as a
+// plain string snapshot, never a reference to this collection.
+async function shopOpenManageForemen() {
+  if (CD.role !== 'admin') return;
+  const ex = document.getElementById('shop-foremen-modal'); if (ex) ex.remove();
+  await shopLoadForemen();
+  const m = document.createElement('div');
+  m.id = 'shop-foremen-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:460px;max-width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">'
+    + '<div style="font-size:14px;font-weight:700">👷 ' + T('Manage Foremen','Administrar Capataces') + '</div>'
+    + '<button onclick="document.getElementById(\'shop-foremen-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-bottom:16px">'
+    + '<input type="text" id="sf-new-name" placeholder="' + T('Foreman name','Nombre del capataz') + '" style="flex:1;font-size:13px;padding:8px 11px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text)">'
+    + '<select id="sf-new-division" style="font-size:13px;padding:8px 11px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text)">'
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '">' + esc(T(d.name,d.nameEs)) + '</option>').join('')
+    + '</select>'
+    + '<button class="btn primary sm" onclick="shopAddForeman()">+ ' + T('Add','Agregar') + '</button>'
+    + '</div>'
+    + '<div id="sf-list"></div>'
+    + '</div>';
+  document.body.appendChild(m);
+  shopPaintForemenList();
+}
+function shopPaintForemenList() {
+  const el = document.getElementById('sf-list');
+  if (!el) return;
+  const active = (window._shopForemen || []).filter(f => f.active !== false);
+  if (!active.length) { el.innerHTML = '<div style="font-size:12.5px;color:var(--text3);padding:8px 0">' + T('No foremen added yet.','Aún no se han agregado capataces.') + '</div>'; return; }
+  el.innerHTML = SHOP_DIVISIONS.map(d => {
+    const rows = active.filter(f => f.divisionId === d.id).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+    if (!rows.length) return '';
+    return '<div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:14px 0 6px">' + esc(T(d.name,d.nameEs)) + '</div>'
+      + rows.map(f => '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 9px;border-radius:var(--r);background:var(--surface2);margin-bottom:5px">'
+          + '<span style="font-size:13px">' + esc(f.name) + '</span>'
+          + '<button onclick="shopRemoveForeman(\'' + f.id + '\')" style="background:none;border:none;color:var(--danger);font-size:12px;cursor:pointer;padding:2px 6px">✕ ' + T('Remove','Quitar') + '</button>'
+          + '</div>').join('');
+  }).join('');
+}
+async function shopAddForeman() {
+  const nameEl = document.getElementById('sf-new-name');
+  const divEl = document.getElementById('sf-new-division');
+  const name = (nameEl.value || '').trim();
+  if (!name) { toast(T('Enter a name','Escribe un nombre'), 'err'); return; }
+  try {
+    await db.collection('shop_foremen').add({
+      name, divisionId: divEl.value, active: true,
+      addedByUserId: CU.uid, addedByUserName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    nameEl.value = '';
+    await shopLoadForemen();
+    shopPaintForemenList();
+    toast('✓ ' + T('Foreman added','Capataz agregado'));
+  } catch (e) { toast('Could not add — ' + e.message, 'err'); }
+}
+async function shopRemoveForeman(id) {
+  if (!confirm(T('Remove this foreman from the list?','¿Quitar a este capataz de la lista?'))) return;
+  try {
+    await db.collection('shop_foremen').doc(id).update({ active: false });
+    await shopLoadForemen();
+    shopPaintForemenList();
+  } catch (e) { toast('Could not remove — ' + e.message, 'err'); }
+}
 
 async function renderShopAssets() {
   const ca = document.getElementById('content-area');
@@ -10098,6 +10184,7 @@ function shopPaintAssets() {
     + '<div style="display:flex;gap:8px;align-items:center">'
     + ((CD.role === 'admin' || CD.role === 'exec_viewer') && pendingCount ? '<button class="btn sm" style="background:var(--warn-l);color:var(--warn);border-color:transparent" onclick="wsGoScreen(\'shop-pending\')">⏳ ' + pendingCount + ' ' + T('pending','pendientes') + '</button>' : '')
     + (CD.role === 'admin' ? '<button class="btn sm" id="shop-import-btn" onclick="shopImportEquipment()">⬆ ' + T('Import Equipment List','Importar Lista de Equipo') + '</button>' : '')
+    + (CD.role === 'admin' ? '<button class="btn sm" onclick="shopOpenManageForemen()">👷 ' + T('Manage Foremen','Administrar Capataces') + '</button>' : '')
     + '<button class="btn primary" onclick="shopOpenAssetForm()">+ ' + T('Add Asset','Agregar Activo') + '</button>'
     + '</div></div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
@@ -11035,6 +11122,7 @@ async function renderShopTickets() {
     ]);
     window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
     window._shopTickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    shopLoadForemen();
     shopPaintTickets();
   } catch (e) {
     ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
@@ -11266,11 +11354,14 @@ const SHOP_TICKET_FORM_TXT = {
   noAssets: ['No ticketable assets in the registry yet.','Aún no hay activos que generen boletos en el registro.'],
   addTestUnit: ['Add a Test Unit','Agregar Unidad de Prueba'],
   lblAsset: ['Asset','Activo'],
-  assetPlaceholder: ['Select a unit…','Selecciona una unidad…'],
+  assetPlaceholder: ['Type a unit # or description…','Escribe un # de unidad o descripción…'],
+  assetNoMatch: ['No matching units','No hay unidades que coincidan'],
   lblDivision: ['Division','División'],
   divisionUnassigned: ['Unassigned','Sin asignar'],
   lblForeman: ['Foreman Name','Nombre del Capataz'],
-  foremanPlaceholder: ['Who\'s requesting this?','¿Quién lo solicita?'],
+  foremanPlaceholder: ['Type a foreman\'s name…','Escribe el nombre del capataz…'],
+  foremanNoMatch: ['No match — press Enter to use this name as typed','Sin coincidencia — presiona Enter para usar este nombre tal cual'],
+  foremanEmpty: ['No foremen set up for this division yet — type a name to use it anyway.','Aún no hay capataces configurados para esta división — escribe un nombre para usarlo de todos modos.'],
   lblIssue: ['What\'s wrong?','¿Qué está mal?'],
   issuePlaceholder: ['Describe the issue…','Describe el problema…'],
   lblPriority: ['Priority','Prioridad'],
@@ -11314,15 +11405,19 @@ function shopOpenTicketForm() {
         + '<span id="st-lbl-noassets">' + Tf('noAssets') + '</span>'
         + '<button class="btn sm" onclick="shopQuickAddTestAsset()">+ <span id="st-lbl-addtest">' + Tf('addTestUnit') + '</span></button>'
         + '</div>')
-    + '<div class="fg"><label id="st-lbl-asset">' + Tf('lblAsset') + '<span class="req">*</span></label><select id="st-asset" onchange="shopTicketAssetChanged()">'
-    + '<option value="" id="st-asset-placeholder">' + Tf('assetPlaceholder') + '</option>'
-    + assets.map(a => '<option value="' + a.id + '" data-division="' + esc(a.divisionId || '') + '">' + esc(a.unitNumber) + ' — ' + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType)) + '</option>').join('')
-    + '</select></div>'
-    + '<div class="fg"><label id="st-lbl-division">' + Tf('lblDivision') + '</label><select id="st-division">'
+    + '<div class="fg" style="position:relative"><label id="st-lbl-asset">' + Tf('lblAsset') + '<span class="req">*</span></label>'
+    + '<input type="text" id="st-asset-search" autocomplete="off" placeholder="' + Tf('assetPlaceholder') + '" oninput="shopAssetSearchInput(event)" onfocus="shopAssetSearchInput(event)" onblur="shopAssetSearchBlur()">'
+    + '<input type="hidden" id="st-asset" value="">'
+    + '<div id="st-asset-dropdown" class="st-typeahead-dd" style="display:none"></div>'
+    + '</div>'
+    + '<div class="fg"><label id="st-lbl-division">' + Tf('lblDivision') + '</label><select id="st-division" onchange="shopForemanSearchInput()">'
     + '<option value="" id="st-division-unassigned">' + Tf('divisionUnassigned') + '</option>'
     + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '" data-en="' + esc(d.name) + '" data-es="' + esc(d.nameEs) + '">' + esc(window._shopFormLang === 'es' ? d.nameEs : d.name) + '</option>').join('')
     + '</select></div>'
-    + '<div class="fg"><label id="st-lbl-foreman">' + Tf('lblForeman') + '</label><input type="text" id="st-foreman" placeholder="' + Tf('foremanPlaceholder') + '"></div>'
+    + '<div class="fg" style="position:relative"><label id="st-lbl-foreman">' + Tf('lblForeman') + '</label>'
+    + '<input type="text" id="st-foreman" autocomplete="off" placeholder="' + Tf('foremanPlaceholder') + '" oninput="shopForemanSearchInput(event)" onfocus="shopForemanSearchInput(event)" onblur="shopForemanSearchBlur()">'
+    + '<div id="st-foreman-dropdown" class="st-typeahead-dd" style="display:none"></div>'
+    + '</div>'
     + '<div class="fg"><label id="st-lbl-issue">' + Tf('lblIssue') + '<span class="req">*</span></label><textarea id="st-issue" rows="3" placeholder="' + Tf('issuePlaceholder') + '"></textarea></div>'
     + '<div class="fg"><label id="st-lbl-priority">' + Tf('lblPriority') + '</label><select id="st-priority">'
     + SHOP_TICKET_PRIORITIES.map(p => '<option value="' + p + '"' + (p==='normal'?' selected':'') + ' data-en="' + SHOP_FORM_PRIORITY_TXT[p][0] + '" data-es="' + SHOP_FORM_PRIORITY_TXT[p][1] + '">' + SHOP_FORM_PRIORITY_TXT[p][window._shopFormLang === 'es' ? 1 : 0] + '</option>').join('')
@@ -11346,11 +11441,12 @@ function shopSetTicketFormLang(lang) {
   window._shopFormLang = lang;
   const set = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = Tf(key); };
   set('st-lbl-title','title'); set('st-lbl-noassets','noAssets'); set('st-lbl-addtest','addTestUnit');
-  set('st-lbl-asset','lblAsset'); set('st-asset-placeholder','assetPlaceholder');
+  set('st-lbl-asset','lblAsset');
   set('st-lbl-division','lblDivision'); set('st-division-unassigned','divisionUnassigned');
   set('st-lbl-foreman','lblForeman'); set('st-lbl-issue','lblIssue');
   set('st-lbl-priority','lblPriority'); set('st-lbl-dropoff','lblDropoff'); set('st-lbl-return','lblReturn');
   set('st-lbl-submit','submit'); set('st-lbl-cancel','cancel');
+  const assetSearch = document.getElementById('st-asset-search'); if (assetSearch) assetSearch.placeholder = Tf('assetPlaceholder');
   const foreman = document.getElementById('st-foreman'); if (foreman) foreman.placeholder = Tf('foremanPlaceholder');
   const issue = document.getElementById('st-issue'); if (issue) issue.placeholder = Tf('issuePlaceholder');
   document.querySelectorAll('#st-division option[data-en]').forEach(o => { o.textContent = lang === 'es' ? o.dataset.es : o.dataset.en; });
@@ -11366,17 +11462,82 @@ function shopUpdateLangToggleStyle() {
   es.style.cssText += ';' + (window._shopFormLang === 'es' ? active : inactive);
 }
 
-// Auto-fills Division from whatever the selected asset already has, but
-// leaves it a real editable field rather than a locked display — a
-// hastily-added test unit (or any asset the registry hasn't tagged yet)
-// still lets the person submitting the ticket set it right here, so it
-// isn't blank on the kiosk card.
-function shopTicketAssetChanged() {
-  const assetSel = document.getElementById('st-asset');
+// Asset field is a type-to-filter search, not a scroll-through dropdown —
+// with 500+ units in the registry now, scrolling a <select> to find one
+// was the whole problem. Typing narrows a live list; clicking a result
+// commits the real assetId into the hidden #st-asset field (the FK the
+// rest of the form needs) and auto-fills Division from that asset, same
+// as before, but still editable — a hastily-added test unit (or any
+// asset the registry hasn't tagged yet) still lets the person submitting
+// set it right here, so it isn't blank on the kiosk card.
+function shopAssetSearchInput(evt) {
+  // Typing invalidates whatever was previously picked — force a fresh
+  // click from the filtered list rather than silently keeping a stale id
+  // that no longer matches the visible text. Just focusing (no typing)
+  // must NOT do this, or clicking back into the field to double-check
+  // would blow away an already-correct selection.
+  if (evt && evt.type === 'input') document.getElementById('st-asset').value = '';
+  const q = (document.getElementById('st-asset-search').value || '').trim().toLowerCase();
+  const dd = document.getElementById('st-asset-dropdown');
+  const pool = (window._shopAssets || []).filter(a => !a.pendingReview && a.ticketable !== false);
+  const matches = (q ? pool.filter(a => {
+    const hay = [a.unitNumber, a.make, a.model, shopAssetTypeLabel(a.assetType)].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  }) : pool).sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||'')).slice(0, 40);
+  dd.innerHTML = matches.length
+    ? matches.map(a => '<div class="st-ta-opt" onmousedown="shopPickAsset(\'' + a.id + '\')"><b>' + esc(a.unitNumber) + '</b> — '
+        + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType)) + '</div>').join('')
+    : '<div class="st-ta-empty">' + Tf('assetNoMatch') + '</div>';
+  dd.style.display = 'block';
+}
+function shopPickAsset(id) {
+  const a = (window._shopAssets || []).find(x => x.id === id);
+  if (!a) return;
+  document.getElementById('st-asset').value = id;
+  document.getElementById('st-asset-search').value = a.unitNumber + ' — ' + ([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType));
+  document.getElementById('st-asset-dropdown').style.display = 'none';
   const divSel = document.getElementById('st-division');
-  if (!assetSel || !divSel) return;
-  const opt = assetSel.options[assetSel.selectedIndex];
-  divSel.value = (opt && opt.dataset.division) || '';
+  if (divSel) divSel.value = a.divisionId || '';
+  shopForemanSearchInput();
+}
+function shopAssetSearchBlur() {
+  setTimeout(() => { const dd = document.getElementById('st-asset-dropdown'); if (dd) dd.style.display = 'none'; }, 150);
+}
+
+// Foreman is a roster lookup (managed in Asset Registry → Manage
+// Foremen), filtered to whatever Division is currently set on the form —
+// but it's stored on the ticket as a plain name string, not a foreign
+// key, so unlike Asset there's no hidden id field: whatever text sits in
+// #st-foreman at submit time is what gets saved, whether it came from
+// clicking a roster match or from typing a name that isn't in the list
+// yet (the roster is new and won't be complete on day one).
+function shopForemanSearchInput(evt) {
+  const q = (document.getElementById('st-foreman').value || '').trim().toLowerCase();
+  const dd = document.getElementById('st-foreman-dropdown');
+  if (!dd) return;
+  const divisionId = document.getElementById('st-division')?.value || '';
+  const roster = (window._shopForemen || []).filter(f => f.active !== false && (!divisionId || f.divisionId === divisionId));
+  const matches = (q ? roster.filter(f => (f.name||'').toLowerCase().includes(q)) : roster)
+    .sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  if (matches.length) {
+    dd.innerHTML = matches.map(f => '<div class="st-ta-opt" onmousedown="shopPickForeman(\'' + esc(f.name).replace(/'/g,"\\'") + '\')">' + esc(f.name) + '</div>').join('');
+  } else if (!roster.length) {
+    dd.innerHTML = '<div class="st-ta-empty">' + Tf('foremanEmpty') + '</div>';
+  } else if (q) {
+    dd.innerHTML = '<div class="st-ta-empty">' + Tf('foremanNoMatch') + '</div>';
+  } else {
+    dd.innerHTML = '';
+    dd.style.display = 'none';
+    return;
+  }
+  dd.style.display = 'block';
+}
+function shopPickForeman(name) {
+  document.getElementById('st-foreman').value = name;
+  document.getElementById('st-foreman-dropdown').style.display = 'none';
+}
+function shopForemanSearchBlur() {
+  setTimeout(() => { const dd = document.getElementById('st-foreman-dropdown'); if (dd) dd.style.display = 'none'; }, 150);
 }
 
 async function shopSaveTicket() {
@@ -11699,6 +11860,7 @@ async function renderYardKiosk() {
   try {
     const assetSnap = await db.collection('shop_assets').get();
     window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    shopLoadForemen();
   } catch (e) {
     ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
       + '<div class="card-header"><div class="card-title">⚠ No se pudo cargar</div></div>'
