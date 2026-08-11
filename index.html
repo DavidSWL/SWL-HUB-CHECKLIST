@@ -14,6 +14,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 /* ═══════════════════════════════════════
    DESIGN TOKENS
@@ -10184,6 +10185,7 @@ function shopPaintAssets() {
     + '<div style="display:flex;gap:8px;align-items:center">'
     + ((CD.role === 'admin' || CD.role === 'exec_viewer') && pendingCount ? '<button class="btn sm" style="background:var(--warn-l);color:var(--warn);border-color:transparent" onclick="wsGoScreen(\'shop-pending\')">⏳ ' + pendingCount + ' ' + T('pending','pendientes') + '</button>' : '')
     + (CD.role === 'admin' ? '<button class="btn sm" id="shop-import-btn" onclick="shopImportEquipment()">⬆ ' + T('Import Equipment List','Importar Lista de Equipo') + '</button>' : '')
+    + (CD.role === 'admin' ? '<button class="btn sm" onclick="shopOpenSpreadsheetImport()">📄 ' + T('Upload Spreadsheet','Subir Hoja de Cálculo') + '</button>' : '')
     + (CD.role === 'admin' ? '<button class="btn sm" onclick="shopOpenManageForemen()">👷 ' + T('Manage Foremen','Administrar Capataces') + '</button>' : '')
     + '<button class="btn primary" onclick="shopOpenAssetForm()">+ ' + T('Add Asset','Agregar Activo') + '</button>'
     + '</div></div>'
@@ -10214,7 +10216,14 @@ function shopPaintAssets() {
           + (a.pendingReview ? ' <span class="badge warn" style="font-size:9px">' + T('pending','pendiente') + '</span>' : '') + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopAssetTypeLabel(a.assetType) + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + esc([a.make,a.model,a.year].filter(Boolean).join(' ')) + '</td>'
-          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopDivisionChip(a.divisionId) + '</td>'
+          + '<td style="padding:5px 10px;border-bottom:1px solid var(--border);color:var(--text2)" onclick="event.stopPropagation()">'
+          + (CD.role === 'admin'
+              ? '<select onclick="event.stopPropagation()" onchange="shopReassignDivision(\'' + a.id + '\',this.value)" style="font-size:11.5px;padding:4px 7px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
+                + '<option value=""' + (!a.divisionId ? ' selected' : '') + '>' + T('Unassigned','Sin asignar') + '</option>'
+                + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + (a.divisionId === d.id ? ' selected' : '') + '>' + esc(T(d.name,d.nameEs)) + '</option>').join('')
+                + '</select>'
+              : shopDivisionChip(a.divisionId))
+          + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + statusColor + ';background:' + statusBg + '">' + shopStatusLabel(a.status) + '</span></td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + (a.meterType && a.meterType !== 'none' ? (a.currentMeter != null ? a.currentMeter : '—') + ' ' + shopMeterLabel(a.meterType) : '—') + '</td>'
           + '</tr>';
@@ -10226,6 +10235,40 @@ function shopSetFilter(kind, val) {
   if (kind === 'division') window._shopFilterDivision = val;
   if (kind === 'type') window._shopFilterType = val;
   shopPaintAssets();
+}
+
+// Fast inline reassignment straight from the registry table — no need to
+// open the full asset edit modal just to fix a division, which matters
+// with 500+ imported units likely needing a correction pass. Same
+// division-history bookkeeping as the edit form (close the open span,
+// open a new one) so per-division reporting stays accurate either way.
+async function shopReassignDivision(assetId, newDivisionId) {
+  if (CD.role !== 'admin') return;
+  const divisionId = newDivisionId || null;
+  const existing = (window._shopAssets || []).find(a => a.id === assetId);
+  if (!existing || existing.divisionId === divisionId) return;
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const openHist = await db.collection('shop_asset_division_history')
+      .where('assetId','==',assetId).where('toDate','==',null).get();
+    const histBatch = db.batch();
+    openHist.docs.forEach(d => histBatch.update(d.ref, { toDate: today }));
+    if (divisionId) {
+      histBatch.set(db.collection('shop_asset_division_history').doc(), {
+        assetId, divisionId, fromDate: today, toDate: null,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    await histBatch.commit();
+    await db.collection('shop_assets').doc(assetId).update({
+      divisionId, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    existing.divisionId = divisionId;
+    toast('✓ ' + T('Division updated','División actualizada'));
+  } catch (e) {
+    toast('Could not reassign — ' + e.message, 'err');
+    shopPaintAssets();
+  }
 }
 
 // One-time bulk import source — the Aspire equipment export David provided.
@@ -10843,6 +10886,197 @@ async function shopImportEquipment() {
   } catch (e) {
     toast('Could not import — ' + e.message, 'err');
     if (btn) { btn.disabled = false; btn.textContent = T('Import Equipment List','Importar Lista de Equipo'); }
+  }
+}
+
+// ── Upload Spreadsheet (admin) ──────────────────────────────────────
+// The ongoing way David keeps the registry current — rather than
+// emailing over an Excel file for someone to hand-convert, admin
+// uploads it here directly. Reads only the columns that actually
+// matter (asset #, branch, description, make, model, year, status);
+// anything else in the sheet is ignored. Parsing happens entirely in
+// the browser via SheetJS — nothing is sent anywhere.
+const SHOP_MFR_TYPE_MAP = {
+  ford:'vehicle', chevrolet:'vehicle', chevy:'vehicle', gmc:'vehicle', nissan:'vehicle',
+  toyota:'vehicle', international:'vehicle', freightliner:'vehicle',
+  bobcat:'heavy_equipment', doosan:'heavy_equipment', vermeer:'heavy_equipment', rayco:'heavy_equipment',
+  mikasa:'heavy_equipment', maxim:'heavy_equipment', 'ground hog':'heavy_equipment', norton:'heavy_equipment', barretto:'heavy_equipment',
+  stihl:'power_tool', echo:'power_tool', milwaukee:'power_tool', makita:'power_tool',
+  toro:'lawn_equipment', exmark:'lawn_equipment', 'mean green':'lawn_equipment',
+  'big tex':'trailer', 'carson trailer':'trailer', 'continental cargo':'trailer', 'dv trailers':'trailer',
+  'mighty mover trailer':'trailer', 'mighty mover':'trailer', butler:'trailer'
+};
+function shopGuessAssetType(make) {
+  const m = (make || '').trim().toLowerCase();
+  if (!m) return 'heavy_equipment';
+  if (SHOP_MFR_TYPE_MAP[m]) return SHOP_MFR_TYPE_MAP[m];
+  const hit = Object.keys(SHOP_MFR_TYPE_MAP).find(k => m.includes(k) || k.includes(m));
+  return hit ? SHOP_MFR_TYPE_MAP[hit] : 'heavy_equipment';
+}
+function shopMatchDivision(text) {
+  const t = (text || '').trim().toLowerCase();
+  if (!t) return null;
+  const hit = SHOP_DIVISIONS.find(d => d.name.toLowerCase() === t || d.nameEs.toLowerCase() === t || d.id === t);
+  if (hit) return hit.id;
+  const partial = SHOP_DIVISIONS.find(d => t.includes(d.name.toLowerCase()) || d.name.toLowerCase().includes(t));
+  if (partial) return partial.id;
+  if (/\boc\b/.test(t)) return 'maint_oc';
+  if (/\bla\b/.test(t)) return 'maint_la';
+  if (/\bie\b/.test(t)) return 'maint_ie';
+  if (/tree/.test(t)) return 'trees';
+  if (/enhance/.test(t)) return 'enhancements';
+  if (/maint/.test(t)) return 'maint_oc';
+  return null;
+}
+function shopMatchStatus(text) {
+  const t = (text || '').trim().toLowerCase();
+  if (/down|out of service|repair|broken/.test(t)) return 'down';
+  if (/retire|dispos|sold|scrap/.test(t)) return 'retired';
+  return 'active';
+}
+function shopOpenSpreadsheetImport() {
+  if (CD.role !== 'admin') return;
+  let inp = document.getElementById('shop-ss-file');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file'; inp.id = 'shop-ss-file'; inp.accept = '.xlsx,.xls,.csv'; inp.style.display = 'none';
+    inp.onchange = shopHandleSpreadsheetFile;
+    document.body.appendChild(inp);
+  }
+  inp.value = '';
+  inp.click();
+}
+function shopHandleSpreadsheetFile(evt) {
+  const file = evt.target.files && evt.target.files[0];
+  if (!file) return;
+  if (typeof XLSX === 'undefined') { toast(T('Spreadsheet library did not load — check your connection and try again.','La librería de hojas de cálculo no cargó — revisa tu conexión e intenta de nuevo.'), 'err'); return; }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), { type:'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(sheet, { defval:'' });
+      shopParseSpreadsheetRows(raw, file.name);
+    } catch (err) { toast(T('Could not read that file — ','No se pudo leer el archivo — ') + err.message, 'err'); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+// Header matching is deliberately loose (lowercased, spaces/punctuation
+// stripped) since David's sheet won't always use the exact same header
+// text every time — "Asset #" vs "Asset No" vs "Unit #" all mean the
+// same column.
+function shopFindCol(headers, aliases) {
+  const norm = (s) => String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const normHeaders = headers.map(norm);
+  for (const alias of aliases) {
+    const idx = normHeaders.indexOf(norm(alias));
+    if (idx !== -1) return headers[idx];
+  }
+  return null;
+}
+function shopParseSpreadsheetRows(raw, fileName) {
+  if (!raw.length) { toast(T('That spreadsheet has no rows.','Esa hoja de cálculo no tiene filas.'), 'err'); return; }
+  const headers = Object.keys(raw[0]);
+  const col = {
+    unit: shopFindCol(headers, ['Asset #','Asset No','AssetNo','Unit #','Unit No','Unit Number','UnitNumber']),
+    branch: shopFindCol(headers, ['Branch','Division']),
+    desc: shopFindCol(headers, ['Description','Desc']),
+    make: shopFindCol(headers, ['Make','Manufacturer']),
+    model: shopFindCol(headers, ['Model']),
+    year: shopFindCol(headers, ['Year']),
+    status: shopFindCol(headers, ['Status'])
+  };
+  if (!col.unit) { toast(T('Could not find an "Asset #" column in that file.','No se encontró una columna "Asset #" en ese archivo.'), 'err'); return; }
+  const existing = new Set((window._shopAssets || []).map(a => (a.unitNumber || '').trim().toLowerCase()));
+  const parsed = raw.map(r => {
+    const unitNumber = String(r[col.unit] || '').trim();
+    const branchRaw = col.branch ? String(r[col.branch] || '').trim() : '';
+    const make = col.make ? String(r[col.make] || '').trim() : '';
+    return {
+      unitNumber,
+      description: col.desc ? String(r[col.desc] || '').trim() : '',
+      make,
+      model: col.model ? String(r[col.model] || '').trim() : '',
+      year: col.year ? (parseInt(r[col.year], 10) || null) : null,
+      statusRaw: col.status ? String(r[col.status] || '').trim() : '',
+      status: shopMatchStatus(col.status ? r[col.status] : ''),
+      assetType: shopGuessAssetType(make),
+      branchRaw,
+      divisionId: shopMatchDivision(branchRaw),
+      isDuplicate: unitNumber && existing.has(unitNumber.toLowerCase())
+    };
+  }).filter(r => r.unitNumber);
+  shopOpenSpreadsheetPreview(parsed, fileName);
+}
+function shopOpenSpreadsheetPreview(rows, fileName) {
+  const ex = document.getElementById('shop-ss-modal'); if (ex) ex.remove();
+  window._shopSSRows = rows;
+  const newRows = rows.filter(r => !r.isDuplicate);
+  const dupCount = rows.length - newRows.length;
+  const unmatchedDiv = newRows.filter(r => !r.divisionId).length;
+  const m = document.createElement('div');
+  m.id = 'shop-ss-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:600px;max-width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="font-size:14px;font-weight:700;margin-bottom:4px">📄 ' + T('Review Import','Revisar Importación') + '</div>'
+    + '<div style="font-size:12px;color:var(--text3);margin-bottom:16px">' + esc(fileName) + '</div>'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">'
+    + '<div style="background:var(--surface2);border-radius:var(--r);padding:10px 14px;flex:1;min-width:120px"><div style="font-size:20px;font-weight:800">' + rows.length + '</div><div style="font-size:10.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">' + T('Rows parsed','Filas leídas') + '</div></div>'
+    + '<div style="background:var(--success-l);border-radius:var(--r);padding:10px 14px;flex:1;min-width:120px"><div style="font-size:20px;font-weight:800;color:var(--success)">' + newRows.length + '</div><div style="font-size:10.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">' + T('New to add','Nuevos a agregar') + '</div></div>'
+    + (dupCount ? '<div style="background:var(--surface2);border-radius:var(--r);padding:10px 14px;flex:1;min-width:120px"><div style="font-size:20px;font-weight:800;color:var(--text3)">' + dupCount + '</div><div style="font-size:10.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">' + T('Already in registry','Ya en el registro') + '</div></div>' : '')
+    + (unmatchedDiv ? '<div style="background:var(--warn-l);border-radius:var(--r);padding:10px 14px;flex:1;min-width:120px"><div style="font-size:20px;font-weight:800;color:var(--warn)">' + unmatchedDiv + '</div><div style="font-size:10.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">' + T('Branch not matched','Sucursal sin coincidencia') + '</div></div>' : '')
+    + '</div>'
+    + (unmatchedDiv ? '<div style="font-size:12px;color:var(--text2);background:var(--warn-l);padding:9px 12px;border-radius:var(--r);margin-bottom:14px;line-height:1.6">' + T('Rows where the Branch column didn\'t match one of the 5 divisions come in Unassigned — reassign them from the Division column right in the registry table afterward.','Las filas donde la columna Sucursal no coincidió con una de las 5 divisiones quedan Sin asignar — reasígnalas después desde la columna División en la tabla del registro.') + '</div>' : '')
+    + '<div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r)">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:11.5px">'
+    + '<thead><tr>' + ['Unit #','Make/Model','Division','Status'].map(h => '<th style="text-align:left;padding:6px 8px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9px;text-transform:uppercase;color:var(--text3)">' + h + '</th>').join('') + '</tr></thead>'
+    + '<tbody>' + newRows.slice(0,150).map(r => '<tr style="' + (r.isDuplicate ? 'opacity:.5' : '') + '">'
+        + '<td style="padding:5px 8px;border-bottom:1px solid var(--border)">' + esc(r.unitNumber) + '</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text2)">' + esc([r.make,r.model].filter(Boolean).join(' ') || '—') + '</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid var(--border)">' + (r.divisionId ? shopDivisionChip(r.divisionId) : '<span style="color:var(--warn)">' + esc(r.branchRaw || T('Unassigned','Sin asignar')) + '</span>') + '</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopStatusLabel(r.status) + '</td>'
+        + '</tr>').join('') + '</tbody></table>'
+    + (newRows.length > 150 ? '<div style="padding:8px;text-align:center;font-size:11px;color:var(--text3)">+' + (newRows.length - 150) + ' ' + T('more','más') + '</div>' : '')
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:16px">'
+    + '<button class="btn primary" id="shop-ss-confirm" onclick="shopConfirmSpreadsheetImport()"' + (newRows.length ? '' : ' disabled') + '>' + T('Import','Importar') + ' ' + newRows.length + ' ' + T('Assets','Activos') + '</button>'
+    + '<button class="btn" onclick="document.getElementById(\'shop-ss-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+async function shopConfirmSpreadsheetImport() {
+  const rows = (window._shopSSRows || []).filter(r => !r.isDuplicate);
+  if (!rows.length) return;
+  const btn = document.getElementById('shop-ss-confirm');
+  if (btn) { btn.disabled = true; btn.textContent = T('Importing…','Importando…'); }
+  try {
+    let done = 0;
+    for (let i = 0; i < rows.length; i += 400) {
+      const chunk = rows.slice(i, i + 400);
+      const batch = db.batch();
+      chunk.forEach(r => {
+        batch.set(db.collection('shop_assets').doc(), {
+          unitNumber: r.unitNumber, assetType: r.assetType, iconKey: null,
+          make: r.make || null, model: r.model || null, year: r.year || null,
+          vinOrSerial: null, divisionId: r.divisionId, status: r.status,
+          meterType: 'none', currentMeter: null, ticketable: true,
+          pendingReview: false, addedByUserId: CU.uid, addedByUserName: CD.name,
+          importedFrom: r.description || null,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      });
+      await batch.commit();
+      done += chunk.length;
+      if (btn) btn.textContent = T('Importing…','Importando…') + ' ' + done + '/' + rows.length;
+    }
+    toast('✓ ' + T('Imported ' + rows.length + ' assets','Se importaron ' + rows.length + ' activos'));
+    document.getElementById('shop-ss-modal').remove();
+    window._shopSSRows = null;
+    renderShopAssets();
+  } catch (e) {
+    toast('Could not import — ' + e.message, 'err');
+    if (btn) { btn.disabled = false; btn.textContent = T('Import','Importar') + ' ' + rows.length + ' ' + T('Assets','Activos'); }
   }
 }
 
