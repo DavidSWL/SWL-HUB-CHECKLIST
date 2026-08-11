@@ -11044,7 +11044,7 @@ function shopYardConfirm(ticketId, kind) {
   const m = document.createElement('div');
   m.id = 'shop-yard-modal';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
-  m.innerHTML = '<div style="background:var(--surface);border-radius:20px;padding:26px;width:440px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)">'
+  m.innerHTML = '<div style="background:var(--surface);border-radius:20px;padding:32px;width:640px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--shm);font-size:15px">'
     + '<div id="syd-body">Cargando…</div></div>';
   document.body.appendChild(m);
   shopPaintYardConfirm(ticketId, kind);
@@ -11070,32 +11070,32 @@ async function shopPaintYardConfirm(ticketId, kind) {
   body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:-8px">'
     + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:4px" title="Cerrar">✕</button></div>'
     + '<div style="text-align:center">'
-    + '<div style="font-size:22px;font-weight:800;margin-bottom:4px">' + esc(t.unitNumber || '—') + '</div>'
-    + '<div style="font-size:13px;color:var(--text2);margin-bottom:6px">' + esc(t.issue || '') + '</div>'
-    + (t.foremanName ? '<div style="font-size:11.5px;color:var(--text3);margin-bottom:6px">👷 ' + esc(t.foremanName) + '</div>' : '')
-    + (t.issue ? '<button onclick="shopYardTranslateIssue(\'' + ticketId + '\')" style="background:none;border:none;color:var(--info);font-size:12px;font-weight:700;cursor:pointer">🌐 Traducir</button>'
-        + '<div id="syd-tr-' + ticketId + '" style="font-size:13px;color:var(--info);font-style:italic;margin-top:4px;margin-bottom:6px"></div>' : '')
+    + '<div style="font-size:28px;font-weight:800;margin-bottom:6px">' + esc(t.unitNumber || '—') + '</div>'
+    + '<div style="font-size:16px;color:var(--text2);margin-bottom:7px">' + esc(t.issue || '') + '</div>'
+    + (t.foremanName ? '<div style="font-size:13.5px;color:var(--text3);margin-bottom:7px">👷 ' + esc(t.foremanName) + '</div>' : '')
+    + (t.issue ? '<button onclick="shopYardTranslateIssue(\'' + ticketId + '\')" style="background:none;border:none;color:var(--info);font-size:14px;font-weight:700;cursor:pointer">🌐 Traducir</button>'
+        + '<div id="syd-tr-' + ticketId + '" style="font-size:14.5px;color:var(--info);font-style:italic;margin-top:4px;margin-bottom:7px"></div>' : '')
     + (badges ? '<div style="margin-bottom:12px">' + badges + '</div>' : '')
     + '</div>'
     + (kind === 'ready' ? shopYardProgressBlock(ticketId, t) : '')
     + (kind === 'pickup' ? shopYardPickupBlock(ticketId, t) : '')
-    + '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px">Cronología</div>'
-    + '<div style="max-height:140px;overflow-y:auto;margin-bottom:14px;text-align:left">'
+    + '<div style="font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:9px">Cronología</div>'
+    + '<div style="max-height:180px;overflow-y:auto;margin-bottom:16px;text-align:left">'
     + (events.length ? events.map(ev => {
         let line;
         if (ev.type === 'created') line = 'Boleto enviado' + (ev.note ? ' — ' + esc(ev.note) : '');
         else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (ev.note ? ' — ' + esc(ev.note) : '');
         else if (ev.type === 'parts') line = ev.partsPending ? 'Marcado piezas pendientes' : 'Piezas pendientes eliminado';
         else line = esc(ev.text || '');
-        return '<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">'
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:14px">'
           + '<span style="color:var(--text)">' + line + '</span>'
-          + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
-      }).join('') : '<div style="font-size:11.5px;color:var(--text3)">Sin actividad aún.</div>')
+          + '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
+      }).join('') : '<div style="font-size:13px;color:var(--text3)">Sin actividad aún.</div>')
     + '</div>'
-    + '<textarea id="syd-note-' + ticketId + '" rows="2" placeholder="Nota para la cuadrilla o admin…" style="width:100%;font-size:13px;padding:8px 11px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:8px;resize:vertical"></textarea>'
-    + '<button onclick="shopYardAddNote(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:12px;font-size:13px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer;margin-bottom:18px">+ Agregar Nota</button>'
-    + '<div style="text-align:center;font-size:15px;color:var(--text);margin-bottom:16px">' + question + '</div>'
-    + '<button onclick="shopYardDoConfirm(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:18px;font-size:17px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ ' + actionLabel + '</button>';
+    + '<textarea id="syd-note-' + ticketId + '" rows="2" placeholder="Nota para la cuadrilla o admin…" style="width:100%;font-size:15px;padding:11px 13px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:10px;resize:vertical"></textarea>'
+    + '<button onclick="shopYardAddNote(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:14px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer;margin-bottom:20px">+ Agregar Nota</button>'
+    + '<div style="text-align:center;font-size:17px;color:var(--text);margin-bottom:18px">' + question + '</div>'
+    + '<button onclick="shopYardDoConfirm(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:20px;font-size:19px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ ' + actionLabel + '</button>';
 }
 
 // Translates in place — no navigating away from the kiosk. Uses Google's
@@ -11135,30 +11135,43 @@ async function shopYardAddNote(ticketId, kind) {
 // parts-pending flag the manager view has, an outsourced flag for work
 // sent to a third-party shop, and a terminal "can't be fixed" outcome.
 function shopYardProgressBlock(ticketId, t) {
-  return '<div style="background:var(--surface2);border-radius:14px;padding:14px;margin-bottom:16px;text-align:left">'
-    + '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">Progreso</div>'
-    + '<div class="g2" style="margin-bottom:10px">'
-    + '<div class="fg"><label>Fecha Est. de Reparación</label><input type="date" id="syd-fixdate-' + ticketId + '" value="' + esc(t.estimatedFixDate || '') + '"></div>'
-    + '<div class="fg"><label>Fecha Est. de Recogida</label><input type="date" id="syd-pickupest-' + ticketId + '" value="' + esc(t.estimatedPickupDate || '') + '"></div>'
+  const quickOptions = [
+    ['', 'Acción rápida…'],
+    ['parts', t.partsPending ? '✓ Quitar Piezas Pendientes' : '⏳ Piezas Pendientes'],
+    ['outsourced', t.outsourced ? '✓ Quitar Taller Externo' : '🚚 Enviar a Taller Externo'],
+    ['notrepairable', '✕ No Reparable'],
+    ['other', '✎ Otro']
+  ];
+  return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Progreso</div>'
+    + '<div class="g2" style="margin-bottom:14px">'
+    + '<div class="fg"><label>Fecha Est. de Reparación</label><input type="date" id="syd-fixdate-' + ticketId + '" value="' + esc(t.estimatedFixDate || '') + '" onchange="shopYardSaveEstimates(\'' + ticketId + '\')"></div>'
+    + '<div class="fg"><label>Fecha Est. de Recogida</label><input type="date" id="syd-pickupest-' + ticketId + '" value="' + esc(t.estimatedPickupDate || '') + '" onchange="shopYardSaveEstimates(\'' + ticketId + '\')"></div>'
     + '</div>'
-    + '<button class="btn sm" style="width:100%;margin-bottom:10px" onclick="shopYardSaveEstimates(\'' + ticketId + '\')">Guardar Fechas</button>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
-    + '<button class="btn sm" onclick="shopYardToggleParts(\'' + ticketId + '\')">' + (t.partsPending ? 'Quitar Piezas Pendientes' : '⏳ Piezas Pendientes') + '</button>'
-    + '<button class="btn sm" onclick="shopYardToggleOutsourced(\'' + ticketId + '\')">' + (t.outsourced ? 'Quitar Taller Externo' : '🚚 Enviar a Taller Externo') + '</button>'
-    + '<button class="btn sm" style="color:var(--danger);border-color:var(--danger)" onclick="shopYardMarkNotRepairable(\'' + ticketId + '\')">✕ No Reparable</button>'
-    + '<button class="btn sm" onclick="shopYardOtherUpdate(\'' + ticketId + '\')">✎ Otro</button>'
-    + '</div>'
-    + '<div style="border-top:1px solid var(--border2);margin-top:12px;padding-top:12px">'
-    + '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">Herramienta de Préstamo'
+    + '<select style="width:100%;font-size:15px;padding:11px 12px;border-radius:10px;border:1.5px solid var(--border2);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:14px" onchange="shopYardQuickAction(\'' + ticketId + '\', this.value); this.value=\'\'">'
+    + quickOptions.map(([v,l]) => '<option value="' + v + '">' + l + '</option>').join('')
+    + '</select>'
+    + '<div style="border-top:1px solid var(--border2);padding-top:14px">'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Herramienta de Préstamo'
     + (shopIsLoanerOverdue(t) ? ' <span style="color:var(--danger);font-weight:800">— VENCIDO</span>' : '') + '</div>'
-    + '<div class="g2" style="margin-bottom:10px">'
-    + '<div class="fg"><label>Número de Préstamo</label><input type="text" id="syd-loanernum-' + ticketId + '" value="' + esc(t.loanerNumber || '') + '"></div>'
-    + '<div class="fg"><label>Devolución Esperada</label><input type="date" id="syd-loanerdate-' + ticketId + '" value="' + esc(t.loanerReturnDate || '') + '"></div>'
+    + '<div class="g2" style="margin-bottom:' + (t.loanerNumber && !t.loanerReturned ? '12' : '0') + 'px">'
+    + '<div class="fg"><label>Número de Préstamo</label><input type="text" id="syd-loanernum-' + ticketId + '" value="' + esc(t.loanerNumber || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')"></div>'
+    + '<div class="fg"><label>Devolución Esperada</label><input type="date" id="syd-loanerdate-' + ticketId + '" value="' + esc(t.loanerReturnDate || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')"></div>'
     + '</div>'
-    + '<button class="btn sm" style="width:100%' + (t.loanerNumber && !t.loanerReturned ? ';margin-bottom:8px' : '') + '" onclick="shopYardSaveLoaner(\'' + ticketId + '\')">Guardar Préstamo</button>'
     + (t.loanerNumber && !t.loanerReturned ? '<button class="btn sm" style="width:100%;background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopYardMarkLoanerReturned(\'' + ticketId + '\')">✓ Marcar Préstamo Devuelto</button>' : '')
-    + (t.loanerReturned ? '<div style="font-size:11.5px;color:var(--success);font-weight:700">✓ Préstamo devuelto</div>' : '')
+    + (t.loanerReturned ? '<div style="font-size:12.5px;color:var(--success);font-weight:700">✓ Préstamo devuelto</div>' : '')
     + '</div></div>';
+}
+
+// Backs the single quick-action dropdown that replaced the four separate
+// buttons — "clean and minimal, easy for our mechanics." Resets to the
+// placeholder option after firing (see the inline onchange), same as
+// picking an action once rather than leaving a toggle visibly "selected."
+function shopYardQuickAction(ticketId, action) {
+  if (action === 'parts') shopYardToggleParts(ticketId);
+  else if (action === 'outsourced') shopYardToggleOutsourced(ticketId);
+  else if (action === 'notrepairable') shopYardMarkNotRepairable(ticketId);
+  else if (action === 'other') shopYardOtherUpdate(ticketId);
 }
 
 // Quick one-tap update for anything that doesn't fit the three specific
@@ -11219,13 +11232,12 @@ async function shopYardMarkLoanerReturned(ticketId) {
 // while work is still in progress; this one's the real appointment once
 // it's actually sitting ready).
 function shopYardPickupBlock(ticketId, t) {
-  return '<div style="background:var(--surface2);border-radius:14px;padding:14px;margin-bottom:16px;text-align:left">'
-    + '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">Fecha de Recogida</div>'
-    + '<div class="g2" style="margin-bottom:10px">'
-    + '<div class="fg"><label>Fecha</label><input type="date" id="syd-pdate-' + ticketId + '" value="' + esc(t.pickupDate || '') + '"></div>'
-    + '<div class="fg"><label>Hora</label><input type="time" id="syd-ptime-' + ticketId + '" value="' + esc(t.pickupTime || '') + '"></div>'
+  return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Fecha de Recogida</div>'
+    + '<div class="g2">'
+    + '<div class="fg"><label>Fecha</label><input type="date" id="syd-pdate-' + ticketId + '" value="' + esc(t.pickupDate || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
+    + '<div class="fg"><label>Hora</label><input type="time" id="syd-ptime-' + ticketId + '" value="' + esc(t.pickupTime || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
     + '</div>'
-    + '<button class="btn sm" style="width:100%" onclick="shopYardSavePickupSchedule(\'' + ticketId + '\')">Guardar</button>'
     + '</div>';
 }
 
