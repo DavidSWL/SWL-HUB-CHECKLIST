@@ -11023,8 +11023,18 @@ function shopOpenSpreadsheetPreview(rows, fileName) {
   const ex = document.getElementById('shop-ss-modal'); if (ex) ex.remove();
   window._shopSSRows = rows;
   const newRows = rows.filter(r => !r.isDuplicate);
-  const dupCount = rows.length - newRows.length;
+  const matchedRows = rows.filter(r => r.isDuplicate);
+  const dupCount = matchedRows.length;
   const unmatchedDiv = newRows.filter(r => !r.divisionId).length;
+  // "Replace" mode is opt-in and off by default — this file is a snapshot
+  // of what's on hand right now, so anything already in the registry but
+  // NOT in this file would otherwise get permanently deleted. David asked
+  // for exactly that behavior for his ongoing sync workflow, but it's
+  // destructive and irreversible, so it stays a visible checkbox with an
+  // exact delete count rather than something that happens silently.
+  const newUnitSet = new Set(rows.map(r => r.unitNumber.trim().toLowerCase()));
+  const toDelete = (window._shopAssets || []).filter(a => !newUnitSet.has((a.unitNumber||'').trim().toLowerCase()));
+  window._shopSSToDelete = toDelete;
   const m = document.createElement('div');
   m.id = 'shop-ss-modal';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
@@ -11038,6 +11048,10 @@ function shopOpenSpreadsheetPreview(rows, fileName) {
     + (unmatchedDiv ? '<div style="background:var(--warn-l);border-radius:var(--r);padding:10px 14px;flex:1;min-width:120px"><div style="font-size:20px;font-weight:800;color:var(--warn)">' + unmatchedDiv + '</div><div style="font-size:10.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">' + T('Branch not matched','Sucursal sin coincidencia') + '</div></div>' : '')
     + '</div>'
     + (unmatchedDiv ? '<div style="font-size:12px;color:var(--text2);background:var(--warn-l);padding:9px 12px;border-radius:var(--r);margin-bottom:14px;line-height:1.6">' + T('Rows where the Branch column didn\'t match one of the 5 divisions come in Unassigned — reassign them from the Division column right in the registry table afterward.','Las filas donde la columna Sucursal no coincidió con una de las 5 divisiones quedan Sin asignar — reasígnalas después desde la columna División en la tabla del registro.') + '</div>' : '')
+    + '<label style="display:flex;align-items:flex-start;gap:9px;font-size:12.5px;color:var(--text2);background:var(--danger-l);padding:10px 12px;border-radius:var(--r);margin-bottom:14px;cursor:pointer;line-height:1.5">'
+    + '<input type="checkbox" id="shop-ss-replace" onchange="shopUpdateSSConfirmLabel()" style="margin-top:2px;flex-shrink:0">'
+    + '<span><b>' + T('Replace the entire list.','Reemplazar toda la lista.') + '</b> ' + T('Permanently deletes the ' + toDelete.length + ' existing assets NOT in this file, and updates the ' + dupCount + ' that match by unit #. Leave unchecked to only add what\'s new.','Elimina permanentemente los ' + toDelete.length + ' activos existentes que NO están en este archivo, y actualiza los ' + dupCount + ' que coinciden por # de unidad. Déjalo sin marcar para solo agregar lo nuevo.') + '</span>'
+    + '</label>'
     + '<div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r)">'
     + '<table style="width:100%;border-collapse:collapse;font-size:11.5px">'
     + '<thead><tr>' + ['Unit #','Make/Model','Division','Status'].map(h => '<th style="text-align:left;padding:6px 8px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9px;text-transform:uppercase;color:var(--text3)">' + h + '</th>').join('') + '</tr></thead>'
@@ -11055,39 +11069,86 @@ function shopOpenSpreadsheetPreview(rows, fileName) {
     + '</div></div>';
   document.body.appendChild(m);
 }
-async function shopConfirmSpreadsheetImport() {
-  const rows = (window._shopSSRows || []).filter(r => !r.isDuplicate);
-  if (!rows.length) return;
+function shopUpdateSSConfirmLabel() {
   const btn = document.getElementById('shop-ss-confirm');
-  if (btn) { btn.disabled = true; btn.textContent = T('Importing…','Importando…'); }
+  const replace = document.getElementById('shop-ss-replace');
+  if (!btn || !replace) return;
+  const rows = window._shopSSRows || [];
+  const newRows = rows.filter(r => !r.isDuplicate);
+  const matched = rows.filter(r => r.isDuplicate);
+  const toDelete = window._shopSSToDelete || [];
+  if (replace.checked) {
+    btn.className = 'btn danger';
+    btn.textContent = T('Delete ' + toDelete.length + ', Update ' + matched.length + ', Add ' + newRows.length,'Eliminar ' + toDelete.length + ', Actualizar ' + matched.length + ', Agregar ' + newRows.length);
+  } else {
+    btn.className = 'btn primary';
+    btn.textContent = T('Import','Importar') + ' ' + newRows.length + ' ' + T('Assets','Activos');
+  }
+}
+async function shopConfirmSpreadsheetImport() {
+  const allRows = window._shopSSRows || [];
+  const replace = document.getElementById('shop-ss-replace')?.checked;
+  const newRows = allRows.filter(r => !r.isDuplicate);
+  const matchedRows = replace ? allRows.filter(r => r.isDuplicate) : [];
+  const toDelete = replace ? (window._shopSSToDelete || []) : [];
+  const totalOps = newRows.length + matchedRows.length + toDelete.length;
+  if (!totalOps) return;
+  if (replace && toDelete.length && !confirm(T('This will permanently delete ' + toDelete.length + ' existing assets. This cannot be undone. Continue?','Esto eliminará permanentemente ' + toDelete.length + ' activos existentes. Esto no se puede deshacer. ¿Continuar?'))) return;
+  const btn = document.getElementById('shop-ss-confirm');
+  if (btn) { btn.disabled = true; btn.textContent = T('Working…','Trabajando…'); }
   try {
+    // Existing docs, keyed by unit # so matched/delete rows can find their id.
+    const byUnit = {};
+    (window._shopAssets || []).forEach(a => { byUnit[(a.unitNumber||'').trim().toLowerCase()] = a; });
+
+    const ops = [];
+    newRows.forEach(r => ops.push({ type:'add', row:r }));
+    matchedRows.forEach(r => { const a = byUnit[r.unitNumber.trim().toLowerCase()]; if (a) ops.push({ type:'update', row:r, asset:a }); });
+    toDelete.forEach(a => ops.push({ type:'delete', asset:a }));
+
     let done = 0;
-    for (let i = 0; i < rows.length; i += 400) {
-      const chunk = rows.slice(i, i + 400);
+    for (let i = 0; i < ops.length; i += 400) {
+      const chunk = ops.slice(i, i + 400);
       const batch = db.batch();
-      chunk.forEach(r => {
-        batch.set(db.collection('shop_assets').doc(), {
-          unitNumber: r.unitNumber, assetType: r.assetType, iconKey: null,
-          make: r.make || null, model: r.model || null, year: r.year || null,
-          vinOrSerial: null, divisionId: r.divisionId, status: r.status,
-          meterType: 'none', currentMeter: null, ticketable: true,
-          pendingReview: false, addedByUserId: CU.uid, addedByUserName: CD.name,
-          importedFrom: r.description || null,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+      chunk.forEach(op => {
+        if (op.type === 'add') {
+          batch.set(db.collection('shop_assets').doc(), {
+            unitNumber: op.row.unitNumber, assetType: op.row.assetType, iconKey: null,
+            make: op.row.make || null, model: op.row.model || null, year: op.row.year || null,
+            vinOrSerial: null, divisionId: op.row.divisionId, status: op.row.status,
+            meterType: 'none', currentMeter: null, ticketable: true,
+            pendingReview: false, addedByUserId: CU.uid, addedByUserName: CD.name,
+            importedFrom: op.row.description || null,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } else if (op.type === 'update') {
+          // Icon, ticketable flag and pendingReview are left alone — the
+          // spreadsheet has no icon column and this shouldn't silently
+          // un-confirm an asset someone already reviewed.
+          batch.update(db.collection('shop_assets').doc(op.asset.id), {
+            assetType: op.row.assetType, make: op.row.make || null, model: op.row.model || null,
+            year: op.row.year || null, divisionId: op.row.divisionId, status: op.row.status,
+            importedFrom: op.row.description || null,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } else if (op.type === 'delete') {
+          batch.delete(db.collection('shop_assets').doc(op.asset.id));
+        }
       });
       await batch.commit();
       done += chunk.length;
-      if (btn) btn.textContent = T('Importing…','Importando…') + ' ' + done + '/' + rows.length;
+      if (btn) btn.textContent = T('Working…','Trabajando…') + ' ' + done + '/' + ops.length;
     }
-    toast('✓ ' + T('Imported ' + rows.length + ' assets','Se importaron ' + rows.length + ' activos'));
+    toast('✓ ' + (replace
+      ? T('Added ' + newRows.length + ', updated ' + matchedRows.length + ', deleted ' + toDelete.length,'Agregados ' + newRows.length + ', actualizados ' + matchedRows.length + ', eliminados ' + toDelete.length)
+      : T('Imported ' + newRows.length + ' assets','Se importaron ' + newRows.length + ' activos')));
     document.getElementById('shop-ss-modal').remove();
-    window._shopSSRows = null;
+    window._shopSSRows = null; window._shopSSToDelete = null;
     renderShopAssets();
   } catch (e) {
     toast('Could not import — ' + e.message, 'err');
-    if (btn) { btn.disabled = false; btn.textContent = T('Import','Importar') + ' ' + rows.length + ' ' + T('Assets','Activos'); }
+    if (btn) { btn.disabled = false; shopUpdateSSConfirmLabel(); }
   }
 }
 
