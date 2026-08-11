@@ -859,6 +859,44 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   .ws-top{padding:10px 12px}
   #tb-week{min-width:112px;font-size:10px}
 }
+/* Yard Kiosk — a brand-new ticket arriving flashes once so it's obvious
+   even at a glance, orange for a normal ticket, red for an urgent one so
+   the color itself signals priority; an urgent ticket also keeps a slow
+   red pulse the whole time it sits in the incoming queue. All paired
+   with shopYardBeep(). */
+@keyframes yardFlashNew {
+  0%,100% { box-shadow:0 0 0 0 rgba(234,88,12,0); }
+  15%,45%,75% { box-shadow:0 0 0 6px rgba(234,88,12,.35); }
+  30%,60%,90% { box-shadow:0 0 0 0 rgba(234,88,12,0); }
+}
+.yard-flash-new { animation: yardFlashNew 1.8s ease-in-out 2; }
+@keyframes yardFlashUrgent {
+  0%,100% { box-shadow:0 0 0 0 rgba(220,38,38,0); }
+  15%,45%,75% { box-shadow:0 0 0 7px rgba(220,38,38,.5); }
+  30%,60%,90% { box-shadow:0 0 0 0 rgba(220,38,38,0); }
+}
+.yard-flash-urgent { animation: yardFlashUrgent 1.8s ease-in-out 2; }
+@keyframes yardUrgentPulse {
+  0%,100% { border-color:var(--danger); background:var(--surface); }
+  50% { border-color:var(--danger); background:var(--danger-l); }
+}
+.yard-urgent-pulse { animation: yardUrgentPulse 1.3s ease-in-out infinite; }
+/* Ticket Progress — a steadily pulsing dot on the "Live" badge so the
+   screen reads as watching, not static, plus the same one-time flash
+   the kiosk uses, reused here for a row whose status just changed. */
+@keyframes liveDotPulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50% { opacity:.3; transform:scale(.75); }
+}
+.live-dot { display:inline-block; animation: liveDotPulse 1.4s ease-in-out infinite; }
+/* The truck/tool icon sitting at a ticket's current stage on the Ticket
+   Progress tracker gets a gentle bob, so it reads as "sitting right
+   here, right now" rather than a static pin. */
+@keyframes progressIconBob {
+  0%,100% { transform:translateY(0); }
+  50% { transform:translateY(-3px); }
+}
+.progress-icon-bob { display:inline-block; animation: progressIconBob 1s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -1001,7 +1039,15 @@ const ROLES = {
   // employee access (dashboard, check-in form, weekly items). This one is
   // deliberately locked down to a single read-only screen, so it's a
   // separate role rather than a branch variant of the same one.
-  ops_specialist_oc:    { label:'Operations Specialist (OC)', branch:'OC', canViewAll:false, isManager:false, color:'var(--oc)', restrictedTo:'saturday-schedule' }
+  ops_specialist_oc:    { label:'Operations Specialist (OC)', branch:'OC', canViewAll:false, isManager:false, color:'var(--oc)', restrictedTo:'saturday-schedule' },
+  // Shop Tickets (Central Shop) — kiosk-only role. Locked to the one
+  // screen the same way ops_specialist_oc is, so a shared yard account
+  // (build plan §11.4, still open) never sees any other nav — tap-only,
+  // no menus, per the build plan's kiosk spec.
+  // Chat included (not just the kiosk) so a shared yard account can still
+  // report issues — David: "the only things he needs to see is yard kiosk
+  // and the chat... he does not need or get access to anything else."
+  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)', restrictedTo:['yard-kiosk','chat'] }
 };
 
 const TEAM = [
@@ -1380,7 +1426,10 @@ function enterApp() {
   // the user to open Chat, so the rail badge is ambient the way Slack's
   // is — visible from any screen, not just when Chat happens to be open.
   chBootstrapUnread();
-  navigateTo(ROLES[CD.role]?.restrictedTo || 'dashboard');
+  {
+    const rt = ROLES[CD.role]?.restrictedTo;
+    navigateTo((Array.isArray(rt) ? rt[0] : rt) || 'dashboard');
+  }
 }
 
 async function chBootstrapUnread() {
@@ -1409,6 +1458,8 @@ async function doSignOut() {
   window._chLastMsgListeners = {};
   window._chUnread = {};
   if (window._chUnsub) { window._chUnsub(); window._chUnsub = null; }
+  if (window._shopYardUnsub) { window._shopYardUnsub(); window._shopYardUnsub = null; }
+  if (window._shopProgressUnsub) { window._shopProgressUnsub(); window._shopProgressUnsub = null; }
   await auth.signOut();
   // Tear the Spanish observer down — otherwise it survives into the next
   // sign-in on the same tab and would keep translating for an English user.
@@ -1509,6 +1560,32 @@ function wsAreas() {
       { id:'docs', icon:'📚', label:T('Docs','Documentos') }
     ]});
   }
+  // Shop Tickets — Phase 1 (asset registry) + Phase 2 (ticket core). Per
+  // the build plan's own role table: Manager can submit tickets and track
+  // them, Admin has everything, Executive is read-only oversight (Asset
+  // Registry + Pending Review, same as admin sees, but no submit/track —
+  // that's a requestor thing), Yard supervisor is a separate kiosk UI
+  // (Phase 3), never this nav.
+  {
+    const shopScreens = [];
+    if (isManager) {
+      shopScreens.push({ id:'shop-tickets', icon:'🎫', label:T('Submit Ticket','Enviar Boleto') });
+      shopScreens.push({ id:'shop-progress', icon:'📡', label:T('Ticket Progress','Progreso del Boleto') });
+    }
+    if (role === 'admin' || isExec) {
+      shopScreens.push({ id:'shop-assets', icon:'🚚', label:T('Asset Registry','Registro de Activos') });
+      shopScreens.push({ id:'shop-pending', icon:'⏳', label:T('Pending Review','Revisión Pendiente') });
+    }
+    if (shopScreens.length) areas.push({ id:'shop', icon:'🎫', label:T('Shop Tickets','Boletos del Taller'), screens: shopScreens });
+  }
+  // Phase 3 kiosk — the yard role's ONLY screen (enforced below via
+  // restrictedTo). Also shown to admin, additively, purely so David can
+  // preview it without needing a separate yard login.
+  if (role === 'yard' || role === 'admin') {
+    areas.push({ id:'yard-kiosk', icon:'🔧', label:T('Yard Kiosk','Kiosco de Patio'), screens:[
+      { id:'yard-kiosk', icon:'🔧', label:T('Yard Kiosk','Kiosco de Patio') }
+    ]});
+  }
   if (ocCrew) {
     areas.push({ id:'crew', icon:'🗓', label:T('Field Crew','Cuadrilla'), screens:[
       { id:'saturday-schedule', icon:'🗓', label:T('Saturday Schedule','Horario del Sábado') }
@@ -1520,10 +1597,15 @@ function wsAreas() {
     ]});
   }
 
-  // A role locked to a single screen only ever sees the one area that
-  // contains it — same guarantee the old single-icon branch gave.
+  // A role locked to specific screens only ever sees the area(s) that
+  // contain them — same guarantee the old single-icon branch gave, now
+  // generalized to a list rather than exactly one screen (the yard role
+  // needs both the kiosk and Chat, nothing else).
   const restrictedTo = ROLES[role]?.restrictedTo;
-  if (restrictedTo) return areas.filter(a => a.screens.some(s => s.id === restrictedTo));
+  if (restrictedTo) {
+    const allowed = Array.isArray(restrictedTo) ? restrictedTo : [restrictedTo];
+    return areas.filter(a => a.screens.some(s => allowed.includes(s.id)));
+  }
   return areas;
 }
 
@@ -1748,12 +1830,15 @@ document.addEventListener('click', closeAllMenus);
 // NAVIGATION — NO scroll reset
 // ══════════════════════════════════════════════════
 function navigateTo(screen) {
-  // A role locked to a single screen (e.g. ops_specialist_oc) has no nav
-  // buttons pointing anywhere else, but defend against stale bookmarks/
-  // browser history/leftover pending-nav state trying to reach anything
-  // outside their one allowed screen.
+  // A role locked to specific screens (e.g. ops_specialist_oc, yard) has
+  // no nav buttons pointing anywhere else, but defend against stale
+  // bookmarks/browser history/leftover pending-nav state trying to reach
+  // anything outside their allowed set.
   const restrictedTo = ROLES[CD?.role]?.restrictedTo;
-  if (restrictedTo && screen !== restrictedTo) screen = restrictedTo;
+  if (restrictedTo) {
+    const allowed = Array.isArray(restrictedTo) ? restrictedTo : [restrictedTo];
+    if (!allowed.includes(screen)) screen = allowed[0];
+  }
   activeScreen = screen;
   // Rebuild the rail + sidebar so the active area and screen highlight
   // follow, including for screens reached without a nav click (dashboard
@@ -1807,6 +1892,11 @@ function renderScreen(screen) {
     'saturday-schedule': { title: T('Saturday Schedule', 'Horario del Sábado'), fn: renderSaturdaySchedule },
     'chat':           { title: T('Chat','Chat'),           fn: renderChat },
     'docs':           { title: T('Docs','Documentos'),     fn: renderDocs },
+    'shop-tickets':   { title: T('Submit Ticket','Enviar Boleto'),        fn: renderShopTickets },
+    'shop-progress':  { title: T('Ticket Progress','Progreso del Boleto'), fn: renderShopTicketProgress },
+    'shop-assets':    { title: T('Asset Registry','Registro de Activos'), fn: renderShopAssets },
+    'shop-pending':   { title: T('Pending Review','Revisión Pendiente'),  fn: renderShopPending },
+    'yard-kiosk':     { title: T('Yard Kiosk','Kiosco de Patio'),        fn: renderYardKiosk },
   };
   const s = screens[screen];
   if (!s) return;
@@ -4627,6 +4717,10 @@ async function renderReports() {
   if (isAdmin || isExec) tabs.push({ k:'accountability', l:'Accountability', fn: renderAccountability });
   if (isMgr || isExec) tabs.push({ k:'team', l:'Team Overview', fn: renderTeam });
   if (isExec) tabs.push({ k:'exec-dashboard', l:'Executive Dashboard', fn: renderExecDashboard });
+  // Same admin/exec gate as Asset Registry and Pending Review — this is
+  // shop-wide oversight, not something a regular manager needs here (they
+  // track their own requests on Ticket Progress instead).
+  if (isAdmin || isExec) tabs.push({ k:'yard-repairs', l:T('Yard Repairs','Reparaciones del Taller'), fn: renderYardRepairReport });
 
   if (!tabs.length) { ca.innerHTML = '<div class="empty">Reports access is restricted for your role.</div>'; return; }
 
@@ -9843,6 +9937,1412 @@ async function docDelete(id) {
     toast('✓ ' + T('Deleted','Eliminado'));
     renderDocs();
   } catch (e) { toast('Could not delete — ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════════════
+// SHOP TICKETS — Phase 1: foundation (branches, assets, pending review)
+// ══════════════════════════════════════════════════
+// Per the build plan: "Nothing else works without a clean asset list."
+// This is Phase 1 of 6 ONLY — the asset registry and its review queue.
+// Tickets, the yard kiosk, alerts, reports and mileage are separate,
+// later phases and are not touched here.
+//
+// All new collections, prefixed shop_ throughout so nothing here can
+// collide with the existing landscape-hub collections (users, weekly_
+// items, saturday_*, channels, docs).
+//
+// Open item 11.1 (what color_code means) is resolved: it's the asset's
+// division, visualized as a color. Fixed 5-value list per David — not
+// Firestore-seeded like Phase 1's branches were, since this is a closed
+// set with colors intrinsic to what each division IS, not something
+// anyone should be renaming later. Replaces the earlier OC/LA/IE/SB/NV
+// branch list entirely — division is the unit that actually owns
+// equipment day to day, branch alone wasn't specific enough.
+const SHOP_DIVISIONS = [
+  { id:'maint_oc',     name:'Maintenance OC', nameEs:'Mantenimiento OC', color:'#EA580C' },
+  { id:'maint_la',     name:'Maintenance LA', nameEs:'Mantenimiento LA', color:'#2563EB' },
+  { id:'maint_ie',     name:'Maintenance IE', nameEs:'Mantenimiento IE', color:'#6B7280' },
+  { id:'trees',        name:'Trees',          nameEs:'Árboles',          color:'#16A34A' },
+  { id:'enhancements', name:'Enhancements',   nameEs:'Mejoras',          color:'#9333EA' }
+];
+function shopDivision(id) { return SHOP_DIVISIONS.find(d => d.id === id) || null; }
+function shopDivisionName(id) {
+  const d = shopDivision(id);
+  return d ? T(d.name, d.nameEs) : '—';
+}
+function shopDivisionChip(id) {
+  const d = shopDivision(id);
+  if (!d) return '<span style="color:var(--text3)">—</span>';
+  return '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:50%;background:' + d.color + ';flex:none"></span>' + esc(T(d.name, d.nameEs)) + '</span>';
+}
+
+const SHOP_ASSET_TYPES = ['vehicle','heavy_equipment','power_tool','lawn_equipment','trailer'];
+const SHOP_METER_TYPES = ['odometer','hours','none'];
+const SHOP_ASSET_STATUSES = ['active','down','retired'];
+
+function shopAssetTypeLabel(t) {
+  return T({vehicle:'Vehicle',heavy_equipment:'Heavy Equipment',power_tool:'Power Tool',lawn_equipment:'Lawn Equipment',trailer:'Trailer'}[t] || t,
+           {vehicle:'Vehículo',heavy_equipment:'Equipo Pesado',power_tool:'Herramienta Eléctrica',lawn_equipment:'Equipo de Jardín',trailer:'Remolque'}[t] || t);
+}
+function shopAssetTypeIcon(t) {
+  return { vehicle:'🚚', heavy_equipment:'🚜', power_tool:'🔧', lawn_equipment:'🌿', trailer:'🚛' }[t] || '🎫';
+}
+function shopStatusLabel(s) {
+  return T({active:'Active',down:'Down',retired:'Retired'}[s] || s,
+           {active:'Activo',down:'Fuera de Servicio',retired:'Retirado'}[s] || s);
+}
+function shopMeterLabel(m) {
+  return T({odometer:'Odometer',hours:'Hours',none:'None'}[m] || m,
+           {odometer:'Odómetro',hours:'Horas',none:'Ninguno'}[m] || m);
+}
+
+window._shopAssets = [];
+
+async function renderShopAssets() {
+  const ca = document.getElementById('content-area');
+  // Nav access is already admin/exec-only; this is defense in depth
+  // against a stale link, matching the actual gate exactly rather than
+  // the broader isManager check that used to let any manager in here.
+  const canView = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!canView) { ca.innerHTML = '<div class="empty">' + T('Asset Registry is only available to admin and executives.','El Registro de Activos solo está disponible para admin y ejecutivos.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const snap = await db.collection('shop_assets').get();
+    window._shopAssets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    window._shopFilterDivision = window._shopFilterDivision || '';
+    window._shopFilterType = window._shopFilterType || '';
+    shopPaintAssets();
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load Asset Registry</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderShopAssets()">Retry</button></div>';
+  }
+}
+
+function shopPaintAssets() {
+  const ca = document.getElementById('content-area');
+  const division = window._shopFilterDivision, type = window._shopFilterType;
+  const list = (window._shopAssets || []).filter(a =>
+    (!division || a.divisionId === division) && (!type || a.assetType === type)
+  ).sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
+  const pendingCount = (window._shopAssets || []).filter(a => a.pendingReview).length;
+
+  ca.innerHTML = '<div class="card" style="margin-bottom:16px">'
+    + '<div class="card-header"><div class="card-title">🚚 ' + T('Asset Registry','Registro de Activos') + '</div>'
+    + '<div style="display:flex;gap:8px;align-items:center">'
+    + ((CD.role === 'admin' || CD.role === 'exec_viewer') && pendingCount ? '<button class="btn sm" style="background:var(--warn-l);color:var(--warn);border-color:transparent" onclick="wsGoScreen(\'shop-pending\')">⏳ ' + pendingCount + ' ' + T('pending','pendientes') + '</button>' : '')
+    + '<button class="btn primary" onclick="shopOpenAssetForm()">+ ' + T('Add Asset','Agregar Activo') + '</button>'
+    + '</div></div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
+    + '<select id="shop-f-division" onchange="shopSetFilter(\'division\',this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
+    + '<option value="">' + T('All divisions','Todas las divisiones') + '</option>'
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + (division === d.id ? ' selected' : '') + '>' + esc(T(d.name,d.nameEs)) + '</option>').join('')
+    + '</select>'
+    + '<select id="shop-f-type" onchange="shopSetFilter(\'type\',this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
+    + '<option value="">' + T('All types','Todos los tipos') + '</option>'
+    + SHOP_ASSET_TYPES.map(t => '<option value="' + t + '"' + (type === t ? ' selected' : '') + '>' + shopAssetTypeLabel(t) + '</option>').join('')
+    + '</select>'
+    + '</div>'
+    + '<div style="overflow-x:auto">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:640px">'
+    + '<thead><tr>'
+    + ['Unit #','Type','Make / Model','Division','Status','Meter'].map((h,i) => {
+        const hEs = ['Unidad #','Tipo','Marca / Modelo','División','Estado','Medidor'][i];
+        return '<th style="text-align:left;padding:7px 10px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,hEs) + '</th>';
+      }).join('')
+    + '</tr></thead><tbody>'
+    + (list.length ? list.map(a => {
+        const statusColor = a.status === 'down' ? 'var(--danger)' : a.status === 'retired' ? 'var(--text3)' : 'var(--success)';
+        const statusBg = a.status === 'down' ? 'var(--danger-l)' : a.status === 'retired' ? 'var(--surface2)' : 'var(--success-l)';
+        return '<tr style="cursor:' + (CD.role === 'admin' ? 'pointer' : 'default') + '"' + (CD.role === 'admin' ? ' onclick="shopOpenAssetForm(\'' + a.id + '\')"' : '') + '>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);font-weight:700;color:var(--text)">' + esc(a.unitNumber || '')
+          + (a.pendingReview ? ' <span class="badge warn" style="font-size:9px">' + T('pending','pendiente') + '</span>' : '') + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopAssetTypeLabel(a.assetType) + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + esc([a.make,a.model,a.year].filter(Boolean).join(' ')) + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopDivisionChip(a.divisionId) + '</td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + statusColor + ';background:' + statusBg + '">' + shopStatusLabel(a.status) + '</span></td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + (a.meterType && a.meterType !== 'none' ? (a.currentMeter != null ? a.currentMeter : '—') + ' ' + shopMeterLabel(a.meterType) : '—') + '</td>'
+          + '</tr>';
+      }).join('') : '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text3)">' + T('No assets match this filter.','No hay activos que coincidan con este filtro.') + '</td></tr>')
+    + '</tbody></table></div></div>';
+}
+
+function shopSetFilter(kind, val) {
+  if (kind === 'division') window._shopFilterDivision = val;
+  if (kind === 'type') window._shopFilterType = val;
+  shopPaintAssets();
+}
+
+function shopOpenAssetForm(assetId) {
+  // Managers can only ever create — editing an existing asset is admin
+  // only, so the registry can't silently drift out of sync with itself.
+  const editing = assetId && CD.role === 'admin';
+  const a = editing ? (window._shopAssets || []).find(x => x.id === assetId) : null;
+  if (assetId && !editing) return;
+  const ex = document.getElementById('shop-asset-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'shop-asset-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:520px;max-width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">🚚 ' + (a ? T('Edit Asset','Editar Activo') : T('Add Asset','Agregar Activo')) + '</div>'
+    + '<button onclick="document.getElementById(\'shop-asset-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + (!a && CD.role !== 'admin' ? '<div style="font-size:11.5px;color:var(--text2);background:var(--warn-l);padding:8px 11px;border-radius:var(--r);margin-bottom:14px">' + T('This will be added as pending review until admin confirms it.','Esto se agregará como pendiente de revisión hasta que admin lo confirme.') + '</div>' : '')
+    + '<div class="g2">'
+    + '<div class="fg"><label>' + T('Unit Number','Número de Unidad') + '<span class="req">*</span></label><input type="text" id="sa-unit" placeholder="' + T('e.g. SW-T12','p. ej. SW-T12') + '" value="' + esc(a?.unitNumber || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Type','Tipo') + '</label><select id="sa-type">'
+    + SHOP_ASSET_TYPES.map(t => '<option value="' + t + '"' + ((a?.assetType||'vehicle') === t ? ' selected' : '') + '>' + shopAssetTypeLabel(t) + '</option>').join('')
+    + '</select></div></div>'
+    + '<div class="g3">'
+    + '<div class="fg"><label>' + T('Make','Marca') + '</label><input type="text" id="sa-make" value="' + esc(a?.make || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Model','Modelo') + '</label><input type="text" id="sa-model" value="' + esc(a?.model || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Year','Año') + '</label><input type="number" id="sa-year" value="' + (a?.year || '') + '"></div>'
+    + '</div>'
+    + '<div class="g3">'
+    + '<div class="fg"><label>' + T('VIN / Serial','VIN / Serie') + '</label><input type="text" id="sa-vin" value="' + esc(a?.vinOrSerial || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Division','División') + '</label><select id="sa-division">'
+    + '<option value="">' + T('Unassigned','Sin asignar') + '</option>'
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + ((a?.divisionId||'') === d.id ? ' selected' : '') + '>' + esc(T(d.name,d.nameEs)) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="fg"><label>' + T('Status','Estado') + '</label><select id="sa-status">'
+    + SHOP_ASSET_STATUSES.map(s => '<option value="' + s + '"' + ((a?.status||'active') === s ? ' selected' : '') + '>' + shopStatusLabel(s) + '</option>').join('')
+    + '</select></div>'
+    + '</div>'
+    + '<div class="g3">'
+    + '<div class="fg"><label>' + T('Meter Type','Tipo de Medidor') + '</label><select id="sa-metertype" onchange="document.getElementById(\'sa-meter\').disabled = (this.value===\'none\')">'
+    + SHOP_METER_TYPES.map(mt => '<option value="' + mt + '"' + ((a?.meterType||'none') === mt ? ' selected' : '') + '>' + shopMeterLabel(mt) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="fg"><label>' + T('Current Meter','Medidor Actual') + '</label><input type="number" id="sa-meter" value="' + (a?.currentMeter != null ? a.currentMeter : '') + '"' + ((a?.meterType||'none') === 'none' ? ' disabled' : '') + '></div>'
+    + '<div class="fg"><label>' + T('Ticketable','Genera Boletos') + '<span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">' + T('§11.2','§11.2') + '</span></label>'
+    + '<select id="sa-ticketable"><option value="1"' + ((a?.ticketable !== false) ? ' selected' : '') + '>' + T('Yes','Sí') + '</option><option value="0"' + (a?.ticketable === false ? ' selected' : '') + '>' + T('No','No') + '</option></select></div>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:8px">'
+    + '<button class="btn primary" id="sa-save-btn" onclick="shopSaveAsset(' + (a ? "'" + a.id + "'" : 'null') + ')">' + (a ? T('Save','Guardar') : T('Add Asset','Agregar Activo')) + '</button>'
+    + '<button class="btn" onclick="document.getElementById(\'shop-asset-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+async function shopSaveAsset(assetId) {
+  const unitNumber = document.getElementById('sa-unit').value.trim();
+  if (!unitNumber) { toast(T('Unit Number is required','El Número de Unidad es obligatorio'), 'err'); return; }
+  const assetType = document.getElementById('sa-type').value;
+  const make = document.getElementById('sa-make').value.trim();
+  const model = document.getElementById('sa-model').value.trim();
+  const yearRaw = document.getElementById('sa-year').value;
+  const vinOrSerial = document.getElementById('sa-vin').value.trim();
+  const divisionId = document.getElementById('sa-division').value || null;
+  const status = document.getElementById('sa-status').value;
+  const meterType = document.getElementById('sa-metertype').value;
+  const meterRaw = document.getElementById('sa-meter').value;
+  const ticketable = document.getElementById('sa-ticketable').value === '1';
+
+  // Uniqueness check (case/whitespace-insensitive), excluding this doc
+  // when editing. "Never free text on a ticket — always selected from
+  // here" only holds if this list can't quietly grow duplicates.
+  const dupe = (window._shopAssets || []).some(a =>
+    a.id !== assetId && (a.unitNumber || '').trim().toLowerCase() === unitNumber.toLowerCase());
+  if (dupe) { toast(T('That unit number already exists','Ese número de unidad ya existe'), 'err'); return; }
+
+  const btn = document.getElementById('sa-save-btn');
+  btn.disabled = true; btn.textContent = T('Saving…','Guardando…');
+  const data = {
+    unitNumber, assetType, make, model,
+    year: yearRaw ? parseInt(yearRaw, 10) : null,
+    vinOrSerial: vinOrSerial || null,
+    divisionId, status,
+    meterType, currentMeter: (meterType !== 'none' && meterRaw !== '') ? parseInt(meterRaw, 10) : null,
+    ticketable,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  try {
+    if (assetId) {
+      // Division reassignment keeps history — close out the prior span and
+      // open a new one — so per-division downtime reporting (a later phase)
+      // doesn't get corrupted by a mid-year reassignment.
+      const existing = (window._shopAssets || []).find(a => a.id === assetId);
+      if (existing && existing.divisionId !== divisionId) {
+        const today = new Date().toISOString().split('T')[0];
+        const openHist = await db.collection('shop_asset_division_history')
+          .where('assetId','==',assetId).where('toDate','==',null).get();
+        const histBatch = db.batch();
+        openHist.docs.forEach(d => histBatch.update(d.ref, { toDate: today }));
+        if (divisionId) {
+          histBatch.set(db.collection('shop_asset_division_history').doc(), {
+            assetId, divisionId, fromDate: today, toDate: null,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+        await histBatch.commit();
+      }
+      await db.collection('shop_assets').doc(assetId).update(data);
+      toast('✓ ' + T('Saved','Guardado'));
+    } else {
+      const pendingReview = CD.role !== 'admin';
+      await db.collection('shop_assets').add({
+        ...data, pendingReview,
+        addedByUserId: CU.uid, addedByUserName: CD.name,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      if (divisionId) {
+        const today = new Date().toISOString().split('T')[0];
+        await db.collection('shop_asset_division_history').add({
+          assetId: null, divisionId, fromDate: today, toDate: null,
+          note: 'Set at creation — assetId backfilled not required for Phase 1 reporting',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+      toast(pendingReview ? '✓ ' + T('Added — pending admin review','Agregado — pendiente de revisión') : '✓ ' + T('Asset added','Activo agregado'));
+    }
+    document.getElementById('shop-asset-modal').remove();
+    renderShopAssets();
+  } catch (e) {
+    toast(e.message || 'Could not save', 'err');
+    btn.disabled = false; btn.textContent = T('Save','Guardar');
+  }
+}
+
+// ══ Pending review queue (admin only) ══
+async function renderShopPending() {
+  const ca = document.getElementById('content-area');
+  const canView = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!canView) { ca.innerHTML = '<div class="empty">' + T('Admin and executives only.','Solo admin y ejecutivos.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const snap = await db.collection('shop_assets').where('pendingReview','==',true).get();
+    const pending = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+      .sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
+    ca.innerHTML = '<div class="card">'
+      + '<div class="card-header"><div class="card-title">⏳ ' + T('Pending Review','Revisión Pendiente') + '</div>'
+      + '<button class="btn sm" onclick="renderShopAssets()">← ' + T('Back to Registry','Volver al Registro') + '</button></div>'
+      + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:14px">' + T('Assets added by managers wait here until confirmed, so the same unit doesn\'t end up listed three different ways.','Los activos agregados por gerentes esperan aquí hasta ser confirmados, para que la misma unidad no termine listada de tres formas distintas.') + '</div>'
+      + (pending.length ? pending.map(a =>
+          '<div style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border)">'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(a.unitNumber || '') + '</div>'
+          + '<div style="font-size:11.5px;color:var(--text3);margin-top:2px">' + shopAssetTypeLabel(a.assetType) + ' · '
+          + esc([a.make,a.model,a.year].filter(Boolean).join(' ') || '—') + ' · ' + esc(shopDivisionName(a.divisionId)) + '</div>'
+          + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + T('Added by','Agregado por') + ' ' + esc(a.addedByUserName || '—') + '</div>'
+          + '</div>'
+          + (CD.role === 'admin' ? '<button class="btn sm" style="background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopConfirmAsset(\'' + a.id + '\')">✓ ' + T('Confirm','Confirmar') + '</button>'
+              + '<button class="btn sm" style="background:var(--danger-l);color:var(--danger);border-color:transparent" onclick="shopRejectAsset(\'' + a.id + '\',\'' + esc(a.unitNumber).replace(/'/g,"\\'") + '\')">' + T('Reject','Rechazar') + '</button>' : '')
+          + '</div>'
+        ).join('') : '<div class="empty">' + T('Nothing pending.','Nada pendiente.') + '</div>')
+      + '</div>';
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderShopPending()">Retry</button></div>';
+  }
+}
+
+async function shopConfirmAsset(assetId) {
+  try {
+    await db.collection('shop_assets').doc(assetId).update({ pendingReview: false });
+    toast('✓ ' + T('Confirmed','Confirmado'));
+    renderShopPending();
+  } catch (e) { toast('Could not confirm — ' + e.message, 'err'); }
+}
+
+// Safe to hard-delete here because a pending (unconfirmed) asset can never
+// have a ticket against it — the ticket form's asset picker only offers
+// confirmed assets. If that invariant ever changes, this needs to become
+// a real merge action instead of deletion, so ticket history isn't orphaned.
+async function shopRejectAsset(assetId, unitNumber) {
+  if (!confirm(T('Reject and remove "' + unitNumber + '"? This cannot be undone.', '¿Rechazar y eliminar "' + unitNumber + '"? Esto no se puede deshacer.'))) return;
+  try {
+    await db.collection('shop_assets').doc(assetId).delete();
+    toast('✓ ' + T('Rejected','Rechazado'));
+    renderShopPending();
+  } catch (e) { toast('Could not reject — ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Shop Tickets — Phase 2: ticket core (submission, stages, timeline).
+// Nothing here talks to chat/notifications yet — that's Phase 4 (Alerts)
+// in the build plan, on purpose, so this stays scoped to "can a repair
+// get entered and moved through its stages."
+//
+// shop_tickets holds one doc per repair request, denormalizing unitNumber
+// and divisionId from the asset at submit time (so the list/board never
+// needs a join). shop_tickets/{id}/events is a SUBCOLLECTION per ticket,
+// same trick used for chat messages elsewhere in this file — it lets the
+// timeline query with a plain orderBy('createdAt') with no composite
+// index, instead of where(ticketId)+orderBy needing one.
+// ══════════════════════════════════════════════════════════════════════
+
+const SHOP_TICKET_STATUSES = ['submitted','acknowledged','in_progress','ready_pickup','closed','cancelled','not_repairable'];
+const SHOP_TICKET_PRIORITIES = ['normal','urgent'];
+
+function shopTicketStatusLabel(s) {
+  return T({submitted:'Submitted',acknowledged:'Acknowledged',in_progress:'In Progress',ready_pickup:'Ready for Pickup',closed:'Closed',cancelled:'Cancelled',not_repairable:'Not Repairable'}[s] || s,
+           {submitted:'Enviado',acknowledged:'Reconocido',in_progress:'En Progreso',ready_pickup:'Listo para Recoger',closed:'Cerrado',cancelled:'Cancelado',not_repairable:'No Reparable'}[s] || s);
+}
+function shopTicketStatusColor(s) {
+  return { submitted:'var(--text3)', acknowledged:'var(--info)', in_progress:'var(--warn)', ready_pickup:'var(--success)', closed:'var(--text3)', cancelled:'var(--danger)', not_repairable:'var(--danger)' }[s] || 'var(--text3)';
+}
+function shopTicketStatusBg(s) {
+  return { submitted:'var(--surface2)', acknowledged:'var(--info-l)', in_progress:'var(--warn-l)', ready_pickup:'var(--success-l)', closed:'var(--surface2)', cancelled:'var(--danger-l)', not_repairable:'var(--danger-l)' }[s] || 'var(--surface2)';
+}
+function shopPriorityLabel(p) {
+  return T({normal:'Normal',urgent:'Urgent'}[p] || p, {normal:'Normal',urgent:'Urgente'}[p] || p);
+}
+function shopFmtWhen(ts) {
+  if (!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+}
+// For the plain 'YYYY-MM-DD' strings the two date <input type=date> fields
+// store — different from shopFmtWhen, which expects a Firestore Timestamp.
+function shopFmtDateOnly(s) {
+  if (!s) return '—';
+  const [y,mo,d] = s.split('-').map(Number);
+  return new Date(y, mo-1, d).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+// For the plain 'HH:MM' strings a <input type=time> field stores.
+function shopFmtTimeOnly(s) {
+  if (!s) return '';
+  const [h,m] = s.split(':').map(Number);
+  return new Date(2000,0,1,h,m).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+}
+// A loaner is overdue once its expected return date has passed and nobody
+// has marked it returned — this is the actual "flag the manager" signal;
+// everywhere that shows tickets checks this to decide whether to show the
+// overdue badge, since there's no push/email notification wired up.
+function shopIsLoanerOverdue(t) {
+  if (!t.loanerNumber || t.loanerReturned || !t.loanerReturnDate) return false;
+  return t.loanerReturnDate < new Date().toISOString().split('T')[0];
+}
+
+window._shopTickets = [];
+window._shopTicketFilter = 'open';
+
+async function renderShopTickets() {
+  const ca = document.getElementById('content-area');
+  const isManager = ROLES[CD.role]?.isManager || CD.role === 'admin';
+  if (!isManager) { ca.innerHTML = '<div class="empty">' + T('Shop Tickets is only available to managers and admin.','Boletos del Taller solo está disponible para gerentes y admin.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const [assetSnap, ticketSnap] = await Promise.all([
+      db.collection('shop_assets').get(),
+      db.collection('shop_tickets').orderBy('createdAt','desc').get()
+    ]);
+    window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    window._shopTickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    shopPaintTickets();
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ Could Not Load Tickets</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderShopTickets()">Retry</button></div>';
+  }
+}
+
+function shopPaintTickets() {
+  const ca = document.getElementById('content-area');
+  const filter = window._shopTicketFilter;
+  const openStatuses = ['submitted','acknowledged','in_progress'];
+  // Always personal, no admin exception — this screen is "submit a
+  // request and track it," full stop. Admin's oversight of every ticket
+  // in the shop happens on the Yard Kiosk, which already shows all of
+  // them regardless of who submitted — this list only ever needs to
+  // answer "how is the thing I asked for doing."
+  const scoped = (window._shopTickets || []).filter(t => t.submittedByUserId === CU.uid);
+  const list = scoped.filter(t => {
+    if (filter === 'open') return openStatuses.includes(t.status);
+    if (filter === 'ready_pickup') return t.status === 'ready_pickup';
+    if (filter === 'closed') return t.status === 'closed' || t.status === 'cancelled' || t.status === 'not_repairable';
+    return true;
+  });
+  const openCount = scoped.filter(t => openStatuses.includes(t.status)).length;
+  const chips = [
+    ['open', T('Open','Abiertos')], ['ready_pickup', T('Ready for Pickup','Listos para Recoger')],
+    ['closed', T('Closed','Cerrados')], ['all', T('All','Todos')]
+  ];
+
+  ca.innerHTML = '<div class="card" style="margin-bottom:16px">'
+    + '<div class="card-header"><div class="card-title">🎫 ' + T('Submit Ticket','Enviar Boleto') + (openCount ? ' <span style="font-size:11px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 8px;border-radius:20px;margin-left:6px">' + openCount + ' ' + T('open','abiertos') + '</span>' : '') + '</div>'
+    + '<button class="btn primary" onclick="shopOpenTicketForm()">+ ' + T('New Ticket','Nuevo Boleto') + '</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
+    + chips.map(([k,label]) => '<button class="btn sm' + (filter===k?' primary':'') + '" onclick="shopSetTicketFilter(\'' + k + '\')">' + label + '</button>').join('')
+    + '</div>'
+    + (list.length ? list.map(t => {
+        const priorityBadge = t.priority === 'urgent' ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('URGENT','URGENTE') + '</span>' : '';
+        const partsBadge = t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '';
+        const outsourcedBadge = t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Outside Shop','Taller Externo') + '</span>' : '';
+        const loanerBadge = shopIsLoanerOverdue(t) ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('LOANER OVERDUE','PRÉSTAMO VENCIDO') + '</span>' : '';
+        return '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + priorityBadge + partsBadge + outsourcedBadge + loanerBadge + '</div>'
+          + '<div style="font-size:12.5px;color:var(--text2);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.issue || '') + '</div>'
+          + '<div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+          + shopDivisionChip(t.divisionId)
+          + '<span>·</span><span>' + T('Submitted by','Enviado por') + ' ' + esc(t.submittedByName || '—') + '</span>'
+          + '<span>·</span><span>' + shopFmtWhen(t.createdAt) + '</span>'
+          + (t.estimatedDropoffDate ? '<span>·</span><span>📅 ' + T('Drop-off','Entrega') + ' ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</span>' : '')
+          + (t.requestedReturnDate ? '<span>·</span><span>↩ ' + T('Needed by','Se necesita para') + ' ' + shopFmtDateOnly(t.requestedReturnDate) + '</span>' : '')
+          + (t.estimatedFixDate ? '<span>·</span><span>🔧 ' + T('Est. fix','Reparación est.') + ' ' + shopFmtDateOnly(t.estimatedFixDate) + '</span>' : '')
+          + (t.pickupDate ? '<span>·</span><span>🕐 ' + T('Pickup','Recogida') + ' ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</span>'
+              : (t.estimatedPickupDate ? '<span>·</span><span>🕐 ' + T('Est. pickup','Recogida est.') + ' ' + shopFmtDateOnly(t.estimatedPickupDate) + '</span>' : ''))
+          + '</div></div>'
+          + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
+          + '</div>';
+      }).join('') : '<div class="empty">' + T('No tickets here.','No hay boletos aquí.') + '</div>')
+    + '</div>';
+}
+
+function shopSetTicketFilter(val) { window._shopTicketFilter = val; shopPaintTickets(); }
+
+// ══════════════════════════════════════════════════════════════════════
+// Ticket Progress — a live-updating variant of Submit Ticket's list.
+// Queries only this user's tickets server-side (where submittedByUserId
+// == uid) rather than loading everyone's and filtering client-side, then
+// stays subscribed so a status change from the Yard Kiosk shows up here
+// without a manual refresh — same onSnapshot pattern the kiosk itself
+// uses. Shares window._shopTickets with Submit Ticket so shopOpenTicket-
+// Detail works unmodified regardless of which screen opened it.
+// ══════════════════════════════════════════════════════════════════════
+window._shopProgressUnsub = null;
+window._shopProgressTickets = [];
+window._shopProgressFilter = 'open';
+window._shopProgressLastStatus = null; // null until the first snapshot — nothing to compare against yet, so nothing flashes on cold load
+window._shopProgressFlashIds = new Set();
+
+async function renderShopTicketProgress() {
+  const ca = document.getElementById('content-area');
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  if (window._shopProgressUnsub) { window._shopProgressUnsub(); window._shopProgressUnsub = null; }
+  window._shopProgressLastStatus = null;
+  window._shopProgressUnsub = db.collection('shop_tickets').where('submittedByUserId','==',CU.uid)
+    .onSnapshot(snap => {
+      const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+        .sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+      // A row whose status changed since the last snapshot gets a one-time
+      // flash — the visible proof that this screen really is live, not
+      // just a badge that says so.
+      if (window._shopProgressLastStatus) {
+        const changed = tickets.filter(t => window._shopProgressLastStatus.get(t.id) !== t.status);
+        if (changed.length) window._shopProgressFlashIds = new Set(changed.map(t => t.id));
+      }
+      window._shopProgressLastStatus = new Map(tickets.map(t => [t.id, t.status]));
+      window._shopProgressTickets = tickets;
+      window._shopTickets = tickets;
+      shopPaintTicketProgress();
+    }, err => {
+      ca.innerHTML = '<div class="empty">' + esc(err.message) + '</div>';
+    });
+}
+
+function shopSetProgressFilter(val) { window._shopProgressFilter = val; shopPaintTicketProgress(); }
+
+// A small horizontal stepper — Submitted / In Shop / Ready / Picked Up —
+// with the asset's own icon (truck for a vehicle, wrench for a power
+// tool, etc., via shopAssetTypeIcon) sitting at whichever stage it's
+// actually at right now, gently bobbing so it reads as "here, right now"
+// rather than a static status word. Skipped for cancelled/not-repairable
+// tickets — those didn't move through stages, they just stopped.
+function shopProgressTracker(t) {
+  const idx = { submitted:0, acknowledged:0, in_progress:1, ready_pickup:2, closed:3 }[t.status];
+  if (idx === undefined) return '';
+  const icon = shopAssetTypeIcon(t.assetType);
+  const stages = [T('Submitted','Enviado'), T('In Shop','En el Taller'), T('Ready','Listo'), T('Picked Up','Recogido')];
+  const dots = stages.map((label, i) => {
+    const pos = 4 + (i / (stages.length - 1)) * 92;
+    const done = i < idx, current = i === idx;
+    return '<div style="position:absolute;top:50%;left:' + pos + '%;transform:translate(-50%,-50%)">'
+      + (current
+          ? '<span class="progress-icon-bob" style="font-size:28px;display:inline-block;filter:drop-shadow(0 1px 2px rgba(0,0,0,.15))">' + icon + '</span>'
+          : '<div style="width:13px;height:13px;border-radius:50%;background:' + (done ? 'var(--success)' : 'var(--surface2)') + ';border:2px solid ' + (done ? 'var(--success)' : 'var(--border2)') + '"></div>')
+      + '</div>';
+  }).join('');
+  return '<div style="margin-top:12px;position:relative;height:34px">'
+    + '<div style="position:absolute;top:50%;left:4%;right:4%;height:2px;background:var(--border);transform:translateY(-50%)"></div>'
+    + '<div style="position:absolute;top:50%;left:4%;height:2px;background:var(--success);width:' + (idx / (stages.length - 1) * 92) + '%;transform:translateY(-50%);transition:width .4s"></div>'
+    + dots
+    + '</div>'
+    + '<div style="display:flex;margin-top:2px">'
+    + stages.map((label, i) => '<div style="flex:1;text-align:center;font-size:9px;color:' + (i===idx?'var(--text)':'var(--text3)') + ';font-weight:' + (i===idx?'700':'400') + '">' + label + '</div>').join('')
+    + '</div>';
+}
+
+function shopPaintTicketProgress() {
+  const ca = document.getElementById('content-area');
+  const filter = window._shopProgressFilter;
+  const flashIds = window._shopProgressFlashIds || new Set();
+  const openStatuses = ['submitted','acknowledged','in_progress'];
+  const list = (window._shopProgressTickets || []).filter(t => {
+    if (filter === 'open') return openStatuses.includes(t.status);
+    if (filter === 'ready_pickup') return t.status === 'ready_pickup';
+    if (filter === 'closed') return t.status === 'closed' || t.status === 'cancelled' || t.status === 'not_repairable';
+    return true;
+  });
+  const chips = [
+    ['open', T('Open','Abiertos')], ['ready_pickup', T('Ready for Pickup','Listos para Recoger')],
+    ['closed', T('Closed','Cerrados')], ['all', T('All','Todos')]
+  ];
+  const overdueLoaners = (window._shopProgressTickets || []).filter(shopIsLoanerOverdue);
+
+  ca.innerHTML = (overdueLoaners.length ? '<div style="font-size:12.5px;color:var(--danger);background:var(--danger-l);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-weight:600">'
+      + '⚠ ' + T(overdueLoaners.length + ' loaner' + (overdueLoaners.length>1?'s':'') + ' past the expected return date — ' + overdueLoaners.map(t=>t.unitNumber).join(', '),
+                 overdueLoaners.length + ' préstamo' + (overdueLoaners.length>1?'s':'') + ' vencido' + (overdueLoaners.length>1?'s':'') + ' — ' + overdueLoaners.map(t=>t.unitNumber).join(', '))
+      + '</div>' : '')
+    + '<div class="card">'
+    + '<div class="card-header"><div class="card-title">📡 ' + T('Ticket Progress','Progreso del Boleto')
+      + ' <span style="font-size:10px;font-weight:700;color:var(--success);background:var(--success-l);padding:2px 8px;border-radius:20px;margin-left:6px"><span class="live-dot">●</span> ' + T('Live','En Vivo') + '</span></div></div>'
+    + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:14px">' + T('Updates automatically as your request moves through the shop — no need to refresh.','Se actualiza automáticamente a medida que tu solicitud avanza — no necesitas actualizar.') + '</div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
+    + chips.map(([k,label]) => '<button class="btn sm' + (filter===k?' primary':'') + '" onclick="shopSetProgressFilter(\'' + k + '\')">' + label + '</button>').join('')
+    + '</div>'
+    + (list.length ? list.map(t => {
+        const priorityBadge = t.priority === 'urgent' ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('URGENT','URGENTE') + '</span>' : '';
+        const partsBadge = t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '';
+        const outsourcedBadge = t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Outside Shop','Taller Externo') + '</span>' : '';
+        const loanerBadge = shopIsLoanerOverdue(t) ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('LOANER OVERDUE','PRÉSTAMO VENCIDO') + '</span>' : '';
+        const flashCls = flashIds.has(t.id) ? ' yard-flash-new' : '';
+        return '<div class="' + flashCls.trim() + '" style="padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;border-radius:10px" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
+          + '<div style="display:flex;align-items:flex-start;gap:12px">'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + priorityBadge + partsBadge + outsourcedBadge + loanerBadge + '</div>'
+          + '<div style="font-size:12.5px;color:var(--text2);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.issue || '') + '</div>'
+          + '<div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+          + shopDivisionChip(t.divisionId)
+          + '<span>·</span><span>' + shopFmtWhen(t.createdAt) + '</span>'
+          + (t.estimatedDropoffDate ? '<span>·</span><span>📅 ' + T('Drop-off','Entrega') + ' ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</span>' : '')
+          + (t.requestedReturnDate ? '<span>·</span><span>↩ ' + T('Needed by','Se necesita para') + ' ' + shopFmtDateOnly(t.requestedReturnDate) + '</span>' : '')
+          + (t.estimatedFixDate ? '<span>·</span><span>🔧 ' + T('Est. fix','Reparación est.') + ' ' + shopFmtDateOnly(t.estimatedFixDate) + '</span>' : '')
+          + (t.pickupDate ? '<span>·</span><span>🕐 ' + T('Pickup','Recogida') + ' ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</span>'
+              : (t.estimatedPickupDate ? '<span>·</span><span>🕐 ' + T('Est. pickup','Recogida est.') + ' ' + shopFmtDateOnly(t.estimatedPickupDate) + '</span>' : ''))
+          + '</div></div>'
+          + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
+          + '</div>'
+          + shopProgressTracker(t)
+          + '</div>';
+      }).join('') : '<div class="empty">' + T('No tickets here.','No hay boletos aquí.') + '</div>')
+    + '</div>';
+
+  // Same rule as the kiosk's flash — fire once for this paint (already
+  // baked into the HTML above), not on every later unrelated repaint.
+  window._shopProgressFlashIds = new Set();
+}
+
+// One-click unblock for "the New Ticket picker is empty" — creates a real,
+// confirmed registry entry (never a free-text ticket) so the picker has
+// something to select, then reopens the ticket form with it available.
+// Admin-only in practice since it's only ever surfaced from admin-visible
+// screens (New Ticket's empty state, the Yard Kiosk admin preview banner).
+async function shopQuickAddTestAsset() {
+  try {
+    const n = (window._shopAssets || []).filter(a => (a.unitNumber||'').startsWith('TEST-')).length + 1;
+    const unitNumber = 'TEST-' + String(n).padStart(2,'0');
+    await db.collection('shop_assets').add({
+      unitNumber, assetType: 'vehicle', make: 'Test', model: 'Unit', year: null,
+      vinOrSerial: null, divisionId: null, status: 'active',
+      meterType: 'none', currentMeter: null, ticketable: true,
+      pendingReview: false, addedByUserId: CU.uid, addedByUserName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    const snap = await db.collection('shop_assets').get();
+    window._shopAssets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    toast('✓ ' + T('Test unit added','Unidad de prueba agregada') + ': ' + unitNumber);
+    shopOpenTicketForm();
+  } catch (e) { toast('Could not add — ' + e.message, 'err'); }
+}
+
+function shopOpenTicketForm() {
+  const ex = document.getElementById('shop-ticket-modal'); if (ex) ex.remove();
+  const assets = (window._shopAssets || []).filter(a => !a.pendingReview && a.ticketable !== false)
+    .sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
+  const m = document.createElement('div');
+  m.id = 'shop-ticket-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:480px;max-width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:14px;font-weight:700">🎫 ' + T('New Ticket','Nuevo Boleto') + '</div>'
+    + '<button onclick="document.getElementById(\'shop-ticket-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + (assets.length ? '' : '<div style="font-size:11.5px;color:var(--text2);background:var(--warn-l);padding:8px 11px;border-radius:var(--r);margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'
+        + '<span>' + T('No ticketable assets in the registry yet.','Aún no hay activos que generen boletos en el registro.') + '</span>'
+        + '<button class="btn sm" onclick="shopQuickAddTestAsset()">+ ' + T('Add a Test Unit','Agregar Unidad de Prueba') + '</button>'
+        + '</div>')
+    + '<div class="fg"><label>' + T('Asset','Activo') + '<span class="req">*</span></label><select id="st-asset" onchange="shopTicketAssetChanged()">'
+    + '<option value="">' + T('Select a unit…','Selecciona una unidad…') + '</option>'
+    + assets.map(a => '<option value="' + a.id + '" data-division="' + esc(a.divisionId || '') + '">' + esc(a.unitNumber) + ' — ' + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType)) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="fg"><label>' + T('Division','División') + '</label><select id="st-division">'
+    + '<option value="">' + T('Unassigned','Sin asignar') + '</option>'
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '">' + esc(T(d.name,d.nameEs)) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="fg"><label>' + T('Foreman Name','Nombre del Capataz') + '</label><input type="text" id="st-foreman" placeholder="' + T('Who\'s requesting this?','¿Quién lo solicita?') + '"></div>'
+    + '<div class="fg"><label>' + T('What\'s wrong?','¿Qué está mal?') + '<span class="req">*</span></label><textarea id="st-issue" rows="3" placeholder="' + T('Describe the issue…','Describe el problema…') + '"></textarea></div>'
+    + '<div class="fg"><label>' + T('Priority','Prioridad') + '</label><select id="st-priority">'
+    + SHOP_TICKET_PRIORITIES.map(p => '<option value="' + p + '"' + (p==='normal'?' selected':'') + '>' + shopPriorityLabel(p) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="g2">'
+    + '<div class="fg"><label>' + T('Estimated Drop-off Date','Fecha Estimada de Entrega') + '<span class="req">*</span></label><input type="date" id="st-dropoff"></div>'
+    + '<div class="fg"><label>' + T('Requested Return Date','Fecha de Regreso Solicitada') + '<span class="req">*</span></label><input type="date" id="st-return"></div>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:8px">'
+    + '<button class="btn primary" id="st-save-btn" onclick="shopSaveTicket()">' + T('Submit','Enviar') + '</button>'
+    + '<button class="btn" onclick="document.getElementById(\'shop-ticket-modal\').remove()">' + T('Cancel','Cancelar') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+
+// Auto-fills Division from whatever the selected asset already has, but
+// leaves it a real editable field rather than a locked display — a
+// hastily-added test unit (or any asset the registry hasn't tagged yet)
+// still lets the person submitting the ticket set it right here, so it
+// isn't blank on the kiosk card.
+function shopTicketAssetChanged() {
+  const assetSel = document.getElementById('st-asset');
+  const divSel = document.getElementById('st-division');
+  if (!assetSel || !divSel) return;
+  const opt = assetSel.options[assetSel.selectedIndex];
+  divSel.value = (opt && opt.dataset.division) || '';
+}
+
+async function shopSaveTicket() {
+  const assetId = document.getElementById('st-asset').value;
+  const divisionId = document.getElementById('st-division').value || null;
+  const foremanName = document.getElementById('st-foreman').value.trim() || null;
+  const issue = document.getElementById('st-issue').value.trim();
+  const priority = document.getElementById('st-priority').value;
+  const estimatedDropoffDate = document.getElementById('st-dropoff').value || null;
+  const requestedReturnDate = document.getElementById('st-return').value || null;
+  if (!assetId) { toast(T('Select an asset','Selecciona un activo'), 'err'); return; }
+  if (!issue) { toast(T('Describe the issue','Describe el problema'), 'err'); return; }
+  if (!estimatedDropoffDate) { toast(T('Estimated Drop-off Date is required','La Fecha Estimada de Entrega es obligatoria'), 'err'); return; }
+  if (!requestedReturnDate) { toast(T('Requested Return Date is required','La Fecha de Regreso Solicitada es obligatoria'), 'err'); return; }
+  const asset = (window._shopAssets || []).find(a => a.id === assetId);
+  const btn = document.getElementById('st-save-btn');
+  btn.disabled = true; btn.textContent = T('Submitting…','Enviando…');
+  // A yard supervisor logging a walk-in drop-off is entering a ticket for
+  // equipment that's already physically sitting at the yard right now —
+  // there's no separate "confirm it arrived" moment to wait for the way
+  // there is for a manager's advance request, so this skips straight to
+  // In Progress instead of Submitted.
+  const isWalkIn = CD.role === 'yard';
+  try {
+    const ref = await db.collection('shop_tickets').add({
+      assetId, unitNumber: asset?.unitNumber || '', assetType: asset?.assetType || null, divisionId,
+      foremanName, issue, priority, status: isWalkIn ? 'in_progress' : 'submitted', partsPending: false,
+      estimatedDropoffDate, requestedReturnDate,
+      submittedByUserId: CU.uid, submittedByName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await ref.collection('events').add({
+      type: 'created', userId: CU.uid, userName: CD.name,
+      note: isWalkIn ? T('Walk-in drop-off, entered by Yard Supervisor','Entrega en persona, ingresada por Supervisor de Patio') : null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    toast('✓ ' + T('Ticket submitted','Boleto enviado'));
+    document.getElementById('shop-ticket-modal').remove();
+    // The Tickets board loads with a one-time .get(), so it needs an
+    // explicit refresh. The Yard Kiosk has a LIVE onSnapshot listener that
+    // already picks this ticket up on its own, complete with the flash/
+    // beep — forcing a refresh here would tear that listener down and
+    // rebuild it, which would wrongly treat this brand-new ticket as part
+    // of the existing backlog and silently skip the flash/beep.
+    if (activeScreen !== 'yard-kiosk') renderScreen(activeScreen);
+  } catch (e) {
+    toast(e.message || 'Could not submit', 'err');
+    btn.disabled = false; btn.textContent = T('Submit','Enviar');
+  }
+}
+
+async function shopOpenTicketDetail(ticketId) {
+  const ex = document.getElementById('shop-ticket-detail-modal'); if (ex) ex.remove();
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  // Defense in depth — the list itself is already scoped to submitter-
+  // only, so this only matters against a stale id, but it's cheap
+  // insurance against ever leaking someone else's ticket, admin included.
+  if (t.submittedByUserId !== CU.uid) {
+    toast(T('You can only view tickets you submitted','Solo puedes ver los boletos que enviaste'), 'err');
+    return;
+  }
+  const m = document.createElement('div');
+  m.id = 'shop-ticket-detail-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:var(--rxl);padding:24px;width:560px;max-width:100%;max-height:85vh;overflow-y:auto;box-shadow:var(--shm)">'
+    + '<div id="std-body">' + T('Loading…','Cargando…') + '</div></div>';
+  document.body.appendChild(m);
+  await shopPaintTicketDetail(ticketId);
+}
+
+async function shopPaintTicketDetail(ticketId) {
+  const body = document.getElementById('std-body');
+  if (!body) return;
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  let events = [];
+  try {
+    const snap = await db.collection('shop_tickets').doc(ticketId).collection('events').orderBy('createdAt','asc').get();
+    events = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+  } catch (e) { /* timeline is best-effort; ticket state above still renders */ }
+
+  const isTerminal = t.status === 'closed' || t.status === 'cancelled' || t.status === 'not_repairable';
+  // Always the simple view now, for everyone — "those options should only
+  // be for our yard supervisor, not a requestor." This screen shows what's
+  // happening (status, timeline, whatever the yard supervisor has noted or
+  // scheduled) and offers exactly one action: Cancel, with a reason. Every
+  // other control — advancing status, parts/outsourced flags, adding
+  // notes, scheduling pickup — only exists on the Yard Kiosk now.
+
+  body.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+    + '<div><div style="font-size:15px;font-weight:700">🎫 ' + esc(t.unitNumber || '—') + '</div>'
+    + '<div style="margin-top:4px">' + shopDivisionChip(t.divisionId) + '</div></div>'
+    + '<button onclick="document.getElementById(\'shop-ticket-detail-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div style="display:flex;gap:6px;align-items:center;margin:10px 0;flex-wrap:wrap">'
+    + '<span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + '">' + shopTicketStatusLabel(t.status) + '</span>'
+    + (t.priority === 'urgent' ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:3px 8px;border-radius:20px">' + T('URGENT','URGENTE') + '</span>' : '')
+    + (t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:3px 8px;border-radius:20px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '')
+    + (t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:3px 8px;border-radius:20px">' + T('Sent to Outside Shop','Enviado a Taller Externo') + '</span>' : '')
+    + '</div>'
+    + '<div style="font-size:13px;color:var(--text);background:var(--surface2);padding:10px 12px;border-radius:var(--r);margin-bottom:14px;white-space:pre-wrap">' + esc(t.issue || '') + '</div>'
+    + ((t.estimatedDropoffDate || t.requestedReturnDate) ? '<div style="display:flex;gap:18px;font-size:12px;color:var(--text2);margin-bottom:10px;flex-wrap:wrap">'
+        + (t.estimatedDropoffDate ? '<div>📅 ' + T('Drop-off','Entrega') + ': <b>' + shopFmtDateOnly(t.estimatedDropoffDate) + '</b></div>' : '')
+        + (t.requestedReturnDate ? '<div>↩ ' + T('Needed back','Se necesita de vuelta') + ': <b>' + shopFmtDateOnly(t.requestedReturnDate) + '</b></div>' : '')
+        + '</div>' : '')
+    + ((t.estimatedFixDate || t.estimatedPickupDate) ? '<div style="display:flex;gap:18px;font-size:12px;color:var(--text2);margin-bottom:10px;flex-wrap:wrap;background:var(--info-l);padding:8px 12px;border-radius:var(--r)">'
+        + (t.estimatedFixDate ? '<div>🔧 ' + T('Est. Fix Date','Fecha Est. de Reparación') + ': <b>' + shopFmtDateOnly(t.estimatedFixDate) + '</b></div>' : '')
+        + (t.estimatedPickupDate ? '<div>🕐 ' + T('Est. Pickup Date','Fecha Est. de Recogida') + ': <b>' + shopFmtDateOnly(t.estimatedPickupDate) + '</b></div>' : '')
+        + '</div>' : '')
+    + '<div style="font-size:11px;color:var(--text3);margin-bottom:' + (t.foremanName ? '2' : '14') + 'px">' + T('Submitted by','Enviado por') + ' ' + esc(t.submittedByName || '—') + ' · ' + shopFmtWhen(t.createdAt) + '</div>'
+    + (t.foremanName ? '<div style="font-size:11px;color:var(--text3);margin-bottom:14px">' + T('Foreman','Capataz') + ': ' + esc(t.foremanName) + '</div>' : '')
+    + (t.loanerNumber ? '<div style="font-size:12px;' + (shopIsLoanerOverdue(t) ? 'color:var(--danger);background:var(--danger-l)' : 'color:var(--text2);background:var(--surface2)') + ';padding:8px 12px;border-radius:var(--r);margin-bottom:14px">🔁 ' + T('Loaner','Préstamo') + ' ' + esc(t.loanerNumber) + (t.loanerReturnDate ? ' — ' + T('due','vence') + ' ' + shopFmtDateOnly(t.loanerReturnDate) : '') + (t.loanerReturned ? ' (' + T('returned','devuelto') + ')' : (shopIsLoanerOverdue(t) ? ' — ' + T('OVERDUE','VENCIDO') : '')) + '</div>' : '')
+    + (t.pickupDate ? '<div style="font-size:12px;color:var(--text2);margin-bottom:14px">🕐 ' + T('Pickup scheduled','Recogida programada') + ': <b>' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</b></div>' : '')
+    + (t.cancelReason ? '<div style="font-size:12px;color:var(--danger);background:var(--danger-l);padding:8px 12px;border-radius:var(--r);margin-bottom:14px">' + T('Cancellation reason','Motivo de cancelación') + ': ' + esc(t.cancelReason) + '</div>' : '')
+    + (!isTerminal ? '<div style="margin-bottom:16px">'
+        + '<button class="btn sm" onclick="shopCancelTicketWithReason(\'' + ticketId + '\')">' + T('Cancel Ticket','Cancelar Boleto') + '</button>'
+        + '</div>' : '')
+    + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:8px">' + T('Timeline','Cronología') + '</div>'
+    + '<div style="max-height:220px;overflow-y:auto">'
+    + (events.length ? events.map(ev => {
+        let line;
+        if (ev.type === 'created') line = T('Ticket submitted','Boleto enviado') + (ev.note ? ' — ' + esc(ev.note) : '');
+        else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (ev.note ? ' — ' + esc(ev.note) : '');
+        else if (ev.type === 'parts') line = ev.partsPending ? T('Flagged parts pending','Marcado piezas pendientes') : T('Cleared parts pending','Piezas pendientes eliminado');
+        else line = esc(ev.text || '');
+        return '<div style="padding:7px 0;border-bottom:1px solid var(--border);font-size:12px">'
+          + '<span style="color:var(--text)">' + line + '</span>'
+          + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
+      }).join('') : '<div style="font-size:11.5px;color:var(--text3)">' + T('No activity yet.','Sin actividad aún.') + '</div>')
+    + '</div>';
+}
+
+// The requestor's one and only action. Cancelling always asks why — "if I
+// click cancel this means the ticket was cancelled, I'd then need a prompt
+// to show reason for cancellation" — and that reason is stored both on the
+// ticket (so it's visible without opening the timeline) and as an event
+// (so it's visible in it).
+async function shopCancelTicketWithReason(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const reason = prompt(T('Why are you cancelling this ticket?','¿Por qué estás cancelando este boleto?'));
+  if (reason === null) return; // dismissed, not confirmed with an empty reason
+  const fromStatus = t.status;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({
+      status: 'cancelled', cancelReason: reason || null,
+      closedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'status', fromStatus, toStatus: 'cancelled', userId: CU.uid, userName: CD.name,
+      note: reason || null, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.status = 'cancelled'; t.cancelReason = reason || null;
+    toast('✓ ' + T('Ticket cancelled','Boleto cancelado'));
+    shopPaintTickets();
+    await shopPaintTicketDetail(ticketId);
+  } catch (e) { toast('Could not cancel — ' + e.message, 'err'); }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Shop Tickets — Phase 3: Yard Supervisor kiosk.
+//
+// Per the build plan this is the ONE screen a shared yard account ever
+// sees (enforced by ROLES.yard.restrictedTo), Spanish-only regardless of
+// the viewer's language setting (hardcoded strings below, not T() — the
+// person on this screen is always Spanish-speaking per the plan), and
+// tap-only: no forms, no free text, no menus. Every action is "tap a
+// card, confirm on one big button." Also reachable by admin so David can
+// preview it without a separate yard login — the admin-only banner and
+// "+ Add Test Ticket" button below never show for the real yard role.
+// ══════════════════════════════════════════════════════════════════════
+
+window._shopYardUnsub = null;
+window._shopYardSeenIds = null; // null until the first snapshot lands — that first one is the existing backlog, not "new arrivals"
+window._shopYardFlashIds = new Set();
+
+// Two-tone chime via Web Audio, not an audio file — nothing to host. The
+// context itself is created/unlocked in renderYardKiosk() (inside the nav
+// click that got you here); this just plays a tone on that already-live
+// context, which works fine from an async callback like onSnapshot.
+function shopYardBeep() {
+  try {
+    if (!window._shopAudioCtx) window._shopAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = window._shopAudioCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+    const tone = (freq, start, dur) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + start); osc.stop(ctx.currentTime + start + dur + 0.05);
+    };
+    tone(880, 0, 0.16); tone(1175, 0.18, 0.22);
+  } catch (e) { /* no audio available — the flash still shows on its own */ }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Reports — Yard Repairs tab. Lives inside the existing Reports screen
+// (renderReports' tab strip), not a separate Shop Tickets nav item —
+// admin/exec oversight across every ticket and asset in the shop.
+// ══════════════════════════════════════════════════════════════════════
+async function renderYardRepairReport() {
+  const ca = getContentTarget();
+  const canView = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!canView) { ca.innerHTML = '<div class="empty">' + T('Admin and executives only.','Solo admin y ejecutivos.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const [ticketSnap, assetSnap] = await Promise.all([
+      db.collection('shop_tickets').get(),
+      db.collection('shop_assets').get()
+    ]);
+    const tickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    const assets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    shopPaintYardRepairReport(tickets, assets);
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ ' + T('Could Not Load','No se Pudo Cargar') + '</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderYardRepairReport()">' + T('Retry','Reintentar') + '</button></div>';
+  }
+}
+
+function shopPaintYardRepairReport(tickets, assets) {
+  const ca = getContentTarget();
+  const openStatuses = ['submitted','acknowledged','in_progress','ready_pickup'];
+  const openTickets = tickets.filter(t => openStatuses.includes(t.status));
+  const urgentOpen = openTickets.filter(t => t.priority === 'urgent');
+  const readyNow = tickets.filter(t => t.status === 'ready_pickup');
+  const now = new Date();
+  const daysOpen = (t) => {
+    const created = t.createdAt?.toDate ? t.createdAt.toDate() : now;
+    return Math.max(0, Math.floor((now - created) / 86400000));
+  };
+  const closedThisMonth = tickets.filter(t => {
+    if (t.status !== 'closed' || !t.closedAt?.toDate) return false;
+    const d = t.closedAt.toDate();
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }).length;
+
+  const statusCounts = {};
+  SHOP_TICKET_STATUSES.forEach(s => statusCounts[s] = 0);
+  tickets.forEach(t => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
+  const maxStatusCount = Math.max(1, ...Object.values(statusCounts));
+
+  const divCounts = {};
+  SHOP_DIVISIONS.forEach(d => divCounts[d.id] = 0);
+  tickets.forEach(t => { if (t.divisionId && divCounts[t.divisionId] !== undefined) divCounts[t.divisionId]++; });
+  const maxDivCount = Math.max(1, ...Object.values(divCounts));
+
+  const downAssets = assets.filter(a => a.status === 'down');
+  const agingOpen = [...openTickets].sort((a,b) => daysOpen(b) - daysOpen(a)).slice(0, 12);
+
+  const bar = (label, count, max, color) => '<div style="margin-bottom:9px">'
+    + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="color:var(--text2)">' + label + '</span><span style="font-weight:700;color:var(--text)">' + count + '</span></div>'
+    + '<div style="height:7px;border-radius:4px;background:var(--surface2);overflow:hidden"><div style="height:100%;width:' + (count/max*100) + '%;background:' + color + ';border-radius:4px"></div></div>'
+    + '</div>';
+
+  ca.innerHTML = '<div style="font-size:11px;color:var(--text3);background:var(--surface2);padding:9px 13px;border-radius:var(--r);margin-bottom:16px">'
+      + T('First pass at this report — reach out if the breakdown here doesn\'t match what you had in mind and I\'ll adjust it.',
+          'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
+      + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
+      + '<div class="stat-card"><div class="stat-num">' + openTickets.length + '</div><div class="stat-lbl">' + T('Open Now','Abiertos Ahora') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--danger)"><div class="stat-num">' + urgentOpen.length + '</div><div class="stat-lbl">' + T('Urgent Open','Urgentes Abiertos') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--success)"><div class="stat-num">' + readyNow.length + '</div><div class="stat-lbl">' + T('Ready for Pickup','Listos para Recoger') + '</div></div>'
+      + '<div class="stat-card"><div class="stat-num">' + closedThisMonth + '</div><div class="stat-lbl">' + T('Closed This Month','Cerrados Este Mes') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--warn)"><div class="stat-num">' + downAssets.length + '</div><div class="stat-lbl">' + T('Assets Down','Activos Fuera de Servicio') + '</div></div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">'
+      + '<div class="card"><div class="card-title" style="margin-bottom:12px">' + T('Tickets by Status','Boletos por Estado') + '</div>'
+        + SHOP_TICKET_STATUSES.map(s => bar(shopTicketStatusLabel(s), statusCounts[s], maxStatusCount, shopTicketStatusColor(s))).join('')
+      + '</div>'
+      + '<div class="card"><div class="card-title" style="margin-bottom:12px">' + T('Tickets by Division','Boletos por División') + '</div>'
+        + SHOP_DIVISIONS.map(d => bar(T(d.name,d.nameEs), divCounts[d.id], maxDivCount, d.color)).join('')
+      + '</div>'
+    + '</div>'
+    + '<div class="card" style="margin-bottom:20px">'
+      + '<div class="card-title" style="margin-bottom:4px">' + T('Open Tickets — Oldest First','Boletos Abiertos — Más Antiguos Primero') + '</div>'
+      + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">' + T('Whatever\'s been sitting longest, so nothing quietly stalls.','Lo que lleva más tiempo esperando, para que nada se estanque sin darse cuenta.') + '</div>'
+      + (agingOpen.length ? '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:520px">'
+          + '<thead><tr>' + ['Unit','Division','Status','Days Open'].map((h,i) => '<th style="text-align:left;padding:6px 8px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,['Unidad','División','Estado','Días Abierto'][i]) + '</th>').join('') + '</tr></thead><tbody>'
+          + agingOpen.map(t => '<tr>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700">' + esc(t.unitNumber||'—') + (t.priority==='urgent' ? ' <span style="font-size:9px;color:var(--danger)">●URG</span>' : '') + '</td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)">' + esc(shopDivisionName(t.divisionId)) + '</td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + '">' + shopTicketStatusLabel(t.status) + '</span></td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700">' + daysOpen(t) + '</td>'
+              + '</tr>').join('')
+          + '</tbody></table></div>'
+        : '<div class="empty">' + T('Nothing open right now.','Nada abierto en este momento.') + '</div>')
+    + '</div>'
+    + '<div class="card">'
+      + '<div class="card-title" style="margin-bottom:12px">' + T('Assets Currently Down','Activos Actualmente Fuera de Servicio') + '</div>'
+      + (downAssets.length ? downAssets.map(a => '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px">'
+          + '<span style="font-weight:700">' + esc(a.unitNumber||'—') + '</span>'
+          + '<span style="color:var(--text3)">' + shopAssetTypeLabel(a.assetType) + ' · ' + esc(shopDivisionName(a.divisionId)) + '</span>'
+          + '</div>').join('') : '<div class="empty">' + T('No assets marked down.','No hay activos marcados como fuera de servicio.') + '</div>')
+    + '</div>';
+}
+
+async function renderYardKiosk() {
+  const ca = document.getElementById('content-area');
+  if (CD.role !== 'yard' && CD.role !== 'admin') { ca.innerHTML = '<div class="empty">Acceso restringido.</div>'; return; }
+  // Browsers only allow creating/resuming an AudioContext during an actual
+  // user gesture — a Firestore onSnapshot callback later doesn't count,
+  // which is exactly why the beep was silently failing. This function is
+  // only ever reached via a nav click, so creating (and resuming) the
+  // context HERE, before any await, keeps it inside that gesture's call
+  // stack. shopYardBeep() later just reuses this already-unlocked context.
+  try {
+    if (!window._shopAudioCtx) window._shopAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (window._shopAudioCtx.state === 'suspended') window._shopAudioCtx.resume();
+  } catch (e) { /* no audio available — the flash still shows on its own */ }
+  ca.innerHTML = '<div class="empty">Cargando…</div>';
+  if (window._shopYardUnsub) { window._shopYardUnsub(); window._shopYardUnsub = null; }
+  window._shopYardSeenIds = null;
+  try {
+    const assetSnap = await db.collection('shop_assets').get();
+    window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ No se pudo cargar</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderYardKiosk()">Reintentar</button></div>';
+    return;
+  }
+  // Live subscription — the whole point of a kiosk is nobody's sitting
+  // there clicking refresh, so a new ticket (or a status change made from
+  // the manager side) has to show up, flash and beep, on its own.
+  window._shopYardUnsub = db.collection('shop_tickets').orderBy('createdAt','desc')
+    .onSnapshot(snap => {
+      window._shopTickets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      const isFirstSnapshot = !window._shopYardSeenIds;
+      const now = Date.now();
+      const arrived = window._shopTickets.filter(t => {
+        if (t.status !== 'submitted' && t.status !== 'acknowledged') return false;
+        if (window._shopYardSeenIds && window._shopYardSeenIds.has(t.id)) return false;
+        // On a cold screen-open there's no "seen" set yet to compare
+        // against, so treat the whole backlog as already-seen EXCEPT
+        // anything submitted in roughly the last couple minutes — covers
+        // "I just submitted this from Submit Ticket and switched straight
+        // to the kiosk" without beeping through the entire day's backlog
+        // every time the screen loads.
+        if (isFirstSnapshot) {
+          const created = t.createdAt?.toDate ? t.createdAt.toDate().getTime() : 0;
+          return created && (now - created) < 120000;
+        }
+        return true;
+      });
+      if (arrived.length) {
+        window._shopYardFlashIds = new Set(arrived.map(t => t.id));
+        shopYardBeep();
+      }
+      window._shopYardSeenIds = new Set(window._shopTickets.map(t => t.id));
+      shopPaintYardKiosk();
+    }, err => {
+      ca.innerHTML = '<div class="empty">No se pudo conectar — ' + esc(err.message) + '</div>';
+    });
+}
+
+function shopPaintYardKiosk() {
+  const ca = document.getElementById('content-area');
+  const tickets = window._shopTickets || [];
+  const flashIds = window._shopYardFlashIds || new Set();
+  const incoming = tickets.filter(t => t.status === 'submitted' || t.status === 'acknowledged')
+    .sort((a,b) => (a.estimatedDropoffDate||'9999').localeCompare(b.estimatedDropoffDate||'9999'));
+  const inProgress = tickets.filter(t => t.status === 'in_progress');
+  const readyPickup = tickets.filter(t => t.status === 'ready_pickup');
+
+  const tapCard = (t, kind) => {
+    const urgent = t.priority === 'urgent';
+    const isPickupLane = kind === 'pickup';
+    // Once it's ready for pickup, the point isn't "grab attention" anymore
+    // (that already happened on the way in) — it's "which division does
+    // this belong to," so the urgent flash/pulse stops and the border
+    // instead becomes the division's color code, permanently, not animated.
+    const div = shopDivision(t.divisionId);
+    const borderColor = isPickupLane ? (div ? div.color : 'var(--border2)') : (urgent ? 'var(--danger)' : 'var(--border2)');
+    const isFlashing = flashIds.has(t.id);
+    const cls = (urgent && !isPickupLane ? ' yard-urgent-pulse' : '')
+      + (isFlashing ? (urgent ? ' yard-flash-urgent' : ' yard-flash-new') : '');
+    return '<button class="' + cls.trim() + '" onclick="shopYardConfirm(\'' + t.id + '\',\'' + kind + '\')" style="display:block;width:100%;text-align:left;background:var(--surface);border:2px solid ' + borderColor + ';border-radius:14px;padding:16px 18px;margin-bottom:12px;cursor:pointer;font-family:inherit">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      + '<div style="font-size:18px;font-weight:800;color:var(--text)">' + esc(t.unitNumber || '—') + '</div>'
+      + (urgent && !isPickupLane ? '<span style="font-size:10px;font-weight:800;color:var(--danger);background:var(--danger-l);padding:3px 10px;border-radius:20px;white-space:nowrap">URGENTE</span>' : '')
+      + '</div>'
+      + '<div style="font-size:13px;margin-top:4px">' + shopDivisionChip(t.divisionId) + '</div>'
+      + '<div style="font-size:13.5px;color:var(--text);margin-top:8px;line-height:1.5">' + esc(t.issue || '') + '</div>'
+      + (t.foremanName ? '<div style="font-size:12px;color:var(--text3);margin-top:6px">👷 ' + esc(t.foremanName) + '</div>' : '')
+      + (t.estimatedDropoffDate ? '<div style="font-size:12px;color:var(--text3);margin-top:8px">📅 Entrega estimada: ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</div>' : '')
+      + (t.requestedReturnDate ? '<div style="font-size:12px;color:var(--text3);margin-top:2px">↩ Se necesita: ' + shopFmtDateOnly(t.requestedReturnDate) + '</div>' : '')
+      + (kind === 'pickup' && t.pickupDate ? '<div style="font-size:12px;color:var(--text3);margin-top:2px">🕐 Recogida programada: ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</div>' : '')
+      + (kind === 'ready' && t.loanerNumber ? '<div style="font-size:12px;margin-top:6px;font-weight:700;color:' + (shopIsLoanerOverdue(t) ? 'var(--danger)' : 'var(--text3)') + '">🔁 Préstamo ' + esc(t.loanerNumber) + (shopIsLoanerOverdue(t) ? ' — VENCIDO' : (t.loanerReturned ? ' — devuelto' : '')) + '</div>' : '')
+      + '</button>';
+  };
+  ca.innerHTML = (CD.role === 'admin' ? '<div style="font-size:12px;color:var(--text);background:var(--info-l);padding:10px 14px;border-radius:var(--r);margin-bottom:16px">'
+      + 'Vista previa de admin — esto es lo que ve el Supervisor de Patio. Diseño en español, solo con toques, sin menús. Un boleto nuevo destella y suena, un boleto urgente sigue pulsando.'
+      + '</div>' : '')
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:18px">'
+    + '<div style="font-size:22px;font-weight:800">🔧 Patio</div>'
+    + '<button class="btn sm primary" onclick="shopOpenTicketForm()">+ Nuevo Boleto</button>'
+    + '</div>'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">🚚 Equipo Entrante (' + incoming.length + ')</div>'
+    + (incoming.length ? incoming.map(t => tapCard(t,'dropoff')).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Nada entrante.</div>')
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:22px 0 10px">🔧 En Reparación (' + inProgress.length + ')</div>'
+    + (inProgress.length ? inProgress.map(t => tapCard(t,'ready')).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Nada en reparación.</div>')
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:22px 0 10px">✅ Listo para Recoger (' + readyPickup.length + ')</div>'
+    + (readyPickup.length ? readyPickup.map(t => tapCard(t,'pickup')).join('') : '<div style="font-size:13px;color:var(--text3)">Nada listo.</div>');
+
+  // The flash class is meant to fire once per new arrival, not replay on
+  // every unrelated repaint (e.g. after confirming a different ticket) —
+  // clearing it here means the HTML already returned still has the class
+  // baked in for this paint, but the next paint won't re-add it.
+  window._shopYardFlashIds = new Set();
+}
+
+// Tapping a card opens this: unit info, a read-only timeline, and a note
+// box, plus the one big confirm button for whatever this card's lane
+// means. Deliberately not the full manager detail modal (no status-jump
+// buttons, no parts flag) — "keep it simple," per David — but the yard
+// supervisor can see what's been happening and leave a note either way.
+function shopYardConfirm(ticketId, kind) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const ex = document.getElementById('shop-yard-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'shop-yard-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:20px;padding:32px;width:640px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--shm);font-size:15px">'
+    + '<div id="syd-body">Cargando…</div></div>';
+  document.body.appendChild(m);
+  shopPaintYardConfirm(ticketId, kind);
+}
+
+async function shopPaintYardConfirm(ticketId, kind) {
+  const body = document.getElementById('syd-body');
+  if (!body) return;
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  let events = [];
+  try {
+    const snap = await db.collection('shop_tickets').doc(ticketId).collection('events').orderBy('createdAt','asc').get();
+    events = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+  } catch (e) { /* timeline is best-effort — confirm still works without it */ }
+
+  const actionLabel = { dropoff:'Confirmar Entrega en el Patio', ready:'Marcar Listo para Recoger', pickup:'Confirmar Recogida' }[kind];
+  const question = { dropoff:'¿Confirmar que esta herramienta, equipo o vehículo fue entregado en el patio?', ready:'¿Confirmar que esta herramienta, equipo o vehículo está lista para recoger?', pickup:'¿Confirmar que esta herramienta, equipo o vehículo fue recogido?' }[kind];
+
+  const badges = (t.partsPending ? '<span style="font-size:9px;font-weight:800;color:var(--warn);background:var(--warn-l);padding:3px 8px;border-radius:20px;margin:0 3px">PIEZAS PENDIENTES</span>' : '')
+    + (t.outsourced ? '<span style="font-size:9px;font-weight:800;color:var(--info);background:var(--info-l);padding:3px 8px;border-radius:20px;margin:0 3px">TALLER EXTERNO</span>' : '');
+
+  body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:-8px">'
+    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:4px" title="Cerrar">✕</button></div>'
+    + '<div style="text-align:center">'
+    + '<div style="font-size:28px;font-weight:800;margin-bottom:6px">' + esc(t.unitNumber || '—') + '</div>'
+    + '<div style="font-size:16px;color:var(--text2);margin-bottom:7px">' + esc(t.issue || '') + '</div>'
+    + (t.foremanName ? '<div style="font-size:13.5px;color:var(--text3);margin-bottom:7px">👷 ' + esc(t.foremanName) + '</div>' : '')
+    + (t.issue ? '<button onclick="shopYardTranslateIssue(\'' + ticketId + '\')" style="background:none;border:none;color:var(--info);font-size:14px;font-weight:700;cursor:pointer">🌐 Traducir</button>'
+        + '<div id="syd-tr-' + ticketId + '" style="font-size:14.5px;color:var(--info);font-style:italic;margin-top:4px;margin-bottom:7px"></div>' : '')
+    + (badges ? '<div style="margin-bottom:12px">' + badges + '</div>' : '')
+    + '</div>'
+    + (kind === 'ready' ? shopYardProgressBlock(ticketId, t) : '')
+    + (kind === 'pickup' ? shopYardPickupBlock(ticketId, t) : '')
+    + '<div style="font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:9px">Cronología</div>'
+    + '<div style="max-height:180px;overflow-y:auto;margin-bottom:16px;text-align:left">'
+    + (events.length ? events.map(ev => {
+        let line;
+        if (ev.type === 'created') line = 'Boleto enviado' + (ev.note ? ' — ' + esc(ev.note) : '');
+        else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (ev.note ? ' — ' + esc(ev.note) : '');
+        else if (ev.type === 'parts') line = ev.partsPending ? 'Marcado piezas pendientes' : 'Piezas pendientes eliminado';
+        else line = esc(ev.text || '');
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:14px">'
+          + '<span style="color:var(--text)">' + line + '</span>'
+          + '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
+      }).join('') : '<div style="font-size:13px;color:var(--text3)">Sin actividad aún.</div>')
+    + '</div>'
+    + '<textarea id="syd-note-' + ticketId + '" rows="2" placeholder="Nota para la cuadrilla o admin…" style="width:100%;font-size:15px;padding:11px 13px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:10px;resize:vertical"></textarea>'
+    + '<button onclick="shopYardAddNote(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:14px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer;margin-bottom:20px">+ Agregar Nota</button>'
+    + '<div style="text-align:center;font-size:17px;color:var(--text);margin-bottom:18px">' + question + '</div>'
+    + '<button onclick="shopYardDoConfirm(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:20px;font-size:19px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ ' + actionLabel + '</button>';
+}
+
+// Translates in place — no navigating away from the kiosk. Uses Google's
+// public (unofficial, no-key-needed) translate endpoint, the same one
+// countless free client-side translate widgets rely on; there's no billing
+// decision or API key to wire up here, and if it's ever unavailable this
+// just fails quietly and the original English text is still right there.
+async function shopYardTranslateIssue(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  const el = document.getElementById('syd-tr-' + ticketId);
+  if (!t || !t.issue || !el) return;
+  el.textContent = 'Traduciendo…';
+  try {
+    const res = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=es&dt=t&q=' + encodeURIComponent(t.issue));
+    const data = await res.json();
+    const translated = (data[0] || []).map(seg => seg[0]).join('');
+    el.textContent = translated || 'No se pudo traducir.';
+  } catch (e) { el.textContent = 'No se pudo traducir.'; }
+}
+
+async function shopYardAddNote(ticketId, kind) {
+  const ta = document.getElementById('syd-note-' + ticketId);
+  const text = ta ? ta.value.trim() : '';
+  if (!text) return;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text, userId: CU.uid, userName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await shopPaintYardConfirm(ticketId, kind);
+  } catch (e) { toast('No se pudo agregar — ' + e.message, 'err'); }
+}
+
+// Only shown for 'ready' (En Reparación) cards — the tools an actual
+// repair-in-progress needs that intake/pickup confirmation doesn't:
+// estimated dates so the requester isn't left guessing, plus the same
+// parts-pending flag the manager view has, an outsourced flag for work
+// sent to a third-party shop, and a terminal "can't be fixed" outcome.
+function shopYardProgressBlock(ticketId, t) {
+  const quickOptions = [
+    ['', 'Acción rápida…'],
+    ['parts', t.partsPending ? '✓ Quitar Piezas Pendientes' : '⏳ Piezas Pendientes'],
+    ['outsourced', t.outsourced ? '✓ Quitar Taller Externo' : '🚚 Enviar a Taller Externo'],
+    ['notrepairable', '✕ No Reparable'],
+    ['other', '✎ Otro']
+  ];
+  return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Progreso</div>'
+    + '<div class="g2" style="margin-bottom:14px">'
+    + '<div class="fg"><label>Fecha Est. de Reparación</label><input type="date" id="syd-fixdate-' + ticketId + '" value="' + esc(t.estimatedFixDate || '') + '" onchange="shopYardSaveEstimates(\'' + ticketId + '\')"></div>'
+    + '<div class="fg"><label>Fecha Est. de Recogida</label><input type="date" id="syd-pickupest-' + ticketId + '" value="' + esc(t.estimatedPickupDate || '') + '" onchange="shopYardSaveEstimates(\'' + ticketId + '\')"></div>'
+    + '</div>'
+    + '<select style="width:100%;font-size:15px;padding:11px 12px;border-radius:10px;border:1.5px solid var(--border2);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:14px" onchange="shopYardQuickAction(\'' + ticketId + '\', this.value); this.value=\'\'">'
+    + quickOptions.map(([v,l]) => '<option value="' + v + '">' + l + '</option>').join('')
+    + '</select>'
+    + '<div style="border-top:1px solid var(--border2);padding-top:14px">'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Herramienta de Préstamo'
+    + (shopIsLoanerOverdue(t) ? ' <span style="color:var(--danger);font-weight:800">— VENCIDO</span>' : '') + '</div>'
+    + '<div class="g2" style="margin-bottom:' + (t.loanerNumber && !t.loanerReturned ? '12' : '0') + 'px">'
+    + '<div class="fg"><label>Número de Préstamo</label><input type="text" id="syd-loanernum-' + ticketId + '" value="' + esc(t.loanerNumber || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')"></div>'
+    + '<div class="fg"><label>Devolución Esperada</label><input type="date" id="syd-loanerdate-' + ticketId + '" value="' + esc(t.loanerReturnDate || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')"></div>'
+    + '</div>'
+    + (t.loanerNumber && !t.loanerReturned ? '<button class="btn sm" style="width:100%;background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopYardMarkLoanerReturned(\'' + ticketId + '\')">✓ Marcar Préstamo Devuelto</button>' : '')
+    + (t.loanerReturned ? '<div style="font-size:12.5px;color:var(--success);font-weight:700">✓ Préstamo devuelto</div>' : '')
+    + '</div></div>';
+}
+
+// Backs the single quick-action dropdown that replaced the four separate
+// buttons — "clean and minimal, easy for our mechanics." Resets to the
+// placeholder option after firing (see the inline onchange), same as
+// picking an action once rather than leaving a toggle visibly "selected."
+function shopYardQuickAction(ticketId, action) {
+  if (action === 'parts') shopYardToggleParts(ticketId);
+  else if (action === 'outsourced') shopYardToggleOutsourced(ticketId);
+  else if (action === 'notrepairable') shopYardMarkNotRepairable(ticketId);
+  else if (action === 'other') shopYardOtherUpdate(ticketId);
+}
+
+// Quick one-tap update for anything that doesn't fit the three specific
+// buttons above — logs straight to the timeline, same as the note box
+// below, just faster for a short one-line update.
+async function shopYardOtherUpdate(ticketId) {
+  const text = prompt('Actualización rápida:');
+  if (!text) return;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text, userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await shopPaintYardConfirm(ticketId, 'ready');
+  } catch (e) { toast('No se pudo agregar — ' + e.message, 'err'); }
+}
+
+// Yard Kiosk only, per the request — assigning/tracking a loaner is the
+// yard supervisor's call, not something a requestor does. Setting
+// loanerReturned:false here (not just leaving it unset) means re-saving a
+// new loaner number on a ticket that already had one returned correctly
+// resets the overdue tracking for the new loan.
+async function shopYardSaveLoaner(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const loanerNumber = document.getElementById('syd-loanernum-' + ticketId).value.trim() || null;
+  const loanerReturnDate = document.getElementById('syd-loanerdate-' + ticketId).value || null;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ loanerNumber, loanerReturnDate, loanerReturned: false, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: 'Préstamo asignado' + (loanerNumber ? ': ' + loanerNumber : '') + (loanerReturnDate ? ' — devolución esperada ' + shopFmtDateOnly(loanerReturnDate) : ''),
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.loanerNumber = loanerNumber; t.loanerReturnDate = loanerReturnDate; t.loanerReturned = false;
+    toast('✓ Préstamo guardado');
+    shopPaintYardKiosk();
+    await shopPaintYardConfirm(ticketId, 'ready');
+  } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
+}
+
+async function shopYardMarkLoanerReturned(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ loanerReturned: true, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: 'Préstamo devuelto' + (t.loanerNumber ? ': ' + t.loanerNumber : ''),
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.loanerReturned = true;
+    toast('✓ Préstamo marcado como devuelto');
+    shopPaintYardKiosk();
+    await shopPaintYardConfirm(ticketId, 'ready');
+  } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
+}
+
+// Pickup lane only — the final scheduled date/time, separate from the
+// estimatedPickupDate set earlier during repair (that one's a guess made
+// while work is still in progress; this one's the real appointment once
+// it's actually sitting ready).
+function shopYardPickupBlock(ticketId, t) {
+  return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Fecha de Recogida</div>'
+    + '<div class="g2">'
+    + '<div class="fg"><label>Fecha</label><input type="date" id="syd-pdate-' + ticketId + '" value="' + esc(t.pickupDate || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
+    + '<div class="fg"><label>Hora</label><input type="time" id="syd-ptime-' + ticketId + '" value="' + esc(t.pickupTime || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
+    + '</div>'
+    + '</div>';
+}
+
+async function shopYardSavePickupSchedule(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const pickupDate = document.getElementById('syd-pdate-' + ticketId).value || null;
+  const pickupTime = document.getElementById('syd-ptime-' + ticketId).value || null;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ pickupDate, pickupTime, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: 'Recogida programada' + (pickupDate ? ': ' + shopFmtDateOnly(pickupDate) : '') + (pickupTime ? ' ' + shopFmtTimeOnly(pickupTime) : ''),
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.pickupDate = pickupDate; t.pickupTime = pickupTime;
+    toast('✓ Guardado');
+    shopPaintYardKiosk();
+    await shopPaintYardConfirm(ticketId, 'pickup');
+  } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
+}
+
+async function shopYardSaveEstimates(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const estimatedFixDate = document.getElementById('syd-fixdate-' + ticketId).value || null;
+  const estimatedPickupDate = document.getElementById('syd-pickupest-' + ticketId).value || null;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ estimatedFixDate, estimatedPickupDate, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: 'Fechas estimadas actualizadas'
+        + (estimatedFixDate ? ' — Reparación: ' + shopFmtDateOnly(estimatedFixDate) : '')
+        + (estimatedPickupDate ? ' — Recogida: ' + shopFmtDateOnly(estimatedPickupDate) : ''),
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.estimatedFixDate = estimatedFixDate; t.estimatedPickupDate = estimatedPickupDate;
+    toast('✓ Fechas guardadas');
+    shopPaintYardKiosk();
+    await shopPaintYardConfirm(ticketId, 'ready');
+  } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
+}
+
+async function shopYardToggleParts(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const partsPending = !t.partsPending;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ partsPending, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'parts', partsPending, userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.partsPending = partsPending;
+    shopPaintYardKiosk();
+    await shopPaintYardConfirm(ticketId, 'ready');
+  } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
+}
+
+async function shopYardToggleOutsourced(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const outsourced = !t.outsourced;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ outsourced, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: outsourced ? 'Enviado a taller externo' : 'Regresó de taller externo',
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.outsourced = outsourced;
+    shopPaintYardKiosk();
+    await shopPaintYardConfirm(ticketId, 'ready');
+  } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
+}
+
+// Terminal, like closing or cancelling — a diagnostic finding ("this can't
+// be fixed") rather than a decision to abandon the request, so it's its
+// own status instead of reusing 'cancelled'.
+async function shopYardMarkNotRepairable(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  if (!confirm('¿Marcar esta unidad como no reparable? Esto cierra el boleto.')) return;
+  const fromStatus = t.status;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({
+      status: 'not_repairable', closedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'status', fromStatus, toStatus: 'not_repairable', userId: CU.uid, userName: CD.name,
+      note: 'Marcado no reparable por Supervisor de Patio', createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.status = 'not_repairable';
+    const modal = document.getElementById('shop-yard-modal'); if (modal) modal.remove();
+    toast('✓ Marcado no reparable');
+    shopPaintYardKiosk();
+  } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
+}
+
+async function shopYardDoConfirm(ticketId, kind) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const toStatus = { dropoff:'in_progress', ready:'ready_pickup', pickup:'closed' }[kind];
+  const noteByKind = { dropoff:'Entrega confirmada por Supervisor de Patio', ready:'Marcado listo para recoger por Supervisor de Patio', pickup:'Recogida confirmada por Supervisor de Patio' };
+  const fromStatus = t.status;
+  try {
+    const update = { status: toStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+    if (toStatus === 'closed') update.closedAt = firebase.firestore.FieldValue.serverTimestamp();
+    await db.collection('shop_tickets').doc(ticketId).update(update);
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'status', fromStatus, toStatus, userId: CU.uid, userName: CD.name,
+      note: noteByKind[kind],
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.status = toStatus;
+    const modal = document.getElementById('shop-yard-modal'); if (modal) modal.remove();
+    toast('✓ Actualizado');
+    shopPaintYardKiosk();
+  } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
 }
 
 </script>
