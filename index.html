@@ -4731,6 +4731,7 @@ async function renderReports() {
   // shop-wide oversight, not something a regular manager needs here (they
   // track their own requests on Ticket Progress instead).
   if (isAdmin || isExec) tabs.push({ k:'yard-repairs', l:T('Yard Repairs','Reparaciones del Taller'), fn: renderYardRepairReport });
+  if (isAdmin || isExec) tabs.push({ k:'downtime-trends', l:T('Downtime Trends','Tendencias de Tiempo Fuera'), fn: renderDowntimeReport });
   if (isAdmin || isExec) tabs.push({ k:'loaners', l:T('Loaner Tools','Herramientas de Préstamo'), fn: renderLoanerReport });
 
   if (!tabs.length) { ca.innerHTML = '<div class="empty">Reports access is restricted for your role.</div>'; return; }
@@ -12252,6 +12253,125 @@ function shopPaintLoanerReport(tickets) {
             }).join('')
           + '</tbody></table></div>'
         : '<div class="empty">' + T('No loaners have been assigned yet.','Aún no se han asignado préstamos.') + '</div>')
+    + '</div>';
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Reports — Downtime Trends tab. What's actually breaking, who's bringing
+// it in the most, and when it tends to happen — the questions a repair
+// log answers that a live ticket board doesn't.
+// ══════════════════════════════════════════════════════════════════════
+const SHOP_MONTH_NAMES = [
+  ['January','Enero'],['February','Febrero'],['March','Marzo'],['April','Abril'],
+  ['May','Mayo'],['June','Junio'],['July','Julio'],['August','Agosto'],
+  ['September','Septiembre'],['October','Octubre'],['November','Noviembre'],['December','Diciembre']
+];
+async function renderDowntimeReport() {
+  const ca = getContentTarget();
+  const canView = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!canView) { ca.innerHTML = '<div class="empty">' + T('Admin and executives only.','Solo admin y ejecutivos.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const snap = await db.collection('shop_tickets').get();
+    const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    shopPaintDowntimeReport(tickets);
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ ' + T('Could Not Load','No se Pudo Cargar') + '</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderDowntimeReport()">' + T('Retry','Reintentar') + '</button></div>';
+  }
+}
+
+function shopPaintDowntimeReport(tickets) {
+  const ca = getContentTarget();
+  const now = new Date();
+  const closedTickets = tickets.filter(t => t.status === 'closed' && t.closedAt?.toDate && t.createdAt?.toDate);
+  const downtimeDays = (t) => Math.max(0, Math.round((t.closedAt.toDate() - t.createdAt.toDate()) / 86400000));
+  const avgDowntime = closedTickets.length
+    ? (closedTickets.reduce((s,t) => s + downtimeDays(t), 0) / closedTickets.length).toFixed(1)
+    : '—';
+
+  const countBy = (keyFn, label) => {
+    const counts = {};
+    tickets.forEach(t => { const k = keyFn(t) || label; counts[k] = (counts[k] || 0) + 1; });
+    return Object.entries(counts).sort((a,b) => b[1] - a[1]);
+  };
+  const topAssets = countBy(t => t.unitNumber, T('Unlabeled unit','Unidad sin nombre')).slice(0, 10);
+  const topForemen = countBy(t => t.foremanName, T('Not specified','No especificado')).slice(0, 10);
+  const byDivision = SHOP_DIVISIONS.map(d => [T(d.name,d.nameEs), tickets.filter(t => t.divisionId === d.id).length, d.color]);
+
+  const seasonCounts = new Array(12).fill(0);
+  tickets.forEach(t => { if (t.createdAt?.toDate) seasonCounts[t.createdAt.toDate().getMonth()]++; });
+  const maxSeason = Math.max(1, ...seasonCounts);
+
+  // Last 12 real calendar months, chronological — distinct from the
+  // all-years seasonal breakdown above, so a recent spike or lull is
+  // visible even if it doesn't match the long-run seasonal pattern.
+  const monthBuckets = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    monthBuckets.push({ y:d.getFullYear(), m:d.getMonth(), count:0 });
+  }
+  tickets.forEach(t => {
+    if (!t.createdAt?.toDate) return;
+    const d = t.createdAt.toDate();
+    const bucket = monthBuckets.find(b => b.y === d.getFullYear() && b.m === d.getMonth());
+    if (bucket) bucket.count++;
+  });
+  const maxMonthly = Math.max(1, ...monthBuckets.map(b => b.count));
+
+  const longestDown = [...closedTickets].sort((a,b) => downtimeDays(b) - downtimeDays(a)).slice(0, 10);
+
+  const bar = (label, count, max, color) => '<div style="margin-bottom:9px">'
+    + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="color:var(--text2)">' + esc(label) + '</span><span style="font-weight:700;color:var(--text)">' + count + '</span></div>'
+    + '<div style="height:7px;border-radius:4px;background:var(--surface2);overflow:hidden"><div style="height:100%;width:' + (count/max*100) + '%;background:' + color + ';border-radius:4px"></div></div>'
+    + '</div>';
+
+  ca.innerHTML = '<div style="font-size:11px;color:var(--text3);background:var(--surface2);padding:9px 13px;border-radius:var(--r);margin-bottom:16px">'
+      + T('First pass at this report — reach out if the breakdown here doesn\'t match what you had in mind and I\'ll adjust it.',
+          'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
+      + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
+      + '<div class="stat-card"><div class="stat-num">' + tickets.length + '</div><div class="stat-lbl">' + T('Total Tickets','Boletos Totales') + '</div></div>'
+      + '<div class="stat-card"><div class="stat-num">' + avgDowntime + '</div><div class="stat-lbl">' + T('Avg. Days to Close','Días Prom. para Cerrar') + '</div></div>'
+      + '<div class="stat-card"><div class="stat-num" style="font-size:16px">' + (topAssets[0] ? esc(topAssets[0][0]) : '—') + '</div><div class="stat-lbl">' + T('Most-Repaired Unit','Unidad Más Reparada') + (topAssets[0] ? ' (' + topAssets[0][1] + ')' : '') + '</div></div>'
+      + '<div class="stat-card"><div class="stat-num" style="font-size:16px">' + (topForemen[0] ? esc(topForemen[0][0]) : '—') + '</div><div class="stat-lbl">' + T('Top Foreman by Tickets','Capataz con Más Boletos') + (topForemen[0] ? ' (' + topForemen[0][1] + ')' : '') + '</div></div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">'
+      + '<div class="card"><div class="card-title" style="margin-bottom:12px">' + T('Most-Repaired Units','Unidades Más Reparadas') + '</div>'
+        + (topAssets.length ? topAssets.map(([label,count]) => bar(label, count, topAssets[0][1], 'var(--danger)')).join('') : '<div class="empty">' + T('No tickets yet.','Aún no hay boletos.') + '</div>')
+      + '</div>'
+      + '<div class="card"><div class="card-title" style="margin-bottom:12px">' + T('Tickets by Foreman','Boletos por Capataz') + '</div>'
+        + (topForemen.length ? topForemen.map(([label,count]) => bar(label, count, topForemen[0][1], 'var(--info)')).join('') : '<div class="empty">' + T('No tickets yet.','Aún no hay boletos.') + '</div>')
+      + '</div>'
+    + '</div>'
+    + '<div class="card" style="margin-bottom:16px"><div class="card-title" style="margin-bottom:12px">' + T('Tickets by Division','Boletos por División') + '</div>'
+      + byDivision.map(([label,count,color]) => bar(label, count, Math.max(1, ...byDivision.map(b=>b[1])), color)).join('')
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">'
+      + '<div class="card"><div class="card-title" style="margin-bottom:4px">' + T('Seasonal Breakdown','Desglose Estacional') + '</div>'
+        + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">' + T('All tickets ever, grouped by calendar month — when equipment tends to break down.','Todos los boletos, agrupados por mes calendario — cuándo tiende a fallar el equipo.') + '</div>'
+        + SHOP_MONTH_NAMES.map((m,i) => bar(T(m[0],m[1]), seasonCounts[i], maxSeason, 'var(--warn)')).join('')
+      + '</div>'
+      + '<div class="card"><div class="card-title" style="margin-bottom:4px">' + T('Last 12 Months','Últimos 12 Meses') + '</div>'
+        + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">' + T('Actual month-over-month trend, most recent last.','Tendencia real mes a mes, el más reciente al final.') + '</div>'
+        + monthBuckets.map(b => bar(T(SHOP_MONTH_NAMES[b.m][0],SHOP_MONTH_NAMES[b.m][1]) + ' \'' + String(b.y).slice(2), b.count, maxMonthly, 'var(--swl-green)')).join('')
+      + '</div>'
+    + '</div>'
+    + '<div class="card">'
+      + '<div class="card-title" style="margin-bottom:4px">' + T('Longest Downtimes','Tiempos Fuera Más Largos') + '</div>'
+      + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">' + T('Closed tickets that took the longest from drop-off to done.','Boletos cerrados que tardaron más de entrega a terminado.') + '</div>'
+      + (longestDown.length ? '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:560px">'
+          + '<thead><tr>' + ['Unit','Foreman','Division','Days Down'].map((h,i) => '<th style="text-align:left;padding:6px 8px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,['Unidad','Capataz','División','Días Fuera'][i]) + '</th>').join('') + '</tr></thead><tbody>'
+          + longestDown.map(t => '<tr>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700">' + esc(t.unitNumber||'—') + '</td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)">' + esc(t.foremanName || '—') + '</td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)">' + esc(shopDivisionName(t.divisionId)) + '</td>'
+              + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700">' + downtimeDays(t) + '</td>'
+              + '</tr>').join('')
+          + '</tbody></table></div>'
+        : '<div class="empty">' + T('No closed tickets yet.','Aún no hay boletos cerrados.') + '</div>')
     + '</div>';
 }
 
