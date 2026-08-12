@@ -1457,6 +1457,9 @@ async function chBootstrapUnread() {
       await chLoadChannels();
     }
     chStartUnreadWatchers();
+    // Fire-and-forget — admin-only inside the function itself, and never
+    // awaited here so a slow check can't delay login for anyone.
+    shopCheckLoanerEscalations();
   } catch (e) { /* badges are cosmetic — never block app startup */ }
 }
 
@@ -8475,7 +8478,12 @@ const CHAT_DEFAULT_CHANNELS = [
   { key:'proposals-la',  name:'proposals-la',  branch:'LA',  desc:'LA proposals and pending work' },
   { key:'budgets-oc',    name:'budgets-oc',    branch:'OC',  desc:'OC budgets' },
   { key:'budgets-la',    name:'budgets-la',    branch:'LA',  desc:'LA budgets' },
-  { key:'saturday-crew', name:'saturday-crew', branch:'OC',  desc:'Saturday crew coordination' }
+  { key:'saturday-crew', name:'saturday-crew', branch:'OC',  desc:'Saturday crew coordination' },
+  // Cross-division, managers-only — where loaner-tool pickup/return
+  // notices and their 72-hour escalation to the executive land, so every
+  // manager and admin/exec see the whole loaner picture in one place
+  // instead of it being split by branch or division.
+  { key:'loaners',       name:'loaners',       branch:'ALL', audience:'managers', desc:'Loaner tool pickup confirmations and overdue escalations' }
 ];
 
 window._chChannels = [];
@@ -8488,6 +8496,7 @@ function chCanSeeAll() { return CD.role === 'admin' || CD.role === 'exec_viewer'
 
 function chVisibleChannels() {
   const branch = CD.branch;
+  const isManager = ROLES[CD.role]?.isManager || CD.role === 'admin';
   return (window._chChannels || []).filter(c => {
     if (c.kind === 'dm') {
       // hiddenFor is a per-user "I left/closed this" list (chLeaveDm) — it
@@ -8496,6 +8505,10 @@ function chVisibleChannels() {
       // (chOpenDmGroup) or a new message arriving (chSend) un-hides it.
       return (c.members || []).includes(CU.uid) && !(c.hiddenFor || []).includes(CU.uid);
     }
+    // A managers-only channel (e.g. #loaners) ignores the branch/division
+    // split entirely — every manager sees it regardless of OC/LA/IE, plus
+    // admin/exec per the usual overview rule below.
+    if (c.audience === 'managers') return isManager || chCanSeeAll();
     if (c.branch === 'ALL') return true;
     if (chCanSeeAll()) return true;      // executive / admin overview
     return c.branch === branch;
@@ -12304,6 +12317,7 @@ function shopPaintYardKiosk() {
 function shopYardConfirm(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
+  if (window._shopYardLoanerAnswer) delete window._shopYardLoanerAnswer[ticketId];
   const ex = document.getElementById('shop-yard-modal'); if (ex) ex.remove();
   const m = document.createElement('div');
   m.id = 'shop-yard-modal';
@@ -12331,7 +12345,12 @@ async function shopPaintYardConfirm(ticketId, kind) {
   const badges = (t.partsPending ? '<span style="font-size:9px;font-weight:800;color:var(--warn);background:var(--warn-l);padding:3px 8px;border-radius:20px;margin:0 3px">PIEZAS PENDIENTES</span>' : '')
     + (t.outsourced ? '<span style="font-size:9px;font-weight:800;color:var(--info);background:var(--info-l);padding:3px 8px;border-radius:20px;margin:0 3px">TALLER EXTERNO</span>' : '');
 
-  body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:-8px">'
+  body.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:-8px">'
+    // Delete is admin-only and lives ONLY here in the kiosk view — never
+    // in the manager Shop Tickets screens — since it's meant for David to
+    // clear out test tickets he creates while previewing the kiosk, not
+    // as a general way to erase real ticket history.
+    + (CD.role === 'admin' ? '<button onclick="shopYardDeleteTicket(\'' + ticketId + '\')" style="background:none;border:none;font-size:13px;font-weight:700;cursor:pointer;color:var(--danger);padding:4px" title="Eliminar boleto">🗑 Eliminar</button>' : '<span></span>')
     + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:4px" title="Cerrar">✕</button></div>'
     + '<div style="text-align:center">'
     + '<div style="font-size:28px;font-weight:800;margin-bottom:6px">' + esc(t.unitNumber || '—') + '</div>'
@@ -12496,13 +12515,32 @@ async function shopYardMarkLoanerReturned(ticketId) {
 // while work is still in progress; this one's the real appointment once
 // it's actually sitting ready).
 function shopYardPickupBlock(ticketId, t) {
+  // Loaner Collected? is only asked when a loaner is actually still out —
+  // if it was already marked returned earlier in the Progreso panel,
+  // pickup proceeds without re-asking.
+  const hasOpenLoaner = !!(t.loanerNumber && !t.loanerReturned);
   return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
     + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Fecha de Recogida</div>'
     + '<div class="g2">'
     + '<div class="fg"><label>Fecha</label><input type="date" id="syd-pdate-' + ticketId + '" value="' + esc(t.pickupDate || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
     + '<div class="fg"><label>Hora</label><input type="time" id="syd-ptime-' + ticketId + '" value="' + esc(t.pickupTime || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
     + '</div>'
+    + (hasOpenLoaner ? '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px">'
+        + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">🔁 Préstamo ' + esc(t.loanerNumber) + ' — ¿Fue Devuelto?</div>'
+        + '<div style="display:flex;gap:8px">'
+        + '<button type="button" onclick="shopYardSetLoanerCollected(\'' + ticketId + '\',true)" id="syd-lc-yes-' + ticketId + '" style="flex:1;padding:12px;font-size:14px;font-weight:700;border-radius:10px;cursor:pointer;border:2px solid var(--border2);background:var(--surface);color:var(--text)">✓ Sí, Devuelto</button>'
+        + '<button type="button" onclick="shopYardSetLoanerCollected(\'' + ticketId + '\',false)" id="syd-lc-no-' + ticketId + '" style="flex:1;padding:12px;font-size:14px;font-weight:700;border-radius:10px;cursor:pointer;border:2px solid var(--border2);background:var(--surface);color:var(--text)">✕ No Devuelto</button>'
+        + '</div></div>' : '')
     + '</div>';
+}
+function shopYardSetLoanerCollected(ticketId, collected) {
+  window._shopYardLoanerAnswer = window._shopYardLoanerAnswer || {};
+  window._shopYardLoanerAnswer[ticketId] = collected;
+  const yesBtn = document.getElementById('syd-lc-yes-' + ticketId);
+  const noBtn = document.getElementById('syd-lc-no-' + ticketId);
+  const base = 'flex:1;padding:12px;font-size:14px;font-weight:700;border-radius:10px;cursor:pointer;border:2px solid ';
+  if (yesBtn) yesBtn.style.cssText = base + (collected === true ? 'var(--success);background:var(--success-l);color:var(--success)' : 'var(--border2);background:var(--surface);color:var(--text)');
+  if (noBtn) noBtn.style.cssText = base + (collected === false ? 'var(--danger);background:var(--danger-l);color:var(--danger)' : 'var(--border2);background:var(--surface);color:var(--text)');
 }
 
 async function shopYardSavePickupSchedule(ticketId) {
@@ -12598,26 +12636,112 @@ async function shopYardMarkNotRepairable(ticketId) {
   } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
 }
 
+// Kiosk-only, admin-only — for clearing out test tickets David creates
+// while previewing the kiosk himself. Deletes the events subcollection
+// too, since Firestore never cascades that automatically.
+async function shopYardDeleteTicket(ticketId) {
+  if (CD.role !== 'admin') return;
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  if (!confirm('¿Eliminar permanentemente el boleto de "' + (t.unitNumber || 'esta unidad') + '"? Esto no se puede deshacer.')) return;
+  try {
+    const eventsSnap = await db.collection('shop_tickets').doc(ticketId).collection('events').get();
+    const batch = db.batch();
+    eventsSnap.docs.forEach(d => batch.delete(d.ref));
+    batch.delete(db.collection('shop_tickets').doc(ticketId));
+    await batch.commit();
+    window._shopTickets = (window._shopTickets || []).filter(x => x.id !== ticketId);
+    const modal = document.getElementById('shop-yard-modal'); if (modal) modal.remove();
+    toast('✓ Boleto eliminado');
+    shopPaintYardKiosk();
+  } catch (e) { toast('No se pudo eliminar — ' + e.message, 'err'); }
+}
+
 async function shopYardDoConfirm(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
+  // A loaner still checked out has to be explicitly resolved at pickup —
+  // "Sí" or "No", not left silently unanswered — since that's the one
+  // moment someone's actually standing at the yard to know the real
+  // answer. Answering "No" is what starts the manager/exec escalation.
+  const hasOpenLoaner = kind === 'pickup' && t.loanerNumber && !t.loanerReturned;
+  const loanerCollected = hasOpenLoaner ? (window._shopYardLoanerAnswer || {})[ticketId] : null;
+  if (hasOpenLoaner && (loanerCollected !== true && loanerCollected !== false)) {
+    toast('Indica si el préstamo fue devuelto antes de confirmar', 'err');
+    return;
+  }
   const toStatus = { dropoff:'in_progress', ready:'ready_pickup', pickup:'closed' }[kind];
   const noteByKind = { dropoff:'Entrega confirmada por Supervisor de Patio', ready:'Marcado listo para recoger por Supervisor de Patio', pickup:'Recogida confirmada por Supervisor de Patio' };
   const fromStatus = t.status;
   try {
     const update = { status: toStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
     if (toStatus === 'closed') update.closedAt = firebase.firestore.FieldValue.serverTimestamp();
+    if (hasOpenLoaner) {
+      update.loanerReturned = loanerCollected;
+      if (!loanerCollected) update.loanerNotifiedManagerAt = firebase.firestore.FieldValue.serverTimestamp();
+    }
     await db.collection('shop_tickets').doc(ticketId).update(update);
     await db.collection('shop_tickets').doc(ticketId).collection('events').add({
       type: 'status', fromStatus, toStatus, userId: CU.uid, userName: CD.name,
-      note: noteByKind[kind],
+      note: noteByKind[kind] + (hasOpenLoaner ? (loanerCollected ? ' — préstamo devuelto' : ' — préstamo NO devuelto') : ''),
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     t.status = toStatus;
+    if (hasOpenLoaner) {
+      t.loanerReturned = loanerCollected;
+      if (!loanerCollected) { t.loanerNotifiedManagerAt = { toMillis: () => Date.now() }; shopNotifyLoanerNotCollected(t); }
+    }
     const modal = document.getElementById('shop-yard-modal'); if (modal) modal.remove();
     toast('✓ Actualizado');
     shopPaintYardKiosk();
   } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
+}
+
+// First-stage notice: posts into #loaners (all managers + admin/exec are
+// members) naming the division so its manager sees it's theirs to chase
+// down. There's no per-division manager mapping in the user data yet, so
+// this addresses the division rather than a resolved individual — see
+// shopCheckLoanerEscalations for the 72-hour follow-up.
+async function shopNotifyLoanerNotCollected(t) {
+  try {
+    const ch = (window._chChannels || []).find(c => c.key === 'loaners' || c.name === 'loaners');
+    if (!ch) return;
+    const divName = shopDivisionName(t.divisionId);
+    await db.collection('channels').doc(ch.id).collection('messages').add({
+      text: '⚠️ Loaner ' + t.loanerNumber + ' was NOT collected at pickup for unit ' + (t.unitNumber || '—') + ' (' + divName + '). ' + divName + ' manager, please follow up on getting it returned.',
+      uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } catch (e) { /* best-effort — the ticket's own loanerNotifiedManagerAt is already saved */ }
+}
+
+// Second-stage escalation: runs once at login, admin-only so concurrent
+// manager logins can't all fire the same escalation. No server-side cron
+// exists in this app, so "after 72 hours" is checked opportunistically
+// whenever an admin next logs in, not on a real timer — flag this to
+// David if a loaner sits unresolved and no admin happens to log in for a
+// while.
+async function shopCheckLoanerEscalations() {
+  if (CD.role !== 'admin') return;
+  try {
+    const snap = await db.collection('shop_tickets').get();
+    const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+    const toEscalate = snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t =>
+      t.loanerNumber && !t.loanerReturned && !t.loanerEscalatedExecAt &&
+      t.loanerNotifiedManagerAt && t.loanerNotifiedManagerAt.toMillis && t.loanerNotifiedManagerAt.toMillis() < cutoff
+    );
+    if (!toEscalate.length) return;
+    const ch = (window._chChannels || []).find(c => c.key === 'loaners' || c.name === 'loaners');
+    if (!ch) return;
+    for (const t of toEscalate) {
+      await db.collection('channels').doc(ch.id).collection('messages').add({
+        text: '🚨 Escalation — Loaner ' + t.loanerNumber + ' for unit ' + (t.unitNumber || '—') + ' (' + shopDivisionName(t.divisionId) + ') still hasn\'t been returned 72 hours after pickup. Executive follow-up needed.',
+        uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      await db.collection('shop_tickets').doc(t.id).update({ loanerEscalatedExecAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
+  } catch (e) { /* best-effort background check, never blocks login */ }
 }
 
 </script>
