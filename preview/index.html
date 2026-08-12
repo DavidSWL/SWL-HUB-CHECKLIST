@@ -4742,6 +4742,7 @@ async function renderReports() {
   // shop-wide oversight, not something a regular manager needs here (they
   // track their own requests on Ticket Progress instead).
   if (isAdmin || isExec) tabs.push({ k:'yard-repairs', l:T('Yard Repairs','Reparaciones del Taller'), fn: renderYardRepairReport });
+  if (isAdmin || isExec) tabs.push({ k:'loaners', l:T('Loaner Tools','Herramientas de Préstamo'), fn: renderLoanerReport });
 
   if (!tabs.length) { ca.innerHTML = '<div class="empty">Reports access is restricted for your role.</div>'; return; }
 
@@ -12192,6 +12193,79 @@ function shopPaintYardRepairReport(tickets, assets) {
     + '</div>';
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Reports — Loaner Tools tab. Same shell pattern as Yard Repairs: lives
+// inside the existing Reports screen rather than a separate nav item.
+// ══════════════════════════════════════════════════════════════════════
+async function renderLoanerReport() {
+  const ca = getContentTarget();
+  const canView = CD.role === 'admin' || CD.role === 'exec_viewer';
+  if (!canView) { ca.innerHTML = '<div class="empty">' + T('Admin and executives only.','Solo admin y ejecutivos.') + '</div>'; return; }
+  ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
+  try {
+    const snap = await db.collection('shop_tickets').get();
+    const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => t.loanerNumber);
+    shopPaintLoanerReport(tickets);
+  } catch (e) {
+    ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
+      + '<div class="card-header"><div class="card-title">⚠ ' + T('Could Not Load','No se Pudo Cargar') + '</div></div>'
+      + '<p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:10px">' + esc(e.message) + '</p>'
+      + '<button class="btn primary" onclick="renderLoanerReport()">' + T('Retry','Reintentar') + '</button></div>';
+  }
+}
+
+function shopPaintLoanerReport(tickets) {
+  const ca = getContentTarget();
+  const active = tickets.filter(t => !t.loanerReturned);
+  const overdue = active.filter(shopIsLoanerOverdue);
+  const notCollected = active.filter(t => t.loanerNotifiedManagerAt);
+  const escalated = active.filter(t => t.loanerEscalatedExecAt);
+  const returned = tickets.filter(t => t.loanerReturned);
+
+  const rowStatus = (t) => {
+    if (t.loanerReturned) return { l:T('Returned','Devuelto'), c:'var(--success)', bg:'var(--success-l)' };
+    if (t.loanerEscalatedExecAt) return { l:T('Escalated','Escalado'), c:'var(--danger)', bg:'var(--danger-l)' };
+    if (t.loanerNotifiedManagerAt) return { l:T('Manager Notified','Gerente Notificado'), c:'var(--warn)', bg:'var(--warn-l)' };
+    if (shopIsLoanerOverdue(t)) return { l:T('Overdue','Vencido'), c:'var(--danger)', bg:'var(--danger-l)' };
+    return { l:T('Out','Prestado'), c:'var(--info)', bg:'var(--info-l)' };
+  };
+  const sorted = [...tickets].sort((a,b) => {
+    const av = a.loanerReturned ? 1 : 0, bv = b.loanerReturned ? 1 : 0;
+    if (av !== bv) return av - bv;
+    return (a.unitNumber||'').localeCompare(b.unitNumber||'');
+  });
+
+  ca.innerHTML = '<div style="font-size:11px;color:var(--text3);background:var(--surface2);padding:9px 13px;border-radius:var(--r);margin-bottom:16px">'
+      + T('First pass at this report — reach out if the breakdown here doesn\'t match what you had in mind and I\'ll adjust it.',
+          'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
+      + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
+      + '<div class="stat-card"><div class="stat-num">' + active.length + '</div><div class="stat-lbl">' + T('Currently Out','Prestados Actualmente') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--danger)"><div class="stat-num">' + overdue.length + '</div><div class="stat-lbl">' + T('Overdue','Vencidos') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--warn)"><div class="stat-num">' + notCollected.length + '</div><div class="stat-lbl">' + T('Not Collected at Pickup','No Recogidos en Entrega') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--danger)"><div class="stat-num">' + escalated.length + '</div><div class="stat-lbl">' + T('Escalated to Exec','Escalados a Ejecutivo') + '</div></div>'
+      + '<div class="stat-card" style="border-top:3px solid var(--success)"><div class="stat-num">' + returned.length + '</div><div class="stat-lbl">' + T('Returned (All Time)','Devueltos (Histórico)') + '</div></div>'
+    + '</div>'
+    + '<div class="card">'
+      + '<div class="card-title" style="margin-bottom:4px">' + T('All Loaner Assignments','Todas las Asignaciones de Préstamo') + '</div>'
+      + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">' + T('Every ticket that ever had a loaner attached, most recent activity first.','Todo boleto que tuvo un préstamo asignado, actividad más reciente primero.') + '</div>'
+      + (sorted.length ? '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:640px">'
+          + '<thead><tr>' + ['Unit','Loaner #','Division','Due','Status'].map((h,i) => '<th style="text-align:left;padding:6px 8px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,['Unidad','# de Préstamo','División','Vence','Estado'][i]) + '</th>').join('') + '</tr></thead><tbody>'
+          + sorted.map(t => {
+              const st = rowStatus(t);
+              return '<tr>'
+                + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700">' + esc(t.unitNumber||'—') + '</td>'
+                + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)">' + esc(t.loanerNumber||'—') + '</td>'
+                + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)">' + esc(shopDivisionName(t.divisionId)) + '</td>'
+                + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)">' + (t.loanerReturnDate ? shopFmtDateOnly(t.loanerReturnDate) : '—') + '</td>'
+                + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + st.c + ';background:' + st.bg + '">' + st.l + '</span></td>'
+                + '</tr>';
+            }).join('')
+          + '</tbody></table></div>'
+        : '<div class="empty">' + T('No loaners have been assigned yet.','Aún no se han asignado préstamos.') + '</div>')
+    + '</div>';
+}
+
 async function renderYardKiosk() {
   const ca = document.getElementById('content-area');
   if (CD.role !== 'yard' && CD.role !== 'admin') { ca.innerHTML = '<div class="empty">Acceso restringido.</div>'; return; }
@@ -12350,7 +12424,7 @@ async function shopPaintYardConfirm(ticketId, kind) {
     // in the manager Shop Tickets screens — since it's meant for David to
     // clear out test tickets he creates while previewing the kiosk, not
     // as a general way to erase real ticket history.
-    + (CD.role === 'admin' ? '<button onclick="shopYardDeleteTicket(\'' + ticketId + '\')" style="background:none;border:none;font-size:13px;font-weight:700;cursor:pointer;color:var(--danger);padding:4px" title="Eliminar boleto">🗑 Eliminar</button>' : '<span></span>')
+    + (shopIsDavid() ? '<button onclick="shopYardDeleteTicket(\'' + ticketId + '\')" style="background:none;border:none;font-size:13px;font-weight:700;cursor:pointer;color:var(--danger);padding:4px" title="Eliminar boleto">🗑 Eliminar</button>' : '<span></span>')
     + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:4px" title="Cerrar">✕</button></div>'
     + '<div style="text-align:center">'
     + '<div style="font-size:28px;font-weight:800;margin-bottom:6px">' + esc(t.unitNumber || '—') + '</div>'
@@ -12636,11 +12710,13 @@ async function shopYardMarkNotRepairable(ticketId) {
   } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
 }
 
-// Kiosk-only, admin-only — for clearing out test tickets David creates
-// while previewing the kiosk himself. Deletes the events subcollection
-// too, since Firestore never cascades that automatically.
+// Kiosk-only, David-only (not every admin) — for clearing out test
+// tickets he creates while previewing the kiosk himself. Deletes the
+// events subcollection too, since Firestore never cascades that
+// automatically.
+function shopIsDavid() { return (CU.email || '').toLowerCase() === 'david@southwestlandscapeinc.com'; }
 async function shopYardDeleteTicket(ticketId) {
-  if (CD.role !== 'admin') return;
+  if (!shopIsDavid()) return;
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
   if (!confirm('¿Eliminar permanentemente el boleto de "' + (t.unitNumber || 'esta unidad') + '"? Esto no se puede deshacer.')) return;
