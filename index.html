@@ -245,6 +245,24 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 .st-ta-opt{padding:8px 11px;font-size:13px;cursor:pointer}
 .st-ta-opt:hover{background:var(--surface2)}
 .st-ta-empty{padding:9px 11px;font-size:12px;color:var(--text3);line-height:1.5}
+
+/* Yard Kiosk ticket cards — "Warm Branded" direction: white card, a
+   colored left accent stripe (urgent/division), a rounded icon tile
+   using the asset's real photo icon when it has one, and pill badges
+   instead of a plain text block. --accent is set inline per-card. */
+.kiosk-card{display:block;width:100%;text-align:left;background:var(--surface);
+  border:1px solid var(--border2);border-radius:20px;padding:16px 18px 16px 20px;
+  margin-bottom:12px;cursor:pointer;font-family:inherit;position:relative;overflow:hidden;
+  box-shadow:0 6px 18px -12px rgba(13,27,18,.18)}
+.kiosk-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--accent)}
+.kiosk-card-top{display:flex;align-items:center;gap:12px}
+.kiosk-icon-chip{width:46px;height:46px;border-radius:14px;flex:none;display:flex;
+  align-items:center;justify-content:center;background:var(--surface2);overflow:hidden}
+.kiosk-unit{font-size:18px;font-weight:800;color:var(--text)}
+.kiosk-issue{font-size:13.5px;color:var(--text2);margin-top:10px;margin-left:58px;line-height:1.5}
+.kiosk-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;margin-left:58px}
+.kiosk-pill{font-size:9.5px;font-weight:800;padding:3px 10px;border-radius:20px;white-space:nowrap}
+.kiosk-meta{font-size:11.5px;color:var(--text3);margin-left:58px;margin-top:5px;line-height:1.6}
 .g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px}
 .req{color:var(--danger);margin-left:2px}
 
@@ -884,8 +902,8 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 }
 .yard-flash-urgent { animation: yardFlashUrgent 1.8s ease-in-out 2; }
 @keyframes yardUrgentPulse {
-  0%,100% { border-color:var(--danger); background:var(--surface); }
-  50% { border-color:var(--danger); background:var(--danger-l); }
+  0%,100% { background:var(--surface); box-shadow:0 6px 18px -12px rgba(13,27,18,.18); }
+  50% { background:var(--danger-l); box-shadow:0 6px 18px -10px rgba(220,38,38,.4); }
 }
 .yard-urgent-pulse { animation: yardUrgentPulse 1.3s ease-in-out infinite; }
 /* Ticket Progress — a steadily pulsing dot on the "Live" badge so the
@@ -12480,25 +12498,35 @@ function shopPaintYardKiosk() {
     const isPickupLane = kind === 'pickup';
     // Once it's ready for pickup, the point isn't "grab attention" anymore
     // (that already happened on the way in) — it's "which division does
-    // this belong to," so the urgent flash/pulse stops and the border
-    // instead becomes the division's color code, permanently, not animated.
+    // this belong to," so the urgent flash/pulse stops and the accent
+    // stripe instead becomes the division's color code, permanently, not
+    // animated.
     const div = shopDivision(t.divisionId);
-    const borderColor = isPickupLane ? (div ? div.color : 'var(--border2)') : (urgent ? 'var(--danger)' : 'var(--border2)');
+    const accent = isPickupLane ? (div ? div.color : 'var(--border2)') : (urgent ? 'var(--danger)' : (div ? div.color : 'var(--border2)'));
     const isFlashing = flashIds.has(t.id);
-    const cls = (urgent && !isPickupLane ? ' yard-urgent-pulse' : '')
+    const cls = 'kiosk-card'
+      + (urgent && !isPickupLane ? ' yard-urgent-pulse' : '')
       + (isFlashing ? (urgent ? ' yard-flash-urgent' : ' yard-flash-new') : '');
-    return '<button class="' + cls.trim() + '" onclick="shopYardConfirm(\'' + t.id + '\',\'' + kind + '\')" style="display:block;width:100%;text-align:left;background:var(--surface);border:2px solid ' + borderColor + ';border-radius:14px;padding:16px 18px;margin-bottom:12px;cursor:pointer;font-family:inherit">'
-      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
-      + '<div style="font-size:18px;font-weight:800;color:var(--text)">' + esc(t.unitNumber || '—') + '</div>'
-      + (urgent && !isPickupLane ? '<span style="font-size:10px;font-weight:800;color:var(--danger);background:var(--danger-l);padding:3px 10px;border-radius:20px;white-space:nowrap">URGENTE</span>' : '')
+    const divTint = div ? div.color + '22' : 'var(--surface2)';
+    const divColor = div ? div.color : 'var(--text3)';
+    return '<button class="' + cls + '" onclick="shopYardConfirm(\'' + t.id + '\',\'' + kind + '\')" style="--accent:' + accent + '">'
+      + '<div class="kiosk-card-top">'
+      + '<div class="kiosk-icon-chip">' + shopAssetIconHtml(t.iconKey, t.assetType, 30) + '</div>'
+      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+      + '<span class="kiosk-unit">' + esc(t.unitNumber || '—') + '</span>'
+      + (urgent && !isPickupLane ? '<span class="kiosk-pill" style="background:var(--danger-l);color:var(--danger)">URGENTE</span>' : '')
+      + '</div></div>'
+      + '<div class="kiosk-issue">' + esc(t.issue || '') + '</div>'
+      + '<div class="kiosk-badges">'
+      + '<span class="kiosk-pill" style="background:' + divTint + ';color:' + divColor + '">' + esc(shopDivisionName(t.divisionId)) + '</span>'
       + '</div>'
-      + '<div style="font-size:13px;margin-top:4px">' + shopDivisionChip(t.divisionId) + '</div>'
-      + '<div style="font-size:13.5px;color:var(--text);margin-top:8px;line-height:1.5">' + esc(t.issue || '') + '</div>'
-      + (t.foremanName ? '<div style="font-size:12px;color:var(--text3);margin-top:6px">👷 ' + esc(t.foremanName) + '</div>' : '')
-      + (t.estimatedDropoffDate ? '<div style="font-size:12px;color:var(--text3);margin-top:8px">📅 Entrega estimada: ' + shopFmtDateOnly(t.estimatedDropoffDate) + '</div>' : '')
-      + (t.requestedReturnDate ? '<div style="font-size:12px;color:var(--text3);margin-top:2px">↩ Se necesita: ' + shopFmtDateOnly(t.requestedReturnDate) + '</div>' : '')
-      + (kind === 'pickup' && t.pickupDate ? '<div style="font-size:12px;color:var(--text3);margin-top:2px">🕐 Recogida programada: ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</div>' : '')
-      + (kind === 'ready' && t.loanerNumber ? '<div style="font-size:12px;margin-top:6px;font-weight:700;color:' + (shopIsLoanerOverdue(t) ? 'var(--danger)' : 'var(--text3)') + '">🔁 Préstamo ' + esc(t.loanerNumber) + (shopIsLoanerOverdue(t) ? ' — VENCIDO' : (t.loanerReturned ? ' — devuelto' : '')) + '</div>' : '')
+      + '<div class="kiosk-meta">'
+      + (t.foremanName ? '👷 ' + esc(t.foremanName) + '<br>' : '')
+      + (t.estimatedDropoffDate ? '📅 Entrega estimada: ' + shopFmtDateOnly(t.estimatedDropoffDate) + '<br>' : '')
+      + (t.requestedReturnDate ? '↩ Se necesita: ' + shopFmtDateOnly(t.requestedReturnDate) + '<br>' : '')
+      + (kind === 'pickup' && t.pickupDate ? '🕐 Recogida programada: ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '<br>' : '')
+      + (kind === 'ready' && t.loanerNumber ? '<span style="font-weight:700;color:' + (shopIsLoanerOverdue(t) ? 'var(--danger)' : 'var(--text3)') + '">🔁 Préstamo ' + esc(t.loanerNumber) + (shopIsLoanerOverdue(t) ? ' — VENCIDO' : (t.loanerReturned ? ' — devuelto' : '')) + '</span>' : '')
+      + '</div>'
       + '</button>';
   };
   ca.innerHTML = (CD.role === 'admin' ? '<div style="font-size:12px;color:var(--text);background:var(--info-l);padding:10px 14px;border-radius:var(--r);margin-bottom:16px">'
