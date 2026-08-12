@@ -922,6 +922,22 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   50% { transform:translateY(-3px); }
 }
 .progress-icon-bob { display:inline-block; animation: progressIconBob 1s ease-in-out infinite; }
+
+/* Ticket Progress — "Route/Journey" tracker: a road with lane-marking
+   texture, map-pin waypoints at each stage, and the ticket's own asset
+   icon riding above the road at whatever stage it's really at. */
+.progress-road-line, .progress-road-fill{position:absolute;top:50%;height:7px;border-radius:4px;
+  transform:translateY(-50%);overflow:hidden}
+.progress-road-line{left:4%;right:4%;background:var(--border)}
+.progress-road-fill{left:4%;background:var(--success);transition:width .4s}
+.progress-road-line::after, .progress-road-fill::after{content:'';position:absolute;inset:0;
+  background-image:repeating-linear-gradient(90deg, rgba(255,255,255,.55) 0 9px, transparent 9px 18px)}
+.progress-pin{width:20px;height:20px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);
+  display:flex;align-items:center;justify-content:center;background:var(--surface2);
+  border:2px solid var(--border2)}
+.progress-pin span{transform:rotate(45deg);font-size:9.5px;line-height:1}
+.progress-pin.done{background:var(--success);border-color:var(--success)}
+.progress-pin.now{background:var(--burg);border-color:var(--burg)}
 </style>
 </head>
 <body>
@@ -11596,29 +11612,39 @@ function shopSetProgressFilter(val) { window._shopProgressFilter = val; shopPain
 // actually at right now, gently bobbing so it reads as "here, right now"
 // rather than a static status word. Skipped for cancelled/not-repairable
 // tickets — those didn't move through stages, they just stopped.
+// "Route/Journey" tracker — David picked this from 4 mockup directions.
+// A road with lane-marking texture, a stage-labeled pin at each
+// waypoint, and the ticket's own real asset icon riding above the road
+// at whatever stage it's actually at (same bob animation as before).
 function shopProgressTracker(t) {
   const idx = { submitted:0, acknowledged:0, in_progress:1, ready_pickup:2, closed:3 }[t.status];
   if (idx === undefined) return '';
   const iconInner = (t.iconKey && SHOP_ICON_LIBRARY[t.iconKey])
-    ? '<img src="' + SHOP_ICON_LIBRARY[t.iconKey] + '" alt="" style="width:30px;height:30px;object-fit:contain;display:block">'
-    : '<span style="font-size:28px;display:inline-block">' + shopAssetTypeIcon(t.assetType) + '</span>';
-  const stages = [T('Submitted','Enviado'), T('In Shop','En el Taller'), T('Ready','Listo'), T('Picked Up','Recogido')];
-  const dots = stages.map((label, i) => {
-    const pos = 4 + (i / (stages.length - 1)) * 92;
-    const done = i < idx, current = i === idx;
-    return '<div style="position:absolute;top:50%;left:' + pos + '%;transform:translate(-50%,-50%)">'
-      + (current
-          ? '<span class="progress-icon-bob" style="display:inline-block;filter:drop-shadow(0 1px 2px rgba(0,0,0,.15))">' + iconInner + '</span>'
-          : '<div style="width:13px;height:13px;border-radius:50%;background:' + (done ? 'var(--success)' : 'var(--surface2)') + ';border:2px solid ' + (done ? 'var(--success)' : 'var(--border2)') + '"></div>')
+    ? '<img src="' + SHOP_ICON_LIBRARY[t.iconKey] + '" alt="" style="width:28px;height:28px;object-fit:contain;display:block">'
+    : '<span style="font-size:26px;display:inline-block">' + shopAssetTypeIcon(t.assetType) + '</span>';
+  const stageDefs = [
+    { label: T('Submitted','Enviado'),  icon:'📝' },
+    { label: T('In Shop','En el Taller'), icon:'🔧' },
+    { label: T('Ready','Listo'),        icon:'✅' },
+    { label: T('Picked Up','Recogido'), icon:'🏠' }
+  ];
+  const pos = (i) => 4 + (i / (stageDefs.length - 1)) * 92;
+  const pins = stageDefs.map((s, i) => {
+    const done = i < idx, now = i === idx;
+    return '<div style="position:absolute;top:68%;left:' + pos(i) + '%;transform:translate(-50%,-50%)">'
+      + '<div class="progress-pin' + (done ? ' done' : '') + (now ? ' now' : '') + '"><span>' + s.icon + '</span></div>'
       + '</div>';
   }).join('');
-  return '<div style="margin-top:12px;position:relative;height:34px">'
-    + '<div style="position:absolute;top:50%;left:4%;right:4%;height:2px;background:var(--border);transform:translateY(-50%)"></div>'
-    + '<div style="position:absolute;top:50%;left:4%;height:2px;background:var(--success);width:' + (idx / (stages.length - 1) * 92) + '%;transform:translateY(-50%);transition:width .4s"></div>'
-    + dots
+  return '<div style="margin-top:16px;position:relative;height:58px">'
+    + '<div class="progress-road-line" style="top:68%"></div>'
+    + '<div class="progress-road-fill" style="top:68%;width:' + (idx / (stageDefs.length - 1) * 92) + '%"></div>'
+    + pins
+    + '<div style="position:absolute;top:0;left:' + pos(idx) + '%;transform:translateX(-50%)">'
+      + '<span class="progress-icon-bob" style="display:inline-block;filter:drop-shadow(0 2px 3px rgba(0,0,0,.2))">' + iconInner + '</span>'
+      + '</div>'
     + '</div>'
-    + '<div style="display:flex;margin-top:2px">'
-    + stages.map((label, i) => '<div style="flex:1;text-align:center;font-size:9px;color:' + (i===idx?'var(--text)':'var(--text3)') + ';font-weight:' + (i===idx?'700':'400') + '">' + label + '</div>').join('')
+    + '<div style="display:flex;margin-top:4px">'
+    + stageDefs.map((s, i) => '<div style="flex:1;text-align:center;font-size:9px;color:' + (i===idx?'var(--text)':'var(--text3)') + ';font-weight:' + (i===idx?'700':'400') + '">' + s.label + '</div>').join('')
     + '</div>';
 }
 
