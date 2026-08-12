@@ -11985,7 +11985,13 @@ async function shopPaintTicketDetail(ticketId) {
   body.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
     + '<div><div style="font-size:15px;font-weight:700">🎫 ' + esc(t.unitNumber || '—') + '</div>'
     + '<div style="margin-top:4px">' + shopDivisionChip(t.divisionId) + '</div></div>'
-    + '<button onclick="document.getElementById(\'shop-ticket-detail-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div style="display:flex;align-items:center;gap:10px">'
+    // David-only, same as the Kiosk delete — this is the one screen that
+    // actually lists every status (including already-closed/cancelled
+    // test tickets), which the Kiosk's active-card view never surfaces.
+    + (shopIsDavid() ? '<button onclick="shopDetailDeleteTicket(\'' + ticketId + '\')" style="background:none;border:none;font-size:12.5px;font-weight:700;cursor:pointer;color:var(--danger)" title="' + T('Delete ticket','Eliminar boleto') + '">🗑</button>' : '')
+    + '<button onclick="document.getElementById(\'shop-ticket-detail-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div></div>'
     + '<div style="display:flex;gap:6px;align-items:center;margin:10px 0;flex-wrap:wrap">'
     + '<span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + '">' + shopTicketStatusLabel(t.status) + '</span>'
     + (t.priority === 'urgent' ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:3px 8px;border-radius:20px">' + T('URGENT','URGENTE') + '</span>' : '')
@@ -12022,6 +12028,30 @@ async function shopPaintTicketDetail(ticketId) {
           + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
       }).join('') : '<div style="font-size:11.5px;color:var(--text3)">' + T('No activity yet.','Sin actividad aún.') + '</div>')
     + '</div>';
+}
+
+// David-only, reachable from Ticket Progress specifically because it's
+// the one screen listing every status — closed/cancelled/not-repairable
+// test tickets never show up as an open card in the Kiosk. Wipes the
+// ticket's events subcollection too. Nothing else needs to be told about
+// this: Reports and the Kiosk both compute live off shop_tickets, so a
+// deleted ticket simply stops existing everywhere the moment this
+// commits — there's no separate cache to clean up.
+async function shopDetailDeleteTicket(ticketId) {
+  if (!shopIsDavid()) return;
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  if (!confirm(T('Permanently delete the ticket for "' + (t.unitNumber || 'this unit') + '"? This cannot be undone.',
+                 '¿Eliminar permanentemente el boleto de "' + (t.unitNumber || 'esta unidad') + '"? Esto no se puede deshacer.'))) return;
+  try {
+    const eventsSnap = await db.collection('shop_tickets').doc(ticketId).collection('events').get();
+    const batch = db.batch();
+    eventsSnap.docs.forEach(d => batch.delete(d.ref));
+    batch.delete(db.collection('shop_tickets').doc(ticketId));
+    await batch.commit();
+    const modal = document.getElementById('shop-ticket-detail-modal'); if (modal) modal.remove();
+    toast('✓ ' + T('Ticket deleted','Boleto eliminado'));
+  } catch (e) { toast(T('Could not delete — ','No se pudo eliminar — ') + e.message, 'err'); }
 }
 
 // The requestor's one and only action. Cancelling always asks why — "if I
