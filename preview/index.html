@@ -12595,7 +12595,6 @@ function shopPaintYardKiosk() {
 function shopYardConfirm(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
-  if (window._shopYardLoanerAnswer) delete window._shopYardLoanerAnswer[ticketId];
   const ex = document.getElementById('shop-yard-modal'); if (ex) ex.remove();
   const m = document.createElement('div');
   m.id = 'shop-yard-modal';
@@ -12719,7 +12718,7 @@ function shopYardProgressBlock(ticketId, t) {
     + '<div class="fg"><label>Número de Préstamo</label><input type="text" id="syd-loanernum-' + ticketId + '" value="' + esc(t.loanerNumber || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')"></div>'
     + '<div class="fg"><label>Devolución Esperada</label><input type="date" id="syd-loanerdate-' + ticketId + '" value="' + esc(t.loanerReturnDate || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')"></div>'
     + '</div>'
-    + (t.loanerNumber && !t.loanerReturned ? '<button class="btn sm" style="width:100%;background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopYardMarkLoanerReturned(\'' + ticketId + '\')">✓ Marcar Préstamo Devuelto</button>' : '')
+    + (t.loanerNumber && !t.loanerReturned ? '<button class="btn sm" style="width:100%;background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopYardMarkLoanerReturned(\'' + ticketId + '\',\'ready\')">✓ Marcar Préstamo Devuelto</button>' : '')
     + (t.loanerReturned ? '<div style="font-size:12.5px;color:var(--success);font-weight:700">✓ Préstamo devuelto</div>' : '')
     + '</div></div>';
 }
@@ -12772,7 +12771,7 @@ async function shopYardSaveLoaner(ticketId) {
   } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
 }
 
-async function shopYardMarkLoanerReturned(ticketId) {
+async function shopYardMarkLoanerReturned(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
   try {
@@ -12784,8 +12783,31 @@ async function shopYardMarkLoanerReturned(ticketId) {
     t.loanerReturned = true;
     toast('✓ Préstamo marcado como devuelto');
     shopPaintYardKiosk();
-    await shopPaintYardConfirm(ticketId, 'ready');
+    // Called from both the Progreso panel (kind 'ready') and the pickup
+    // gate (kind 'pickup') — repaint whichever one is actually open, or
+    // the loaner-returned block just vanishes into the wrong screen.
+    await shopPaintYardConfirm(ticketId, kind || 'ready');
   } catch (e) { toast('No se pudo actualizar — ' + e.message, 'err'); }
+}
+
+// Deliberate report, not an inferred click — fires the same #loaners
+// notice as before, but never closes the ticket. The pickup gate in
+// shopYardDoConfirm is what actually blocks closing; this just puts the
+// division's manager on notice while the ticket stays open.
+async function shopYardReportLoanerNotReturned(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t || !t.loanerNumber || t.loanerReturned) return;
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({ loanerNotifiedManagerAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: 'Reportado: préstamo no devuelto — gerente notificado',
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.loanerNotifiedManagerAt = { toMillis: () => Date.now() };
+    await shopNotifyLoanerNotCollected(t);
+    toast('✓ Gerente notificado');
+    await shopPaintYardConfirm(ticketId, 'pickup');
+  } catch (e) { toast('No se pudo notificar — ' + e.message, 'err'); }
 }
 
 // Pickup lane only — the final scheduled date/time, separate from the
@@ -12793,9 +12815,11 @@ async function shopYardMarkLoanerReturned(ticketId) {
 // while work is still in progress; this one's the real appointment once
 // it's actually sitting ready).
 function shopYardPickupBlock(ticketId, t) {
-  // Loaner Collected? is only asked when a loaner is actually still out —
-  // if it was already marked returned earlier in the Progreso panel,
-  // pickup proceeds without re-asking.
+  // Hard rule, not a prompt: a ticket with a loaner still out CANNOT be
+  // closed until it's marked returned — no "not returned" path that
+  // still lets pickup through. If the loaner was already marked
+  // returned earlier in the Progreso panel, this block is just the
+  // normal pickup date/time, same as a ticket that never had a loaner.
   const hasOpenLoaner = !!(t.loanerNumber && !t.loanerReturned);
   return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
     + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Fecha de Recogida</div>'
@@ -12804,21 +12828,13 @@ function shopYardPickupBlock(ticketId, t) {
     + '<div class="fg"><label>Hora</label><input type="time" id="syd-ptime-' + ticketId + '" value="' + esc(t.pickupTime || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
     + '</div>'
     + (hasOpenLoaner ? '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px">'
-        + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">🔁 Préstamo ' + esc(t.loanerNumber) + ' — ¿Fue Devuelto?</div>'
-        + '<div style="display:flex;gap:8px">'
-        + '<button type="button" onclick="shopYardSetLoanerCollected(\'' + ticketId + '\',true)" id="syd-lc-yes-' + ticketId + '" style="flex:1;padding:12px;font-size:14px;font-weight:700;border-radius:10px;cursor:pointer;border:2px solid var(--border2);background:var(--surface);color:var(--text)">✓ Sí, Devuelto</button>'
-        + '<button type="button" onclick="shopYardSetLoanerCollected(\'' + ticketId + '\',false)" id="syd-lc-no-' + ticketId + '" style="flex:1;padding:12px;font-size:14px;font-weight:700;border-radius:10px;cursor:pointer;border:2px solid var(--border2);background:var(--surface);color:var(--text)">✕ No Devuelto</button>'
-        + '</div></div>' : '')
+        + '<div style="font-size:13px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:10px 12px;border-radius:var(--r);margin-bottom:12px">🔁 Préstamo ' + esc(t.loanerNumber) + ' — este boleto no se puede cerrar hasta que el préstamo sea devuelto.</div>'
+        + '<button class="btn sm" style="width:100%;background:var(--success-l);color:var(--success);border-color:transparent;margin-bottom:8px" onclick="shopYardMarkLoanerReturned(\'' + ticketId + '\',\'pickup\')">✓ Marcar Préstamo Devuelto</button>'
+        + (t.loanerNotifiedManagerAt
+            ? '<div style="font-size:12px;color:var(--text3)">✓ Gerente notificado — pendiente de seguimiento.</div>'
+            : '<button class="btn sm" style="width:100%;background:none;color:var(--text3);border-color:var(--border2)" onclick="shopYardReportLoanerNotReturned(\'' + ticketId + '\')">⚠ Reportar que no fue devuelto</button>')
+        + '</div>' : '')
     + '</div>';
-}
-function shopYardSetLoanerCollected(ticketId, collected) {
-  window._shopYardLoanerAnswer = window._shopYardLoanerAnswer || {};
-  window._shopYardLoanerAnswer[ticketId] = collected;
-  const yesBtn = document.getElementById('syd-lc-yes-' + ticketId);
-  const noBtn = document.getElementById('syd-lc-no-' + ticketId);
-  const base = 'flex:1;padding:12px;font-size:14px;font-weight:700;border-radius:10px;cursor:pointer;border:2px solid ';
-  if (yesBtn) yesBtn.style.cssText = base + (collected === true ? 'var(--success);background:var(--success-l);color:var(--success)' : 'var(--border2);background:var(--surface);color:var(--text)');
-  if (noBtn) noBtn.style.cssText = base + (collected === false ? 'var(--danger);background:var(--danger-l);color:var(--danger)' : 'var(--border2);background:var(--surface);color:var(--text)');
 }
 
 async function shopYardSavePickupSchedule(ticketId) {
@@ -12940,14 +12956,12 @@ async function shopYardDeleteTicket(ticketId) {
 async function shopYardDoConfirm(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
-  // A loaner still checked out has to be explicitly resolved at pickup —
-  // "Sí" or "No", not left silently unanswered — since that's the one
-  // moment someone's actually standing at the yard to know the real
-  // answer. Answering "No" is what starts the manager/exec escalation.
-  const hasOpenLoaner = kind === 'pickup' && t.loanerNumber && !t.loanerReturned;
-  const loanerCollected = hasOpenLoaner ? (window._shopYardLoanerAnswer || {})[ticketId] : null;
-  if (hasOpenLoaner && (loanerCollected !== true && loanerCollected !== false)) {
-    toast('Indica si el préstamo fue devuelto antes de confirmar', 'err');
+  // Hard rule: a ticket with a loaner still checked out cannot close.
+  // No override, no "close anyway" — shopYardPickupBlock's "Marcar
+  // Préstamo Devuelto" button is the only way past this, and a ticket
+  // that never had a loaner sails through same as always.
+  if (kind === 'pickup' && t.loanerNumber && !t.loanerReturned) {
+    toast('Este boleto tiene un préstamo pendiente de devolución — no se puede cerrar hasta que se marque devuelto', 'err');
     return;
   }
   const toStatus = { dropoff:'in_progress', ready:'ready_pickup', pickup:'closed' }[kind];
@@ -12956,21 +12970,13 @@ async function shopYardDoConfirm(ticketId, kind) {
   try {
     const update = { status: toStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
     if (toStatus === 'closed') update.closedAt = firebase.firestore.FieldValue.serverTimestamp();
-    if (hasOpenLoaner) {
-      update.loanerReturned = loanerCollected;
-      if (!loanerCollected) update.loanerNotifiedManagerAt = firebase.firestore.FieldValue.serverTimestamp();
-    }
     await db.collection('shop_tickets').doc(ticketId).update(update);
     await db.collection('shop_tickets').doc(ticketId).collection('events').add({
       type: 'status', fromStatus, toStatus, userId: CU.uid, userName: CD.name,
-      note: noteByKind[kind] + (hasOpenLoaner ? (loanerCollected ? ' — préstamo devuelto' : ' — préstamo NO devuelto') : ''),
+      note: noteByKind[kind],
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     t.status = toStatus;
-    if (hasOpenLoaner) {
-      t.loanerReturned = loanerCollected;
-      if (!loanerCollected) { t.loanerNotifiedManagerAt = { toMillis: () => Date.now() }; shopNotifyLoanerNotCollected(t); }
-    }
     const modal = document.getElementById('shop-yard-modal'); if (modal) modal.remove();
     toast('✓ Actualizado');
     shopPaintYardKiosk();
