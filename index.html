@@ -10100,6 +10100,16 @@ function shopDivisionChip(id) {
 const SHOP_ASSET_TYPES = ['vehicle','heavy_equipment','power_tool','lawn_equipment','trailer'];
 const SHOP_METER_TYPES = ['odometer','hours','none'];
 const SHOP_ASSET_STATUSES = ['active','down','retired'];
+// Separate from status (active/down/retired, i.e. working condition) —
+// this is fleet role: is it a crew's actual daily-use unit, or backup/
+// spare equipment sitting in reserve. An asset can be Active status AND
+// Extra Equipment at the same time. Missing on older docs reads as
+// in_service, so nothing needs a migration.
+const SHOP_ASSET_CATEGORIES = ['in_service','extra'];
+function shopCategoryLabel(c) {
+  return T({in_service:'In Service',extra:'Extra Equipment'}[c] || 'In Service',
+           {in_service:'En Servicio',extra:'Equipo Extra'}[c] || 'En Servicio');
+}
 
 function shopAssetTypeLabel(t) {
   return T({vehicle:'Vehicle',heavy_equipment:'Heavy Equipment',power_tool:'Power Tool',lawn_equipment:'Lawn Equipment',trailer:'Trailer'}[t] || t,
@@ -10223,7 +10233,7 @@ async function renderShopAssets() {
 
 function shopPaintAssets() {
   const ca = document.getElementById('content-area');
-  const division = window._shopFilterDivision, type = window._shopFilterType;
+  const division = window._shopFilterDivision, type = window._shopFilterType, category = window._shopFilterCategory;
   const q = (window._shopSearchQuery || '').trim().toLowerCase();
   const sortField = window._shopSortField || 'unitNumber';
   const sortDir = window._shopSortDir || 'asc';
@@ -10232,10 +10242,12 @@ function shopPaintAssets() {
     if (sortField === 'type') return shopAssetTypeLabel(a.assetType);
     if (sortField === 'division') return shopDivisionName(a.divisionId);
     if (sortField === 'status') return shopStatusLabel(a.status);
+    if (sortField === 'category') return shopCategoryLabel(a.category);
     return a.unitNumber || '';
   };
   const list = (window._shopAssets || []).filter(a =>
     (!division || a.divisionId === division) && (!type || a.assetType === type)
+    && (!category || (a.category || 'in_service') === category)
     && (!q || [a.unitNumber, a.make, a.model, a.vinOrSerial, a.importedFrom].filter(Boolean).join(' ').toLowerCase().includes(q))
   ).sort((a,b) => sortKey(a).localeCompare(sortKey(b)) * (sortDir === 'desc' ? -1 : 1));
   const pendingCount = (window._shopAssets || []).filter(a => a.pendingReview).length;
@@ -10259,12 +10271,16 @@ function shopPaintAssets() {
     + '<option value="">' + T('All types','Todos los tipos') + '</option>'
     + SHOP_ASSET_TYPES.map(t => '<option value="' + t + '"' + (type === t ? ' selected' : '') + '>' + shopAssetTypeLabel(t) + '</option>').join('')
     + '</select>'
+    + '<select id="shop-f-category" onchange="shopSetFilter(\'category\',this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text)">'
+    + '<option value="">' + T('In Service + Extra','En Servicio + Extra') + '</option>'
+    + SHOP_ASSET_CATEGORIES.map(c => '<option value="' + c + '"' + (category === c ? ' selected' : '') + '>' + shopCategoryLabel(c) + '</option>').join('')
+    + '</select>'
     + '<input type="text" id="shop-f-search" value="' + esc(window._shopSearchQuery || '') + '" placeholder="' + T('Search unit #, make, model…','Buscar # de unidad, marca, modelo…') + '" oninput="shopSetSearch(this.value)" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);color:var(--text);flex:1;min-width:180px">'
     + '</div>'
     + '<div style="overflow-x:auto">'
     + '<table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:640px">'
     + '<thead><tr>'
-    + [['Unit #','Unidad #','unitNumber'],['Type','Tipo','type'],['Make / Model','Marca / Modelo','makeModel'],['Division','División','division'],['Status','Estado','status'],['Meter','Medidor',null]].map(([h,hEs,field]) => {
+    + [['Unit #','Unidad #','unitNumber'],['Type','Tipo','type'],['Make / Model','Marca / Modelo','makeModel'],['Division','División','division'],['Status','Estado','status'],['Category','Categoría','category'],['Meter','Medidor',null]].map(([h,hEs,field]) => {
         return '<th' + (field ? ' onclick="shopSetSort(\'' + field + '\')" style="cursor:pointer;user-select:none;' : ' style="') + 'text-align:left;padding:7px 10px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,hEs) + (field ? sortArrow(field) : '') + '</th>';
       }).join('')
     + '</tr></thead><tbody>'
@@ -10274,7 +10290,8 @@ function shopPaintAssets() {
         return '<tr style="cursor:' + (CD.role === 'admin' ? 'pointer' : 'default') + '"' + (CD.role === 'admin' ? ' onclick="shopOpenAssetForm(\'' + a.id + '\')"' : '') + '>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);font-weight:700;color:var(--text)">'
           + '<span style="display:inline-flex;align-items:center;gap:7px">' + shopAssetIconHtml(a.iconKey, a.assetType, 20) + '<span>' + esc(a.unitNumber || '') + '</span></span>'
-          + (a.pendingReview ? ' <span class="badge warn" style="font-size:9px">' + T('pending','pendiente') + '</span>' : '') + '</td>'
+          + (a.pendingReview ? ' <span class="badge warn" style="font-size:9px">' + T('pending','pendiente') + '</span>' : '')
+          + (a.isLoanerTool ? ' <span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:1px 6px;border-radius:20px" title="' + T('Loaner tool','Herramienta de préstamo') + '">🔁</span>' : '') + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopAssetTypeLabel(a.assetType) + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + esc([a.make,a.model,a.year].filter(Boolean).join(' ')) + '</td>'
           + '<td style="padding:5px 10px;border-bottom:1px solid var(--border);color:var(--text2)" onclick="event.stopPropagation()">'
@@ -10286,9 +10303,10 @@ function shopPaintAssets() {
               : shopDivisionChip(a.divisionId))
           + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + statusColor + ';background:' + statusBg + '">' + shopStatusLabel(a.status) + '</span></td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)">' + (a.category === 'extra' ? '<span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:var(--info);background:var(--info-l)">' + shopCategoryLabel('extra') + '</span>' : '<span style="font-size:11px;color:var(--text3)">' + shopCategoryLabel('in_service') + '</span>') + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + (a.meterType && a.meterType !== 'none' ? (a.currentMeter != null ? a.currentMeter : '—') + ' ' + shopMeterLabel(a.meterType) : '—') + '</td>'
           + '</tr>';
-      }).join('') : '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text3)">' + T('No assets match this filter.','No hay activos que coincidan con este filtro.') + '</td></tr>')
+      }).join('') : '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">' + T('No assets match this filter.','No hay activos que coincidan con este filtro.') + '</td></tr>')
     + '</tbody></table></div></div>';
 }
 
@@ -10950,7 +10968,7 @@ async function shopImportEquipment() {
         batch.set(db.collection('shop_assets').doc(), {
           unitNumber: r.u, assetType: r.t, iconKey: null,
           make: r.mk || null, model: r.md || null, year: r.y || null,
-          vinOrSerial: null, divisionId: null, status: r.s,
+          vinOrSerial: null, divisionId: null, status: r.s, category: 'in_service',
           meterType: 'none', currentMeter: null, ticketable: true,
           pendingReview: false, addedByUserId: CU.uid, addedByUserName: CD.name,
           importedFrom: r.d,
@@ -11185,7 +11203,7 @@ async function shopConfirmSpreadsheetImport() {
           batch.set(db.collection('shop_assets').doc(), {
             unitNumber: op.row.unitNumber, assetType: op.row.assetType, iconKey: null,
             make: op.row.make || null, model: op.row.model || null, year: op.row.year || null,
-            vinOrSerial: null, divisionId: op.row.divisionId, status: op.row.status,
+            vinOrSerial: null, divisionId: op.row.divisionId, status: op.row.status, category: 'in_service',
             meterType: 'none', currentMeter: null, ticketable: true,
             pendingReview: false, addedByUserId: CU.uid, addedByUserName: CD.name,
             importedFrom: op.row.description || null,
@@ -11262,6 +11280,9 @@ function shopOpenAssetForm(assetId) {
     + '<div class="fg"><label>' + T('Status','Estado') + '</label><select id="sa-status">'
     + SHOP_ASSET_STATUSES.map(s => '<option value="' + s + '"' + ((a?.status||'active') === s ? ' selected' : '') + '>' + shopStatusLabel(s) + '</option>').join('')
     + '</select></div>'
+    + '<div class="fg"><label>' + T('Category','Categoría') + '</label><select id="sa-category">'
+    + SHOP_ASSET_CATEGORIES.map(c => '<option value="' + c + '"' + ((a?.category||'in_service') === c ? ' selected' : '') + '>' + shopCategoryLabel(c) + '</option>').join('')
+    + '</select></div>'
     + '</div>'
     + '<div class="g3">'
     + '<div class="fg"><label>' + T('Meter Type','Tipo de Medidor') + '</label><select id="sa-metertype" onchange="document.getElementById(\'sa-meter\').disabled = (this.value===\'none\')">'
@@ -11270,6 +11291,8 @@ function shopOpenAssetForm(assetId) {
     + '<div class="fg"><label>' + T('Current Meter','Medidor Actual') + '</label><input type="number" id="sa-meter" value="' + (a?.currentMeter != null ? a.currentMeter : '') + '"' + ((a?.meterType||'none') === 'none' ? ' disabled' : '') + '></div>'
     + '<div class="fg"><label>' + T('Ticketable','Genera Boletos') + '<span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">' + T('§11.2','§11.2') + '</span></label>'
     + '<select id="sa-ticketable"><option value="1"' + ((a?.ticketable !== false) ? ' selected' : '') + '>' + T('Yes','Sí') + '</option><option value="0"' + (a?.ticketable === false ? ' selected' : '') + '>' + T('No','No') + '</option></select></div>'
+    + '<div class="fg"><label>🔁 ' + T('Loaner Tool','Herramienta de Préstamo') + '</label>'
+    + '<select id="sa-loaner"><option value="0"' + (!a?.isLoanerTool ? ' selected' : '') + '>' + T('No','No') + '</option><option value="1"' + (a?.isLoanerTool ? ' selected' : '') + '>' + T('Yes — available to lend out','Sí — disponible para prestar') + '</option></select></div>'
     + '</div>'
     + '<div style="display:flex;gap:8px;margin-top:8px">'
     + '<button class="btn primary" id="sa-save-btn" onclick="shopSaveAsset(' + (a ? "'" + a.id + "'" : 'null') + ')">' + (a ? T('Save','Guardar') : T('Add Asset','Agregar Activo')) + '</button>'
@@ -11300,9 +11323,11 @@ async function shopSaveAsset(assetId) {
   const vinOrSerial = document.getElementById('sa-vin').value.trim();
   const divisionId = document.getElementById('sa-division').value || null;
   const status = document.getElementById('sa-status').value;
+  const category = document.getElementById('sa-category').value;
   const meterType = document.getElementById('sa-metertype').value;
   const meterRaw = document.getElementById('sa-meter').value;
   const ticketable = document.getElementById('sa-ticketable').value === '1';
+  const isLoanerTool = document.getElementById('sa-loaner').value === '1';
   const iconKey = document.getElementById('sa-icon').value || null;
 
   // Uniqueness check (case/whitespace-insensitive), excluding this doc
@@ -11318,9 +11343,9 @@ async function shopSaveAsset(assetId) {
     unitNumber, assetType, iconKey, make, model,
     year: yearRaw ? parseInt(yearRaw, 10) : null,
     vinOrSerial: vinOrSerial || null,
-    divisionId, status,
+    divisionId, status, category,
     meterType, currentMeter: (meterType !== 'none' && meterRaw !== '') ? parseInt(meterRaw, 10) : null,
-    ticketable,
+    ticketable, isLoanerTool,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   try {
@@ -11719,7 +11744,7 @@ async function shopQuickAddTestAsset() {
     const unitNumber = 'TEST-' + String(n).padStart(2,'0');
     await db.collection('shop_assets').add({
       unitNumber, assetType: 'vehicle', make: 'Test', model: 'Unit', year: null,
-      vinOrSerial: null, divisionId: null, status: 'active',
+      vinOrSerial: null, divisionId: null, status: 'active', category: 'in_service',
       meterType: 'none', currentMeter: null, ticketable: true,
       pendingReview: false, addedByUserId: CU.uid, addedByUserName: CD.name,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -12267,9 +12292,13 @@ async function renderLoanerReport() {
   if (!canView) { ca.innerHTML = '<div class="empty">' + T('Admin and executives only.','Solo admin y ejecutivos.') + '</div>'; return; }
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   try {
-    const snap = await db.collection('shop_tickets').get();
-    const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => t.loanerNumber);
-    shopPaintLoanerReport(tickets);
+    const [ticketSnap, assetSnap] = await Promise.all([
+      db.collection('shop_tickets').get(),
+      db.collection('shop_assets').get()
+    ]);
+    const tickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => t.loanerNumber);
+    const loanerAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() })).filter(a => a.isLoanerTool);
+    shopPaintLoanerReport(tickets, loanerAssets);
   } catch (e) {
     ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
       + '<div class="card-header"><div class="card-title">⚠ ' + T('Could Not Load','No se Pudo Cargar') + '</div></div>'
@@ -12278,8 +12307,20 @@ async function renderLoanerReport() {
   }
 }
 
-function shopPaintLoanerReport(tickets) {
+function shopPaintLoanerReport(tickets, loanerAssets) {
   const ca = getContentTarget();
+  loanerAssets = loanerAssets || [];
+  // The actual database of "what tools are our loaners" — every asset
+  // flagged isLoanerTool in the registry, cross-referenced against open
+  // tickets by unit number to show which are out right now. This is
+  // separate from the assignment history below: this is the pool, that's
+  // the activity log.
+  const outByUnit = {};
+  tickets.forEach(t => { if (!t.loanerReturned && t.loanerNumber) outByUnit[t.loanerNumber.trim().toLowerCase()] = t; });
+  const pool = [...loanerAssets].sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||''));
+  const poolOut = pool.filter(a => outByUnit[(a.unitNumber||'').trim().toLowerCase()]);
+  const poolAvailable = pool.length - poolOut.length;
+
   const active = tickets.filter(t => !t.loanerReturned);
   const overdue = active.filter(shopIsLoanerOverdue);
   const notCollected = active.filter(t => t.loanerNotifiedManagerAt);
@@ -12303,6 +12344,29 @@ function shopPaintLoanerReport(tickets) {
       + T('First pass at this report — reach out if the breakdown here doesn\'t match what you had in mind and I\'ll adjust it.',
           'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
       + '</div>'
+    + '<div class="card" style="margin-bottom:20px">'
+      + '<div class="card-title" style="margin-bottom:4px">🔁 ' + T('Loaner Tool Inventory','Inventario de Herramientas de Préstamo') + '</div>'
+      + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">' + T('Every asset flagged as a loaner tool in the registry — mark one with the 🔁 Loaner Tool field on Asset Registry. Add or remove tools from this pool there.','Cada activo marcado como herramienta de préstamo en el registro — márcalo con el campo 🔁 Herramienta de Préstamo en Registro de Activos. Agrega o quita herramientas de este grupo ahí.') + '</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:' + (pool.length ? '16' : '0') + 'px">'
+        + '<div class="stat-card"><div class="stat-num">' + pool.length + '</div><div class="stat-lbl">' + T('Total Loaner Tools','Total de Herramientas') + '</div></div>'
+        + '<div class="stat-card" style="border-top:3px solid var(--success)"><div class="stat-num">' + poolAvailable + '</div><div class="stat-lbl">' + T('Available Now','Disponibles Ahora') + '</div></div>'
+        + '<div class="stat-card" style="border-top:3px solid var(--info)"><div class="stat-num">' + poolOut.length + '</div><div class="stat-lbl">' + T('Checked Out','Prestadas') + '</div></div>'
+      + '</div>'
+      + (pool.length ? '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:520px">'
+          + '<thead><tr>' + ['Unit','Type','Status'].map((h,i) => '<th style="text-align:left;padding:6px 8px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)">' + T(h,['Unidad','Tipo','Estado'][i]) + '</th>').join('') + '</tr></thead><tbody>'
+          + pool.map(a => {
+              const out = outByUnit[(a.unitNumber||'').trim().toLowerCase()];
+              return '<tr>'
+                + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700">' + esc(a.unitNumber||'—') + '</td>'
+                + '<td style="padding:7px 8px;border-bottom:1px solid var(--border);color:var(--text2)">' + shopAssetTypeLabel(a.assetType) + '</td>'
+                + '<td style="padding:7px 8px;border-bottom:1px solid var(--border)">' + (out
+                    ? '<span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:var(--info);background:var(--info-l)">' + T('Checked out — unit ','Prestada — unidad ') + esc(out.unitNumber||'—') + '</span>'
+                    : '<span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:var(--success);background:var(--success-l)">' + T('Available','Disponible') + '</span>')
+                + '</td></tr>';
+            }).join('')
+          + '</tbody></table></div>'
+        : '<div class="empty">' + T('No assets are flagged as loaner tools yet.','Aún no hay activos marcados como herramientas de préstamo.') + '</div>')
+    + '</div>'
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
       + '<div class="stat-card"><div class="stat-num">' + active.length + '</div><div class="stat-lbl">' + T('Currently Out','Prestados Actualmente') + '</div></div>'
       + '<div class="stat-card" style="border-top:3px solid var(--danger)"><div class="stat-num">' + overdue.length + '</div><div class="stat-lbl">' + T('Overdue','Vencidos') + '</div></div>'
