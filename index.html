@@ -3412,7 +3412,7 @@ async function submitFridayRecap(existingId, status) {
 }
 
 // Manager carry-over update modal
-function openManagerCarryoverModal(id, title) {
+function openManagerCarryoverModal(id, title, currentDeadline) {
   const ex = document.getElementById('mgr-co-modal');
   if (ex) ex.remove();
   const m = document.createElement('div');
@@ -3428,7 +3428,7 @@ function openManagerCarryoverModal(id, title) {
       <div class="fg"><label>Manager Note / Reason Update</label>
         <textarea id="mco-note" rows="3" placeholder="Add context or update the reason for this carry-over…"></textarea></div>
       <div class="g2">
-        <div class="fg"><label>Revised Deadline</label><input type="date" id="mco-deadline"></div>
+        <div class="fg"><label>Revised Deadline</label><input type="date" id="mco-deadline" value="${currentDeadline||''}"></div>
         <div class="fg"><label>Assistance Required</label>
           <select id="mco-assist">
             <option value="none">No assistance needed</option>
@@ -5289,7 +5289,7 @@ function renderItemCard(it) {
        <select class="btn sm" style="cursor:pointer" title="Quick status change" onchange="updateItemStatusWithLog('${it.id}',this.value)">
         ${allStatuses.map(s=>`<option value="${s}" ${it.status===s?'selected':''}>${statusLabels[s]||s}</option>`).join('')}
        </select>
-       <button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}')">Note / Deadline</button>
+       <button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:#BFDBFE" onclick="openManagerCarryoverModal('${it.id}','${esc(it.title)}','${it.deadline||''}')">Note / Deadline</button>
        <button class="btn sm" style="background:var(--warn-l);color:var(--warn);border-color:#FDE68A" onclick="openFollowUpModal('${it.id}','${esc(it.title)}','${esc(it.ownerName||it.owner||'')}')">🔔 Follow Up</button>`
     : `${statusBadge}`;
 
