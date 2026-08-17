@@ -12102,14 +12102,14 @@ async function shopPaintTicketDetail(ticketId) {
     + (t.loanerNumber ? '<div style="font-size:12px;' + (shopIsLoanerOverdue(t) ? 'color:var(--danger);background:var(--danger-l)' : 'color:var(--text2);background:var(--surface2)') + ';padding:8px 12px;border-radius:var(--r);margin-bottom:14px">🔁 ' + T('Loaner','Préstamo') + ' ' + esc(t.loanerNumber) + (t.loanerReturnDate ? ' — ' + T('due','vence') + ' ' + shopFmtDateOnly(t.loanerReturnDate) : '') + (t.loanerReturned ? ' (' + T('returned','devuelto') + ')' : (shopIsLoanerOverdue(t) ? ' — ' + T('OVERDUE','VENCIDO') : '')) + '</div>' : '')
     + (t.pickupDate ? '<div style="font-size:12px;color:var(--text2);margin-bottom:14px">🕐 ' + T('Pickup scheduled','Recogida programada') + ': <b>' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</b></div>' : '')
     + (t.cancelReason ? '<div style="font-size:12px;color:var(--danger);background:var(--danger-l);padding:8px 12px;border-radius:var(--r);margin-bottom:14px">' + T('Cancellation reason','Motivo de cancelación') + ': ' + esc(t.cancelReason) + '</div>' : '')
-    + ((!isTerminal || (shopIsDavid() && (t.status === 'ready_pickup' || t.status === 'closed'))) ? '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'
+    + ((!isTerminal || (shopIsDavid() && shopCanMoveBackToShop(t))) ? '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'
         + (!isTerminal ? '<button class="btn sm" onclick="shopCancelTicketWithReason(\'' + ticketId + '\')">' + T('Cancel Ticket','Cancelar Boleto') + '</button>' : '')
         // David-only — for undoing an accidental tap through the kiosk's
         // confirm flow (e.g. hit "Ready for Pickup" or "Confirm Pickup" by
         // mistake). Puts it back at In Progress; the pickup/closed info
         // that was there stays on record in the timeline below, it's just
         // not the ticket's current state anymore.
-        + (shopIsDavid() && (t.status === 'ready_pickup' || t.status === 'closed') ? '<button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:transparent" onclick="shopMoveTicketBackToShop(\'' + ticketId + '\')">↩ ' + T('Move Back to In Shop','Regresar a En el Taller') + '</button>' : '')
+        + (shopIsDavid() && shopCanMoveBackToShop(t) ? '<button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:transparent" onclick="shopMoveTicketBackToShop(\'' + ticketId + '\')">↩ ' + T('Move Back to In Shop','Regresar a En el Taller') + '</button>' : '')
         + '</div>' : '')
     + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:8px">' + T('Timeline','Cronología') + '</div>'
     + '<div style="max-height:220px;overflow-y:auto">'
@@ -12158,15 +12158,21 @@ async function shopDetailDeleteTicket(ticketId) {
   } catch (e) { toast(T('Could not delete — ','No se pudo eliminar — ') + e.message, 'err'); }
 }
 
+// Any status reachable by an accidental tap — advancing too far (Ready/
+// Closed) or picking the wrong terminal outcome (Not Repairable/
+// Cancelled) — is recoverable back to In Shop, David-only.
+function shopCanMoveBackToShop(t) {
+  return t.status === 'ready_pickup' || t.status === 'closed' || t.status === 'not_repairable' || t.status === 'cancelled';
+}
 // David-only — undoes an accidental tap through the kiosk's confirm
-// flow (hit Ready for Pickup or Confirm Pickup by mistake) by putting
-// the ticket back at In Progress. Clears closedAt if it had one, but
-// leaves the pickup date/time and everything else on the ticket alone
-// — the timeline event records exactly what happened, it isn't erased.
+// flow by putting the ticket back at In Progress. Clears closedAt if it
+// had one, but leaves the pickup date/time and everything else on the
+// ticket alone — the timeline event records exactly what happened, it
+// isn't erased.
 async function shopMoveTicketBackToShop(ticketId) {
   if (!shopIsDavid()) return;
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
-  if (!t || (t.status !== 'ready_pickup' && t.status !== 'closed')) return;
+  if (!t || !shopCanMoveBackToShop(t)) return;
   const fromStatus = t.status;
   if (!confirm(T('Move this ticket back to "In Shop"?','¿Regresar este boleto a "En el Taller"?'))) return;
   try {
