@@ -11241,12 +11241,18 @@ async function shopConfirmSpreadsheetImport() {
   }
 }
 
-function shopOpenAssetForm(assetId) {
+function shopOpenAssetForm(assetId, replacing) {
   // Managers can only ever create — editing an existing asset is admin
   // only, so the registry can't silently drift out of sync with itself.
   const editing = assetId && CD.role === 'admin';
   const a = editing ? (window._shopAssets || []).find(x => x.id === assetId) : null;
   if (assetId && !editing) return;
+  // Prefill from the machine being replaced (see
+  // shopOpenReplacementAssetForm) — only applies when actually adding
+  // new, never when editing an existing asset. Stashed on window so
+  // shopSaveAsset can link the two records once the new one is written.
+  window._shopReplacing = (!a && replacing) ? replacing : null;
+  const pf = window._shopReplacing;
   const ex = document.getElementById('shop-asset-modal'); if (ex) ex.remove();
   const m = document.createElement('div');
   m.id = 'shop-asset-modal';
@@ -11255,11 +11261,12 @@ function shopOpenAssetForm(assetId) {
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
     + '<div style="font-size:14px;font-weight:700">🚚 ' + (a ? T('Edit Asset','Editar Activo') : T('Add Asset','Agregar Activo')) + '</div>'
     + '<button onclick="document.getElementById(\'shop-asset-modal\').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + (pf ? '<div style="font-size:11.5px;color:var(--text2);background:var(--info-l);padding:8px 11px;border-radius:var(--r);margin-bottom:14px">' + T('Replacing ','Reemplaza a ') + '<b>' + esc(pf.unitNumber || '') + '</b>' + T(' — that unit will be marked Retired once this is saved.',' — esa unidad se marcará como Retirada al guardar.') + '</div>' : '')
     + (!a && CD.role !== 'admin' ? '<div style="font-size:11.5px;color:var(--text2);background:var(--warn-l);padding:8px 11px;border-radius:var(--r);margin-bottom:14px">' + T('This will be added as pending review until admin confirms it.','Esto se agregará como pendiente de revisión hasta que admin lo confirme.') + '</div>' : '')
     + '<div class="g2">'
     + '<div class="fg"><label>' + T('Unit Number','Número de Unidad') + '<span class="req">*</span></label><input type="text" id="sa-unit" placeholder="' + T('e.g. SW-T12','p. ej. SW-T12') + '" value="' + esc(a?.unitNumber || '') + '"></div>'
     + '<div class="fg"><label>' + T('Type','Tipo') + '</label><select id="sa-type">'
-    + SHOP_ASSET_TYPES.map(t => '<option value="' + t + '"' + ((a?.assetType||'vehicle') === t ? ' selected' : '') + '>' + shopAssetTypeLabel(t) + '</option>').join('')
+    + SHOP_ASSET_TYPES.map(t => '<option value="' + t + '"' + ((a?.assetType || pf?.assetType || 'vehicle') === t ? ' selected' : '') + '>' + shopAssetTypeLabel(t) + '</option>').join('')
     + '</select></div></div>'
     + '<div class="fg" style="margin-bottom:14px"><label>' + T('Icon','Icono') + '<span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;margin-left:4px">' + T('optional — falls back to a generic icon by type','opcional — usa un icono genérico por tipo si no se elige') + '</span></label>'
     + '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:4px">'
@@ -11268,15 +11275,15 @@ function shopOpenAssetForm(assetId) {
     + '<input type="hidden" id="sa-icon" value="' + esc(a?.iconKey || '') + '">'
     + '</div>'
     + '<div class="g3">'
-    + '<div class="fg"><label>' + T('Make','Marca') + '</label><input type="text" id="sa-make" value="' + esc(a?.make || '') + '"></div>'
-    + '<div class="fg"><label>' + T('Model','Modelo') + '</label><input type="text" id="sa-model" value="' + esc(a?.model || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Make','Marca') + '</label><input type="text" id="sa-make" value="' + esc(a?.make || pf?.make || '') + '"></div>'
+    + '<div class="fg"><label>' + T('Model','Modelo') + '</label><input type="text" id="sa-model" value="' + esc(a?.model || pf?.model || '') + '"></div>'
     + '<div class="fg"><label>' + T('Year','Año') + '</label><input type="number" id="sa-year" value="' + (a?.year || '') + '"></div>'
     + '</div>'
     + '<div class="g3">'
     + '<div class="fg"><label>' + T('VIN / Serial','VIN / Serie') + '</label><input type="text" id="sa-vin" value="' + esc(a?.vinOrSerial || '') + '"></div>'
     + '<div class="fg"><label>' + T('Division','División') + '</label><select id="sa-division">'
     + '<option value="">' + T('Unassigned','Sin asignar') + '</option>'
-    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + ((a?.divisionId||'') === d.id ? ' selected' : '') + '>' + esc(T(d.name,d.nameEs)) + '</option>').join('')
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + ((a?.divisionId || pf?.divisionId || '') === d.id ? ' selected' : '') + '>' + esc(T(d.name,d.nameEs)) + '</option>').join('')
     + '</select></div>'
     + '<div class="fg"><label>' + T('Status','Estado') + '</label><select id="sa-status">'
     + SHOP_ASSET_STATUSES.map(s => '<option value="' + s + '"' + ((a?.status||'active') === s ? ' selected' : '') + '>' + shopStatusLabel(s) + '</option>').join('')
@@ -11373,8 +11380,10 @@ async function shopSaveAsset(assetId) {
       toast('✓ ' + T('Saved','Guardado'));
     } else {
       const pendingReview = CD.role !== 'admin';
-      await db.collection('shop_assets').add({
+      const replacing = window._shopReplacing;
+      const newRef = await db.collection('shop_assets').add({
         ...data, pendingReview,
+        ...(replacing ? { replacesUnitNumber: replacing.unitNumber, replacesAssetId: replacing.assetId || null } : {}),
         addedByUserId: CU.uid, addedByUserName: CD.name,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
@@ -11386,7 +11395,28 @@ async function shopSaveAsset(assetId) {
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       }
-      toast(pendingReview ? '✓ ' + T('Added — pending admin review','Agregado — pendiente de revisión') : '✓ ' + T('Asset added','Activo agregado'));
+      // Retire the old unit and cross-link both records, plus note it on
+      // the not-repairable ticket's timeline so the replacement is
+      // traceable from either direction.
+      if (replacing && replacing.assetId) {
+        try {
+          await db.collection('shop_assets').doc(replacing.assetId).update({
+            status: 'retired', replacedByUnitNumber: unitNumber, replacedByAssetId: newRef.id,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } catch (e) { /* new asset is already saved either way — this is a best-effort cross-link */ }
+      }
+      if (replacing && replacing.ticketId) {
+        try {
+          await db.collection('shop_tickets').doc(replacing.ticketId).collection('events').add({
+            type: 'note', text: T('Replacement machine added: ' + unitNumber, 'Máquina de reemplazo agregada: ' + unitNumber),
+            userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } catch (e) { /* best-effort — the asset records are already correct */ }
+      }
+      window._shopReplacing = null;
+      toast(replacing ? '✓ ' + T('Replacement added — ' + (replacing.unitNumber||'old unit') + ' marked Retired', 'Reemplazo agregado — ' + (replacing.unitNumber||'unidad anterior') + ' marcada como Retirada')
+        : pendingReview ? '✓ ' + T('Added — pending admin review','Agregado — pendiente de revisión') : '✓ ' + T('Asset added','Activo agregado'));
     }
     document.getElementById('shop-asset-modal').remove();
     renderShopAssets();
@@ -12091,7 +12121,7 @@ async function shopPaintTicketDetail(ticketId) {
     + (t.loanerNumber ? '<div style="font-size:12px;' + (shopIsLoanerOverdue(t) ? 'color:var(--danger);background:var(--danger-l)' : 'color:var(--text2);background:var(--surface2)') + ';padding:8px 12px;border-radius:var(--r);margin-bottom:14px">🔁 ' + T('Loaner','Préstamo') + ' ' + esc(t.loanerNumber) + (t.loanerReturnDate ? ' — ' + T('due','vence') + ' ' + shopFmtDateOnly(t.loanerReturnDate) : '') + (t.loanerReturned ? ' (' + T('returned','devuelto') + ')' : (shopIsLoanerOverdue(t) ? ' — ' + T('OVERDUE','VENCIDO') : '')) + '</div>' : '')
     + (t.pickupDate ? '<div style="font-size:12px;color:var(--text2);margin-bottom:14px">🕐 ' + T('Pickup scheduled','Recogida programada') + ': <b>' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</b></div>' : '')
     + (t.cancelReason ? '<div style="font-size:12px;color:var(--danger);background:var(--danger-l);padding:8px 12px;border-radius:var(--r);margin-bottom:14px">' + T('Cancellation reason','Motivo de cancelación') + ': ' + esc(t.cancelReason) + '</div>' : '')
-    + ((!isTerminal || (shopIsDavid() && shopCanMoveBackToShop(t))) ? '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'
+    + ((!isTerminal || (shopIsDavid() && shopCanMoveBackToShop(t)) || (t.status === 'not_repairable' && (ROLES[CD.role]?.isManager || CD.role === 'admin'))) ? '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'
         + (!isTerminal ? '<button class="btn sm" onclick="shopCancelTicketWithReason(\'' + ticketId + '\')">' + T('Cancel Ticket','Cancelar Boleto') + '</button>' : '')
         // David-only — for undoing an accidental tap through the kiosk's
         // confirm flow (e.g. hit "Ready for Pickup" or "Confirm Pickup" by
@@ -12099,6 +12129,11 @@ async function shopPaintTicketDetail(ticketId) {
         // that was there stays on record in the timeline below, it's just
         // not the ticket's current state anymore.
         + (shopIsDavid() && shopCanMoveBackToShop(t) ? '<button class="btn sm" style="background:var(--info-l);color:var(--info);border-color:transparent" onclick="shopMoveTicketBackToShop(\'' + ticketId + '\')">↩ ' + T('Move Back to In Shop','Regresar a En el Taller') + '</button>' : '')
+        // A machine marked Not Repairable usually means it's getting
+        // swapped out — this opens Add Asset pre-filled from the old
+        // unit's division/type/make/model, and on save retires the old
+        // one and cross-links both records.
+        + (t.status === 'not_repairable' && (ROLES[CD.role]?.isManager || CD.role === 'admin') ? '<button class="btn sm primary" onclick="shopOpenReplacementAssetForm(\'' + ticketId + '\')">+ ' + T('Add Replacement Machine','Agregar Máquina de Reemplazo') + '</button>' : '')
         + '</div>' : '')
     + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:8px">' + T('Timeline','Cronología') + '</div>'
     + '<div style="max-height:220px;overflow-y:auto">'
@@ -12145,6 +12180,26 @@ async function shopDetailDeleteTicket(ticketId) {
     const modal = document.getElementById('shop-ticket-detail-modal'); if (modal) modal.remove();
     toast('✓ ' + T('Ticket deleted','Boleto eliminado'));
   } catch (e) { toast(T('Could not delete — ','No se pudo eliminar — ') + e.message, 'err'); }
+}
+
+// Opens Add Asset pre-filled from the not-repairable ticket's asset —
+// same division/type/make/model as a starting point, easily edited —
+// so registering the replacement doesn't mean re-typing everything
+// from scratch. shopSaveAsset does the actual retire+cross-link once
+// the new unit number is known.
+function shopOpenReplacementAssetForm(ticketId) {
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const oldAsset = (window._shopAssets || []).find(a => a.id === t.assetId);
+  shopOpenAssetForm(null, {
+    ticketId,
+    assetId: t.assetId || null,
+    unitNumber: oldAsset?.unitNumber || t.unitNumber || null,
+    assetType: oldAsset?.assetType || t.assetType || null,
+    make: oldAsset?.make || null,
+    model: oldAsset?.model || null,
+    divisionId: oldAsset?.divisionId || t.divisionId || null
+  });
 }
 
 // Any status reachable by an accidental tap — advancing too far (Ready/
