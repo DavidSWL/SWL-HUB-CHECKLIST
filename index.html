@@ -11523,7 +11523,7 @@ async function renderShopTickets() {
       db.collection('shop_tickets').orderBy('createdAt','desc').get()
     ]);
     window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
-    window._shopTickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    window._shopTickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => !t.deleted);
     shopLoadForemen();
     shopPaintTickets();
   } catch (e) {
@@ -11610,9 +11610,19 @@ async function renderShopTicketProgress() {
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   if (window._shopProgressUnsub) { window._shopProgressUnsub(); window._shopProgressUnsub = null; }
   window._shopProgressLastStatus = null;
-  window._shopProgressUnsub = db.collection('shop_tickets').where('submittedByUserId','==',CU.uid)
+  // Regular managers only ever see the tickets they personally submitted
+  // — that's the point of "my requests." Admin needs the whole picture,
+  // including walk-in tickets a yard supervisor entered (submittedByUserId
+  // is the yard account's uid there, not any manager's, so those tickets
+  // were otherwise invisible to everyone but the yard role itself, which
+  // has no access to this screen at all) — so admin gets every ticket,
+  // unfiltered by submitter.
+  const isAdmin = CD.role === 'admin';
+  const baseQuery = isAdmin ? db.collection('shop_tickets') : db.collection('shop_tickets').where('submittedByUserId','==',CU.uid);
+  window._shopProgressUnsub = baseQuery
     .onSnapshot(snap => {
       const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+        .filter(t => !t.deleted || isAdmin)
         .sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
       // A row whose status changed since the last snapshot gets a one-time
       // flash — the visible proof that this screen really is live, not
@@ -11680,6 +11690,11 @@ function shopPaintTicketProgress() {
   const flashIds = window._shopProgressFlashIds || new Set();
   const openStatuses = ['submitted','acknowledged','in_progress'];
   const list = (window._shopProgressTickets || []).filter(t => {
+    // Deleted tickets are admin-only, opt-in via their own chip — never
+    // mixed into Open/Ready/Closed/All, which is why they'd otherwise
+    // look like they "disappeared" rather than showing up as deleted.
+    if (filter === 'deleted') return !!t.deleted;
+    if (t.deleted) return false;
     if (filter === 'open') return openStatuses.includes(t.status);
     if (filter === 'ready_pickup') return t.status === 'ready_pickup';
     if (filter === 'closed') return t.status === 'closed' || t.status === 'cancelled' || t.status === 'not_repairable';
@@ -11689,6 +11704,7 @@ function shopPaintTicketProgress() {
     ['open', T('Open','Abiertos')], ['ready_pickup', T('Ready for Pickup','Listos para Recoger')],
     ['closed', T('Closed','Cerrados')], ['all', T('All','Todos')]
   ];
+  if (CD.role === 'admin') chips.push(['deleted', T('Deleted','Eliminados')]);
   const overdueLoaners = (window._shopProgressTickets || []).filter(shopIsLoanerOverdue);
 
   ca.innerHTML = (overdueLoaners.length ? '<div style="font-size:12.5px;color:var(--danger);background:var(--danger-l);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-weight:600">'
@@ -11707,11 +11723,12 @@ function shopPaintTicketProgress() {
         const partsBadge = t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '';
         const outsourcedBadge = t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('Outside Shop','Taller Externo') + '</span>' : '';
         const loanerBadge = shopIsLoanerOverdue(t) ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">' + T('LOANER OVERDUE','PRÉSTAMO VENCIDO') + '</span>' : '';
+        const deletedBadge = t.deleted ? '<span style="font-size:9px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:2px 7px;border-radius:20px;margin-left:6px">🗑 ' + T('DELETED','ELIMINADO') + '</span>' : '';
         const flashCls = flashIds.has(t.id) ? ' yard-flash-new' : '';
-        return '<div class="' + flashCls.trim() + '" style="padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;border-radius:10px" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
+        return '<div class="' + flashCls.trim() + '" style="padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;border-radius:10px' + (t.deleted ? ';opacity:.7' : '') + '" onclick="shopOpenTicketDetail(\'' + t.id + '\')">'
           + '<div style="display:flex;align-items:flex-start;gap:12px">'
           + '<div style="flex:1;min-width:0">'
-          + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + priorityBadge + partsBadge + outsourcedBadge + loanerBadge + '</div>'
+          + '<div style="font-size:13px;font-weight:700;color:var(--text)">' + esc(t.unitNumber || '—') + priorityBadge + partsBadge + outsourcedBadge + loanerBadge + deletedBadge + '</div>'
           + '<div style="font-size:12.5px;color:var(--text2);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.issue || '') + '</div>'
           + '<div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
           + shopDivisionChip(t.divisionId)
@@ -11721,10 +11738,11 @@ function shopPaintTicketProgress() {
           + (t.estimatedFixDate ? '<span>·</span><span>🔧 ' + T('Est. fix','Reparación est.') + ' ' + shopFmtDateOnly(t.estimatedFixDate) + '</span>' : '')
           + (t.pickupDate ? '<span>·</span><span>🕐 ' + T('Pickup','Recogida') + ' ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</span>'
               : (t.estimatedPickupDate ? '<span>·</span><span>🕐 ' + T('Est. pickup','Recogida est.') + ' ' + shopFmtDateOnly(t.estimatedPickupDate) + '</span>' : ''))
+          + (t.deleted ? '<span>·</span><span style="color:var(--danger)">' + T('Deleted by','Eliminado por') + ' ' + esc(t.deletedByName || '—') + ' ' + shopFmtWhen(t.deletedAt) + '</span>' : '')
           + '</div></div>'
           + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
           + '</div>'
-          + shopProgressTracker(t)
+          + (t.deleted ? '' : shopProgressTracker(t))
           + '</div>';
       }).join('') : '<div class="empty">' + T('No tickets here.','No hay boletos aquí.') + '</div>')
     + '</div>';
@@ -12007,9 +12025,11 @@ async function shopOpenTicketDetail(ticketId) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
   // Defense in depth — the list itself is already scoped to submitter-
-  // only, so this only matters against a stale id, but it's cheap
-  // insurance against ever leaking someone else's ticket, admin included.
-  if (t.submittedByUserId !== CU.uid) {
+  // only for regular managers, so this only matters against a stale id.
+  // Admin's list is deliberately unscoped (needs to see everything,
+  // including walk-in tickets a yard supervisor entered), so admin is
+  // exempt from this check same as the query.
+  if (CD.role !== 'admin' && t.submittedByUserId !== CU.uid) {
     toast(T('You can only view tickets you submitted','Solo puedes ver los boletos que enviaste'), 'err');
     return;
   }
@@ -12096,18 +12116,26 @@ async function shopPaintTicketDetail(ticketId) {
 // this: Reports and the Kiosk both compute live off shop_tickets, so a
 // deleted ticket simply stops existing everywhere the moment this
 // commits — there's no separate cache to clean up.
+// Soft delete — flags the ticket rather than erasing it, so it can
+// still be reviewed later under Ticket Progress's admin-only "Deleted"
+// filter (David asked for exactly that after a couple of kiosk-entered
+// tickets seemed to "vanish" — a hard delete would have made that
+// impossible to ever look back on).
 async function shopDetailDeleteTicket(ticketId) {
   if (!shopIsDavid()) return;
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
-  if (!confirm(T('Permanently delete the ticket for "' + (t.unitNumber || 'this unit') + '"? This cannot be undone.',
-                 '¿Eliminar permanentemente el boleto de "' + (t.unitNumber || 'esta unidad') + '"? Esto no se puede deshacer.'))) return;
+  if (!confirm(T('Delete the ticket for "' + (t.unitNumber || 'this unit') + '"? It will be hidden from normal views but still visible under Ticket Progress\'s Deleted filter.',
+                 '¿Eliminar el boleto de "' + (t.unitNumber || 'esta unidad') + '"? Se ocultará de las vistas normales pero seguirá visible en el filtro Eliminados de Progreso del Boleto.'))) return;
   try {
-    const eventsSnap = await db.collection('shop_tickets').doc(ticketId).collection('events').get();
-    const batch = db.batch();
-    eventsSnap.docs.forEach(d => batch.delete(d.ref));
-    batch.delete(db.collection('shop_tickets').doc(ticketId));
-    await batch.commit();
+    await db.collection('shop_tickets').doc(ticketId).update({
+      deleted: true, deletedByUserId: CU.uid, deletedByName: CD.name,
+      deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: 'Ticket deleted by ' + CD.name,
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
     const modal = document.getElementById('shop-ticket-detail-modal'); if (modal) modal.remove();
     toast('✓ ' + T('Ticket deleted','Boleto eliminado'));
   } catch (e) { toast(T('Could not delete — ','No se pudo eliminar — ') + e.message, 'err'); }
@@ -12195,7 +12223,7 @@ async function renderYardRepairReport() {
       db.collection('shop_tickets').get(),
       db.collection('shop_assets').get()
     ]);
-    const tickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    const tickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => !t.deleted);
     const assets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
     shopPaintYardRepairReport(tickets, assets);
   } catch (e) {
@@ -12297,7 +12325,7 @@ async function renderLoanerReport() {
       db.collection('shop_tickets').get(),
       db.collection('shop_assets').get()
     ]);
-    const tickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => t.loanerNumber);
+    const tickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => t.loanerNumber && !t.deleted);
     const loanerAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() })).filter(a => a.isLoanerTool);
     shopPaintLoanerReport(tickets, loanerAssets);
   } catch (e) {
@@ -12498,7 +12526,7 @@ async function renderDowntimeReport() {
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   try {
     const snap = await db.collection('shop_tickets').get();
-    const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => !t.deleted);
     shopPaintDowntimeReport(tickets);
   } catch (e) {
     ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
@@ -12632,7 +12660,7 @@ async function renderYardKiosk() {
   // the manager side) has to show up, flash and beep, on its own.
   window._shopYardUnsub = db.collection('shop_tickets').orderBy('createdAt','desc')
     .onSnapshot(snap => {
-      window._shopTickets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      window._shopTickets = snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => !t.deleted);
       const isFirstSnapshot = !window._shopYardSeenIds;
       const now = Date.now();
       const arrived = window._shopTickets.filter(t => {
@@ -13071,21 +13099,25 @@ async function shopYardMarkNotRepairable(ticketId) {
 }
 
 // Kiosk-only, David-only (not every admin) — for clearing out test
-// tickets he creates while previewing the kiosk himself. Deletes the
-// events subcollection too, since Firestore never cascades that
-// automatically.
+// tickets he creates while previewing the kiosk himself. Soft delete —
+// flags the ticket rather than erasing it, so it's still reviewable
+// later under Ticket Progress's admin-only "Deleted" filter instead of
+// vanishing without a trace.
 function shopIsDavid() { return (CU.email || '').toLowerCase() === 'david@southwestlandscapeinc.com'; }
 async function shopYardDeleteTicket(ticketId) {
   if (!shopIsDavid()) return;
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
-  if (!confirm('¿Eliminar permanentemente el boleto de "' + (t.unitNumber || 'esta unidad') + '"? Esto no se puede deshacer.')) return;
+  if (!confirm('¿Eliminar el boleto de "' + (t.unitNumber || 'esta unidad') + '"? Se ocultará del patio pero seguirá visible en el filtro Eliminados de Progreso del Boleto.')) return;
   try {
-    const eventsSnap = await db.collection('shop_tickets').doc(ticketId).collection('events').get();
-    const batch = db.batch();
-    eventsSnap.docs.forEach(d => batch.delete(d.ref));
-    batch.delete(db.collection('shop_tickets').doc(ticketId));
-    await batch.commit();
+    await db.collection('shop_tickets').doc(ticketId).update({
+      deleted: true, deletedByUserId: CU.uid, deletedByName: CD.name,
+      deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: 'Boleto eliminado por ' + CD.name,
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
     window._shopTickets = (window._shopTickets || []).filter(x => x.id !== ticketId);
     const modal = document.getElementById('shop-yard-modal'); if (modal) modal.remove();
     toast('✓ Boleto eliminado');
@@ -13153,7 +13185,7 @@ async function shopCheckLoanerEscalations() {
     const snap = await db.collection('shop_tickets').get();
     const cutoff = Date.now() - 72 * 60 * 60 * 1000;
     const toEscalate = snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t =>
-      t.loanerNumber && !t.loanerReturned && !t.loanerEscalatedExecAt &&
+      !t.deleted && t.loanerNumber && !t.loanerReturned && !t.loanerEscalatedExecAt &&
       t.loanerNotifiedManagerAt && t.loanerNotifiedManagerAt.toMillis && t.loanerNotifiedManagerAt.toMillis() < cutoff
     );
     if (!toEscalate.length) return;
