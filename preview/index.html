@@ -1099,7 +1099,7 @@ const ROLES = {
   // Chat included (not just the kiosk) so a shared yard account can still
   // report issues — David: "the only things he needs to see is yard kiosk
   // and the chat... he does not need or get access to anything else."
-  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)', restrictedTo:['yard-kiosk','chat'] }
+  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)', restrictedTo:['yard-kiosk','shop-progress','chat'] }
 };
 
 const TEAM = [
@@ -1637,9 +1637,13 @@ function wsAreas() {
   // restrictedTo). Also shown to admin, additively, purely so David can
   // preview it without needing a separate yard login.
   if (role === 'yard' || role === 'admin') {
-    areas.push({ id:'yard-kiosk', icon:'🔧', label:T('Yard Kiosk','Kiosco de Patio'), screens:[
-      { id:'yard-kiosk', icon:'🔧', label:T('Yard Kiosk','Kiosco de Patio') }
-    ]});
+    const kioskScreens = [{ id:'yard-kiosk', icon:'🔧', label:T('Yard Kiosk','Kiosco de Patio') }];
+    // Mechanics asked for their own live tracker so they don't lose
+    // track of what they're on — admin already reaches Ticket Progress
+    // via the Shop Tickets area above, so this stays yard-only to avoid
+    // a duplicate nav entry for admin.
+    if (role === 'yard') kioskScreens.push({ id:'shop-progress', icon:'📡', label:T('Ticket Progress','Progreso del Boleto') });
+    areas.push({ id:'yard-kiosk', icon:'🔧', label:T('Yard Kiosk','Kiosco de Patio'), screens: kioskScreens });
   }
   if (ocCrew) {
     areas.push({ id:'crew', icon:'🗓', label:T('Field Crew','Cuadrilla'), screens:[
@@ -12094,6 +12098,21 @@ async function shopPaintTicketDetail(ticketId) {
     events = snap.docs.map(d => ({ id:d.id, ...d.data() }));
   } catch (e) { /* timeline is best-effort; ticket state above still renders */ }
 
+  // English/Spanish toggle for the free text — the issue description and
+  // any note a mechanic typed at the kiosk are always in Spanish, but a
+  // manager reading this might not be. Translated once per field, then
+  // cached on the object so flipping the toggle back and forth doesn't
+  // keep re-hitting the translate endpoint.
+  window._stdLang = window._stdLang || 'es';
+  if (window._stdLang === 'en') {
+    if (t.issue && !t._issueEn) t._issueEn = await shopTranslateToEnglish(t.issue);
+    for (const ev of events) {
+      if (ev.text && !ev._textEn) ev._textEn = await shopTranslateToEnglish(ev.text);
+      if (ev.note && !ev._noteEn) ev._noteEn = await shopTranslateToEnglish(ev.note);
+    }
+  }
+  const issueDisplay = (window._stdLang === 'en' && t._issueEn) ? t._issueEn : t.issue;
+
   const isTerminal = t.status === 'closed' || t.status === 'cancelled' || t.status === 'not_repairable';
   // Always the simple view now, for everyone — "those options should only
   // be for our yard supervisor, not a requestor." This screen shows what's
@@ -12106,6 +12125,13 @@ async function shopPaintTicketDetail(ticketId) {
     + '<div><div style="font-size:15px;font-weight:700">🎫 ' + esc(t.unitNumber || '—') + '</div>'
     + '<div style="margin-top:4px">' + shopDivisionChip(t.divisionId) + '</div></div>'
     + '<div style="display:flex;align-items:center;gap:10px">'
+    // Translates the issue text and any mechanic notes on demand — kiosk
+    // entries are always Spanish regardless of the viewer's own account
+    // language, unlike the rest of this screen's fixed labels.
+    + '<div style="display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:2px">'
+    + '<button onclick="shopToggleDetailLang(\'' + ticketId + '\',\'en\')" style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:11px;border:none;cursor:pointer;font-family:inherit;background:' + (window._stdLang === 'en' ? 'var(--swl-green);color:#fff' : 'none;color:var(--text3)') + '">EN</button>'
+    + '<button onclick="shopToggleDetailLang(\'' + ticketId + '\',\'es\')" style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:11px;border:none;cursor:pointer;font-family:inherit;background:' + (window._stdLang === 'es' ? 'var(--swl-green);color:#fff' : 'none;color:var(--text3)') + '">ES</button>'
+    + '</div>'
     // David-only, same as the Kiosk delete — this is the one screen that
     // actually lists every status (including already-closed/cancelled
     // test tickets), which the Kiosk's active-card view never surfaces.
@@ -12118,7 +12144,7 @@ async function shopPaintTicketDetail(ticketId) {
     + (t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:3px 8px;border-radius:20px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '')
     + (t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:3px 8px;border-radius:20px">' + T('Sent to Outside Shop','Enviado a Taller Externo') + '</span>' : '')
     + '</div>'
-    + '<div style="font-size:13px;color:var(--text);background:var(--surface2);padding:10px 12px;border-radius:var(--r);margin-bottom:14px;white-space:pre-wrap">' + esc(t.issue || '') + '</div>'
+    + '<div style="font-size:13px;color:var(--text);background:var(--surface2);padding:10px 12px;border-radius:var(--r);margin-bottom:14px;white-space:pre-wrap">' + esc(issueDisplay || '') + '</div>'
     + ((t.estimatedDropoffDate || t.requestedReturnDate) ? '<div style="display:flex;gap:18px;font-size:12px;color:var(--text2);margin-bottom:10px;flex-wrap:wrap">'
         + (t.estimatedDropoffDate ? '<div>📅 ' + T('Drop-off','Entrega') + ': <b>' + shopFmtDateOnly(t.estimatedDropoffDate) + '</b></div>' : '')
         + (t.requestedReturnDate ? '<div>↩ ' + T('Needed back','Se necesita de vuelta') + ': <b>' + shopFmtDateOnly(t.requestedReturnDate) + '</b></div>' : '')
@@ -12150,15 +12176,33 @@ async function shopPaintTicketDetail(ticketId) {
     + '<div style="max-height:220px;overflow-y:auto">'
     + (events.length ? events.map(ev => {
         let line;
-        if (ev.type === 'created') line = T('Ticket submitted','Boleto enviado') + (ev.note ? ' — ' + esc(ev.note) : '');
-        else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (ev.note ? ' — ' + esc(ev.note) : '');
+        const noteDisplay = (window._stdLang === 'en' && ev._noteEn) ? ev._noteEn : ev.note;
+        const textDisplay = (window._stdLang === 'en' && ev._textEn) ? ev._textEn : ev.text;
+        if (ev.type === 'created') line = T('Ticket submitted','Boleto enviado') + (noteDisplay ? ' — ' + esc(noteDisplay) : '');
+        else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (noteDisplay ? ' — ' + esc(noteDisplay) : '');
         else if (ev.type === 'parts') line = ev.partsPending ? T('Flagged parts pending','Marcado piezas pendientes') : T('Cleared parts pending','Piezas pendientes eliminado');
-        else line = esc(ev.text || '');
+        else line = esc(textDisplay || '');
         return '<div style="padding:7px 0;border-bottom:1px solid var(--border);font-size:12px">'
           + '<span style="color:var(--text)">' + line + '</span>'
           + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
       }).join('') : '<div style="font-size:11.5px;color:var(--text3)">' + T('No activity yet.','Sin actividad aún.') + '</div>')
     + '</div>';
+}
+
+function shopToggleDetailLang(ticketId, lang) {
+  window._stdLang = lang;
+  shopPaintTicketDetail(ticketId);
+}
+// Same public, no-key translate endpoint the Kiosk's own "Traducir"
+// button already uses — no billing decision or API key to wire up, and
+// if it's ever unavailable this just quietly returns the original text.
+async function shopTranslateToEnglish(text) {
+  if (!text) return text;
+  try {
+    const res = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=es&tl=en&dt=t&q=' + encodeURIComponent(text));
+    const data = await res.json();
+    return (data[0] || []).map(seg => seg[0]).join('') || text;
+  } catch (e) { return text; }
 }
 
 // David-only, reachable from Ticket Progress specifically because it's
@@ -12844,7 +12888,7 @@ function shopPaintYardKiosk() {
       + '</div>' : '')
     + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:18px">'
     + '<div style="font-size:22px;font-weight:800">🔧 Patio</div>'
-    + '<button class="btn sm primary" onclick="shopOpenTicketForm()">+ Nuevo Boleto</button>'
+    + '<button class="btn sm primary" onclick="kwOpen()">+ Nuevo Boleto</button>'
     + '</div>'
     + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">🚚 Equipo Entrante (' + incoming.length + ')</div>'
     + (incoming.length ? incoming.map(t => tapCard(t,'dropoff')).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Nada entrante.</div>')
@@ -12868,6 +12912,7 @@ function shopPaintYardKiosk() {
 function shopYardConfirm(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
+  window._syIntake = null;
   const ex = document.getElementById('shop-yard-modal'); if (ex) ex.remove();
   const m = document.createElement('div');
   m.id = 'shop-yard-modal';
@@ -12883,6 +12928,15 @@ async function shopPaintYardConfirm(ticketId, kind) {
   if (!body) return;
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
+  // First time opening an in-progress ticket, walk through a 2-step
+  // intake (est. return date, what work it needs) before the normal
+  // update screen — keeps the mechanic's first look focused on exactly
+  // those two questions instead of the whole Progreso panel at once.
+  // Already-intake'd tickets (or any other kind) go straight through.
+  if (kind === 'ready' && !(t.estimatedPickupDate && t.workType) && !window._syIntake) {
+    shopYardIntakeStart(ticketId);
+    return;
+  }
   let events = [];
   try {
     const snap = await db.collection('shop_tickets').doc(ticketId).collection('events').orderBy('createdAt','asc').get();
@@ -12911,6 +12965,14 @@ async function shopPaintYardConfirm(ticketId, kind) {
     + (badges ? '<div style="margin-bottom:12px">' + badges + '</div>' : '')
     + '</div>'
     + (kind === 'ready' ? shopYardProgressBlock(ticketId, t) : '')
+    // Enter the actual pickup date/time in the same visit as marking it
+    // ready, instead of a separate trip back to this card later — the
+    // full pickup screen (loaner gate included) still exists for the
+    // real hand-off moment.
+    + (kind === 'ready' ? '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
+        + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Fecha de Recogida</div>'
+        + shopYardPickupDateFields(ticketId, t, 'ready')
+        + '</div>' : '')
     + (kind === 'pickup' ? shopYardPickupBlock(ticketId, t) : '')
     + '<div style="font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:9px">Cronología</div>'
     + '<div style="max-height:180px;overflow-y:auto;margin-bottom:16px;text-align:left">'
@@ -12962,6 +13024,78 @@ async function shopYardAddNote(ticketId, kind) {
   } catch (e) { toast('No se pudo agregar — ' + e.message, 'err'); }
 }
 
+// ── Mechanic intake wizard — first tap on an "En Reparación" ticket ──
+// Two questions before the full Progreso panel: when's it coming back,
+// and what kind of work does it need. Reuses the same #syd-body element
+// the confirm screen paints into, inside the already-open modal.
+window._syIntake = null;
+const SY_WORK_TYPES = [
+  ['replacement','Reemplazo'], ['part','Repuesto'], ['repair','Reparación'],
+  ['full_service','Servicio Completo'], ['sharpening','Afilado'], ['other','Otro']
+];
+function shopWorkTypeLabel(v) {
+  const hit = SY_WORK_TYPES.find(x => x[0] === v);
+  return hit ? hit[1] : (v || '—');
+}
+function shopYardIntakeStart(ticketId) {
+  window._syIntake = { ticketId, step:1, estimatedPickupDate:'' };
+  shopPaintYardIntake();
+}
+function shopPaintYardIntake() {
+  const body = document.getElementById('syd-body');
+  if (!body) return;
+  const si = window._syIntake;
+  const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
+  if (!t) return;
+  const header = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Paso ' + si.step + ' de 2</div>'
+    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove(); window._syIntake=null" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div>'
+    + '<div style="text-align:center;font-size:24px;font-weight:800;margin-bottom:20px">' + esc(t.unitNumber || '—') + '</div>';
+  let inner;
+  if (si.step === 1) {
+    inner = '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">¿Fecha de regreso estimada?</div>'
+      + '<input type="date" id="syi-pickupest" value="' + esc(si.estimatedPickupDate || t.estimatedPickupDate || '') + '" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
+      + '<button onclick="shopYardIntakeNext()" style="width:100%;margin-top:24px;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Siguiente →</button>';
+  } else {
+    inner = '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">¿Qué se le hará?</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+      + SY_WORK_TYPES.map(([v,l]) => '<button onclick="shopYardIntakeFinish(\'' + v + '\')" style="padding:20px 12px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:2px solid var(--border2);border-radius:12px;cursor:pointer">' + l + '</button>').join('')
+      + '</div>'
+      + '<button onclick="shopYardIntakeBack()" style="width:100%;margin-top:20px;padding:14px;font-size:14px;font-weight:700;background:none;color:var(--text3);border:none;cursor:pointer">← Atrás</button>';
+  }
+  body.innerHTML = header + inner;
+}
+function shopYardIntakeNext() {
+  const val = document.getElementById('syi-pickupest').value;
+  if (!val) { toast('Selecciona una fecha', 'err'); return; }
+  window._syIntake.estimatedPickupDate = val;
+  window._syIntake.step = 2;
+  shopPaintYardIntake();
+}
+function shopYardIntakeBack() {
+  window._syIntake.step = 1;
+  shopPaintYardIntake();
+}
+async function shopYardIntakeFinish(workType) {
+  const si = window._syIntake;
+  const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
+  if (!t) return;
+  try {
+    await db.collection('shop_tickets').doc(si.ticketId).update({
+      estimatedPickupDate: si.estimatedPickupDate, workType, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(si.ticketId).collection('events').add({
+      type: 'note', text: 'Fecha est. de regreso: ' + shopFmtDateOnly(si.estimatedPickupDate) + ' — Trabajo: ' + shopWorkTypeLabel(workType),
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.estimatedPickupDate = si.estimatedPickupDate; t.workType = workType;
+    window._syIntake = null;
+    shopPaintYardKiosk();
+    await shopPaintYardConfirm(si.ticketId, 'ready');
+  } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
+}
+
 // Only shown for 'ready' (En Reparación) cards — the tools an actual
 // repair-in-progress needs that intake/pickup confirmation doesn't:
 // estimated dates so the requester isn't left guessing, plus the same
@@ -12976,7 +13110,8 @@ function shopYardProgressBlock(ticketId, t) {
     ['other', '✎ Otro']
   ];
   return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
-    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Progreso</div>'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Progreso'
+    + (t.workType ? ' <span style="color:var(--text2);text-transform:none;font-weight:600;letter-spacing:0">— ' + shopWorkTypeLabel(t.workType) + '</span>' : '') + '</div>'
     + '<div class="g2" style="margin-bottom:14px">'
     + '<div class="fg"><label>Fecha Est. de Reparación</label><input type="date" id="syd-fixdate-' + ticketId + '" value="' + esc(t.estimatedFixDate || '') + '" onchange="shopYardSaveEstimates(\'' + ticketId + '\')"></div>'
     + '<div class="fg"><label>Fecha Est. de Recogida</label><input type="date" id="syd-pickupest-' + ticketId + '" value="' + esc(t.estimatedPickupDate || '') + '" onchange="shopYardSaveEstimates(\'' + ticketId + '\')"></div>'
@@ -13087,6 +13222,16 @@ async function shopYardReportLoanerNotReturned(ticketId) {
 // estimatedPickupDate set earlier during repair (that one's a guess made
 // while work is still in progress; this one's the real appointment once
 // it's actually sitting ready).
+// Date/time fields alone — shared between the 'ready' screen (so a
+// mechanic marking something ready can enter when it'll actually be
+// done in the same visit, instead of a separate later trip back to
+// this card) and the 'pickup' screen's fuller block below.
+function shopYardPickupDateFields(ticketId, t, kind) {
+  return '<div class="g2">'
+    + '<div class="fg"><label>Fecha</label><input type="date" id="syd-pdate-' + ticketId + '" value="' + esc(t.pickupDate || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\',\'' + kind + '\')"></div>'
+    + '<div class="fg"><label>Hora</label><input type="time" id="syd-ptime-' + ticketId + '" value="' + esc(t.pickupTime || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\',\'' + kind + '\')"></div>'
+    + '</div>';
+}
 function shopYardPickupBlock(ticketId, t) {
   // Hard rule, not a prompt: a ticket with a loaner still out CANNOT be
   // closed until it's marked returned — no "not returned" path that
@@ -13096,10 +13241,7 @@ function shopYardPickupBlock(ticketId, t) {
   const hasOpenLoaner = !!(t.loanerNumber && !t.loanerReturned);
   return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
     + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Fecha de Recogida</div>'
-    + '<div class="g2">'
-    + '<div class="fg"><label>Fecha</label><input type="date" id="syd-pdate-' + ticketId + '" value="' + esc(t.pickupDate || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
-    + '<div class="fg"><label>Hora</label><input type="time" id="syd-ptime-' + ticketId + '" value="' + esc(t.pickupTime || '') + '" onchange="shopYardSavePickupSchedule(\'' + ticketId + '\')"></div>'
-    + '</div>'
+    + shopYardPickupDateFields(ticketId, t, 'pickup')
     + (hasOpenLoaner ? '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px">'
         + '<div style="font-size:13px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:10px 12px;border-radius:var(--r);margin-bottom:12px">🔁 Préstamo ' + esc(t.loanerNumber) + ' — este boleto no se puede cerrar hasta que el préstamo sea devuelto.</div>'
         + '<button class="btn sm" style="width:100%;background:var(--success-l);color:var(--success);border-color:transparent;margin-bottom:8px" onclick="shopYardMarkLoanerReturned(\'' + ticketId + '\',\'pickup\')">✓ Marcar Préstamo Devuelto</button>'
@@ -13110,7 +13252,7 @@ function shopYardPickupBlock(ticketId, t) {
     + '</div>';
 }
 
-async function shopYardSavePickupSchedule(ticketId) {
+async function shopYardSavePickupSchedule(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
   const pickupDate = document.getElementById('syd-pdate-' + ticketId).value || null;
@@ -13124,7 +13266,7 @@ async function shopYardSavePickupSchedule(ticketId) {
     t.pickupDate = pickupDate; t.pickupTime = pickupTime;
     toast('✓ Guardado');
     shopPaintYardKiosk();
-    await shopPaintYardConfirm(ticketId, 'pickup');
+    await shopPaintYardConfirm(ticketId, kind || 'pickup');
   } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
 }
 
@@ -13305,6 +13447,191 @@ async function shopCheckLoanerEscalations() {
       await db.collection('shop_tickets').doc(t.id).update({ loanerEscalatedExecAt: firebase.firestore.FieldValue.serverTimestamp() });
     }
   } catch (e) { /* best-effort background check, never blocks login */ }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Kiosk New Ticket — step-by-step wizard. Kiosk-only ("a little more
+// simple... instead of one window showing them everything") — the
+// manager Submit Ticket screen keeps the original single-page form.
+// Six steps: equipment, foreman, division, drop-off date, what's wrong,
+// urgent yes/no. The last step submits on tap, no separate confirm.
+// ══════════════════════════════════════════════════════════════════════
+window._kw = null;
+const KW_STEPS = 6;
+function kwOpen() {
+  window._kw = { step:1, assetId:null, unitNumber:'', assetType:null, iconKey:null, divisionId:null, foremanName:'', dropoffDate:new Date().toISOString().split('T')[0], issue:'' };
+  const ex = document.getElementById('kw-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'kw-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:22px;padding:30px;width:520px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)" id="kw-body"></div>';
+  document.body.appendChild(m);
+  kwRender();
+}
+function kwClose() { const m = document.getElementById('kw-modal'); if (m) m.remove(); window._kw = null; }
+
+function kwShell(inner, hideNav) {
+  const kw = window._kw;
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Paso ' + kw.step + ' de ' + KW_STEPS + '</div>'
+    + '<button onclick="kwClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div>'
+    + '<div style="height:5px;border-radius:3px;background:var(--surface2);overflow:hidden;margin-bottom:22px">'
+    + '<div style="height:100%;width:' + (kw.step / KW_STEPS * 100) + '%;background:var(--burg);border-radius:3px;transition:width .3s"></div>'
+    + '</div>'
+    + inner
+    + (hideNav ? '' : '<div style="display:flex;gap:10px;margin-top:24px">'
+        + (kw.step > 1 ? '<button onclick="kwBack()" style="padding:16px 20px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">← Atrás</button>' : '')
+        + '<button id="kw-next-btn" onclick="kwNext()" style="flex:1;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Siguiente →</button>'
+        + '</div>');
+}
+
+function kwStep1() {
+  const kw = window._kw;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:14px">¿Qué equipo es?</div>'
+    + '<div style="position:relative">'
+    + '<input type="text" id="kw-asset-search" autocomplete="off" placeholder="Escribe un # de unidad o descripción…" value="' + esc(kw.unitNumber || '') + '" oninput="kwAssetSearchInput(event)" onfocus="kwAssetSearchInput(event)" onblur="kwAssetSearchBlur()" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
+    + '<div id="kw-asset-dropdown" class="st-typeahead-dd" style="display:none;max-height:280px"></div>'
+    + '</div>';
+}
+function kwAssetSearchInput(evt) {
+  if (evt && evt.type === 'input') window._kw.assetId = null;
+  const q = (document.getElementById('kw-asset-search').value || '').trim().toLowerCase();
+  const dd = document.getElementById('kw-asset-dropdown');
+  const pool = (window._shopAssets || []).filter(a => !a.pendingReview && a.ticketable !== false);
+  const matches = (q ? pool.filter(a => {
+    const hay = [a.unitNumber, a.make, a.model, shopAssetTypeLabel(a.assetType)].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  }) : pool).sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||'')).slice(0, 40);
+  dd.innerHTML = matches.length
+    ? matches.map(a => '<div class="st-ta-opt" onmousedown="kwPickAsset(\'' + a.id + '\')"><b>' + esc(a.unitNumber) + '</b> — ' + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType)) + '</div>').join('')
+    : '<div class="st-ta-empty">No hay unidades que coincidan</div>';
+  dd.style.display = 'block';
+}
+function kwPickAsset(id) {
+  const a = (window._shopAssets || []).find(x => x.id === id);
+  if (!a) return;
+  const kw = window._kw;
+  kw.assetId = id; kw.unitNumber = a.unitNumber; kw.assetType = a.assetType; kw.iconKey = a.iconKey || null; kw.divisionId = a.divisionId || null;
+  document.getElementById('kw-asset-search').value = a.unitNumber + ' — ' + ([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType));
+  document.getElementById('kw-asset-dropdown').style.display = 'none';
+}
+function kwAssetSearchBlur() {
+  setTimeout(() => { const dd = document.getElementById('kw-asset-dropdown'); if (dd) dd.style.display = 'none'; }, 150);
+}
+
+function kwStep2() {
+  const kw = window._kw;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:14px">¿Nombre del capataz?</div>'
+    + '<div style="position:relative">'
+    + '<input type="text" id="kw-foreman-search" autocomplete="off" placeholder="Escribe un nombre…" value="' + esc(kw.foremanName || '') + '" oninput="kwForemanSearchInput()" onfocus="kwForemanSearchInput()" onblur="kwForemanSearchBlur()" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
+    + '<div id="kw-foreman-dropdown" class="st-typeahead-dd" style="display:none;max-height:280px"></div>'
+    + '</div>';
+}
+function kwForemanSearchInput() {
+  const kw = window._kw;
+  const q = (document.getElementById('kw-foreman-search').value || '').trim().toLowerCase();
+  const dd = document.getElementById('kw-foreman-dropdown');
+  const roster = (window._shopForemen || []).filter(f => f.active !== false && (!kw.divisionId || f.divisionId === kw.divisionId));
+  const matches = (q ? roster.filter(f => (f.name||'').toLowerCase().includes(q)) : roster).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  dd.innerHTML = matches.length
+    ? matches.map(f => '<div class="st-ta-opt" onmousedown="kwPickForeman(\'' + esc(f.name).replace(/'/g,"\\'") + '\')">' + esc(f.name) + '</div>').join('')
+    : '<div class="st-ta-empty">Sin coincidencia — escribe un nombre y continúa</div>';
+  dd.style.display = 'block';
+}
+function kwPickForeman(name) {
+  document.getElementById('kw-foreman-search').value = name;
+  document.getElementById('kw-foreman-dropdown').style.display = 'none';
+}
+function kwForemanSearchBlur() {
+  setTimeout(() => { const dd = document.getElementById('kw-foreman-dropdown'); if (dd) dd.style.display = 'none'; }, 150);
+}
+
+function kwStep3() {
+  const kw = window._kw;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:14px">¿Qué división?</div>'
+    + '<select id="kw-division" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
+    + '<option value="">Sin asignar</option>'
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + ((kw.divisionId||'') === d.id ? ' selected' : '') + '>' + esc(d.nameEs) + '</option>').join('')
+    + '</select>';
+}
+
+function kwStep4() {
+  const kw = window._kw;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:14px">¿Fecha de entrega?</div>'
+    + '<input type="date" id="kw-dropoff" value="' + esc(kw.dropoffDate || '') + '" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">';
+}
+
+function kwStep5() {
+  const kw = window._kw;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:14px">¿Qué está mal?</div>'
+    + '<textarea id="kw-issue" rows="5" placeholder="Describe el problema…" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical">' + esc(kw.issue || '') + '</textarea>';
+}
+
+function kwStep6() {
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:18px">¿Es urgente?</div>'
+    + '<div style="display:flex;gap:12px">'
+    + '<button onclick="kwSubmit(\'urgent\')" style="flex:1;padding:28px 16px;font-size:18px;font-weight:800;background:var(--danger-l);color:var(--danger);border:2px solid var(--danger);border-radius:14px;cursor:pointer">Sí</button>'
+    + '<button onclick="kwSubmit(\'normal\')" style="flex:1;padding:28px 16px;font-size:18px;font-weight:800;background:var(--surface2);color:var(--text);border:2px solid var(--border2);border-radius:14px;cursor:pointer">No</button>'
+    + '</div>';
+}
+
+function kwRender() {
+  const body = document.getElementById('kw-body');
+  if (!body) return;
+  const kw = window._kw;
+  const stepFns = { 1:kwStep1, 2:kwStep2, 3:kwStep3, 4:kwStep4, 5:kwStep5, 6:kwStep6 };
+  body.innerHTML = kwShell(stepFns[kw.step](), kw.step === 6);
+  if (kw.step === 1) document.getElementById('kw-asset-search')?.focus();
+  if (kw.step === 2) document.getElementById('kw-foreman-search')?.focus();
+}
+
+function kwBack() {
+  if (window._kw.step > 1) { window._kw.step--; kwRender(); }
+}
+
+function kwNext() {
+  const kw = window._kw;
+  if (kw.step === 1) {
+    if (!kw.assetId) { toast('Selecciona un equipo de la lista', 'err'); return; }
+  } else if (kw.step === 2) {
+    kw.foremanName = (document.getElementById('kw-foreman-search').value || '').trim();
+    if (!kw.foremanName) { toast('Escribe el nombre del capataz', 'err'); return; }
+  } else if (kw.step === 3) {
+    kw.divisionId = document.getElementById('kw-division').value || null;
+  } else if (kw.step === 4) {
+    kw.dropoffDate = document.getElementById('kw-dropoff').value;
+    if (!kw.dropoffDate) { toast('Selecciona una fecha de entrega', 'err'); return; }
+  } else if (kw.step === 5) {
+    kw.issue = (document.getElementById('kw-issue').value || '').trim();
+    if (!kw.issue) { toast('Describe el problema', 'err'); return; }
+  }
+  kw.step++;
+  kwRender();
+}
+
+async function kwSubmit(priority) {
+  const kw = window._kw;
+  const isWalkIn = CD.role === 'yard';
+  try {
+    const ref = await db.collection('shop_tickets').add({
+      assetId: kw.assetId, unitNumber: kw.unitNumber || '', assetType: kw.assetType || null, iconKey: kw.iconKey || null, divisionId: kw.divisionId,
+      foremanName: kw.foremanName || null, issue: kw.issue, priority, status: isWalkIn ? 'in_progress' : 'submitted', partsPending: false,
+      estimatedDropoffDate: kw.dropoffDate || null, requestedReturnDate: null,
+      submittedByUserId: CU.uid, submittedByName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await ref.collection('events').add({
+      type: 'created', userId: CU.uid, userName: CD.name,
+      note: isWalkIn ? 'Entrega en persona, ingresada por Supervisor de Patio' : null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    toast('✓ Boleto enviado');
+    kwClose();
+  } catch (e) {
+    toast(e.message || 'No se pudo enviar', 'err');
+  }
 }
 
 </script>
