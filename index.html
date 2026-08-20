@@ -13018,17 +13018,33 @@ async function shopYardAddNote(ticketId, kind) {
 // and what kind of work does it need. Reuses the same #syd-body element
 // the confirm screen paints into, inside the already-open modal.
 window._syIntake = null;
+// Four of these (part/repair/full_service/sharpening) just record what's
+// happening and leave the ticket open for the repair to continue.
+// Replacement/loaner/extra are different — they're a substitute
+// hand-off, not a repair being tracked on this ticket, so each opens one
+// more screen (which unit + date) and ends with an explicit close.
+// "Other" gets a free-text description instead of a fixed label but
+// still leaves the ticket open.
 const SY_WORK_TYPES = [
   ['replacement','Reemplazo'], ['part','Repuesto'], ['repair','Reparación'],
-  ['full_service','Servicio Completo'], ['sharpening','Afilado'], ['other','Otro']
+  ['full_service','Servicio Completo'], ['sharpening','Afilado'], ['other','Otro'],
+  ['loaner','Préstamo'], ['extra','Extra']
 ];
+const SY_RESOLVE_TYPES = ['replacement','loaner','extra'];
 function shopWorkTypeLabel(v) {
   const hit = SY_WORK_TYPES.find(x => x[0] === v);
   return hit ? hit[1] : (v || '—');
 }
 function shopYardIntakeStart(ticketId) {
-  window._syIntake = { ticketId, step:1, estimatedPickupDate:'' };
+  window._syIntake = { ticketId, step:1, estimatedPickupDate:'', workType:null, resolveValue:'', resolveDate:'' };
   shopPaintYardIntake();
+}
+function shopYardIntakeHead(t, label) {
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">' + label + '</div>'
+    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove(); window._syIntake=null" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div>'
+    + '<div style="text-align:center;font-size:24px;font-weight:800;margin-bottom:20px">' + esc(t.unitNumber || '—') + '</div>';
 }
 function shopPaintYardIntake() {
   const body = document.getElementById('syd-body');
@@ -13036,24 +13052,38 @@ function shopPaintYardIntake() {
   const si = window._syIntake;
   const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
   if (!t) return;
-  const header = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
-    + '<div style="font-size:11px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Paso ' + si.step + ' de 2</div>'
-    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove(); window._syIntake=null" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button>'
-    + '</div>'
-    + '<div style="text-align:center;font-size:24px;font-weight:800;margin-bottom:20px">' + esc(t.unitNumber || '—') + '</div>';
   let inner;
   if (si.step === 1) {
-    inner = '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">¿Fecha de regreso estimada?</div>'
+    inner = shopYardIntakeHead(t, 'Paso 1 de 2')
+      + '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">¿Fecha de regreso estimada?</div>'
       + '<input type="date" id="syi-pickupest" value="' + esc(si.estimatedPickupDate || t.estimatedPickupDate || '') + '" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
       + '<button onclick="shopYardIntakeNext()" style="width:100%;margin-top:24px;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Siguiente →</button>';
-  } else {
-    inner = '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">¿Qué se le hará?</div>'
+  } else if (si.step === 2) {
+    inner = shopYardIntakeHead(t, 'Paso 2 de 2')
+      + '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">¿Qué se le hará?</div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
-      + SY_WORK_TYPES.map(([v,l]) => '<button onclick="shopYardIntakeFinish(\'' + v + '\')" style="padding:20px 12px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:2px solid var(--border2);border-radius:12px;cursor:pointer">' + l + '</button>').join('')
+      + SY_WORK_TYPES.map(([v,l]) => '<button onclick="shopYardIntakePickWorkType(\'' + v + '\')" style="padding:20px 12px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:2px solid var(--border2);border-radius:12px;cursor:pointer">' + l + '</button>').join('')
       + '</div>'
-      + '<button onclick="shopYardIntakeBack()" style="width:100%;margin-top:20px;padding:14px;font-size:14px;font-weight:700;background:none;color:var(--text3);border:none;cursor:pointer">← Atrás</button>';
+      + '<button onclick="shopYardIntakeBackTo1()" style="width:100%;margin-top:20px;padding:14px;font-size:14px;font-weight:700;background:none;color:var(--text3);border:none;cursor:pointer">← Atrás</button>';
+  } else if (si.workType === 'other') {
+    inner = shopYardIntakeHead(t, 'Un paso más')
+      + '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">Describe qué se le hará</div>'
+      + '<textarea id="syi-other-desc" rows="4" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical">' + esc(si.resolveValue || '') + '</textarea>'
+      + '<button onclick="shopYardIntakeFinishOther()" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Guardar</button>'
+      + '<button onclick="shopYardIntakeBackTo2()" style="width:100%;margin-top:10px;padding:12px;font-size:13px;font-weight:700;background:none;color:var(--text3);border:none;cursor:pointer">← Atrás</button>';
+  } else {
+    // replacement / loaner / extra — collect which unit + date, then an
+    // explicit Cerrar Boleto (never an automatic close on selection).
+    const titles = { replacement:'Equipo de Reemplazo', loaner:'Préstamo Asignado', extra:'Equipo Extra Asignado' };
+    const numLabels = { replacement:'Número de Equipo Nuevo', loaner:'Número de Préstamo', extra:'Número de Equipo Extra' };
+    inner = shopYardIntakeHead(t, 'Un paso más')
+      + '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">' + titles[si.workType] + '</div>'
+      + '<div class="fg" style="margin-bottom:12px"><label>' + numLabels[si.workType] + '</label><input type="text" id="syi-resolve-value" value="' + esc(si.resolveValue || '') + '"></div>'
+      + '<div class="fg"><label>Fecha' + (si.workType === 'replacement' ? ' Asignada' : '') + '</label><input type="date" id="syi-resolve-date" value="' + esc(si.resolveDate || '') + '"></div>'
+      + '<button onclick="shopYardIntakeCloseWithResolution()" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:800;background:var(--danger);color:#fff;border:none;border-radius:12px;cursor:pointer">Cerrar Boleto</button>'
+      + '<button onclick="shopYardIntakeBackTo2()" style="width:100%;margin-top:10px;padding:12px;font-size:13px;font-weight:700;background:none;color:var(--text3);border:none;cursor:pointer">← Atrás</button>';
   }
-  body.innerHTML = header + inner;
+  body.innerHTML = inner;
 }
 function shopYardIntakeNext() {
   const val = document.getElementById('syi-pickupest').value;
@@ -13062,11 +13092,30 @@ function shopYardIntakeNext() {
   window._syIntake.step = 2;
   shopPaintYardIntake();
 }
-function shopYardIntakeBack() {
+function shopYardIntakeBackTo1() {
   window._syIntake.step = 1;
   shopPaintYardIntake();
 }
-async function shopYardIntakeFinish(workType) {
+function shopYardIntakeBackTo2() {
+  window._syIntake.step = 2;
+  window._syIntake.workType = null;
+  shopPaintYardIntake();
+}
+function shopYardIntakePickWorkType(workType) {
+  const si = window._syIntake;
+  si.workType = workType;
+  if (SY_RESOLVE_TYPES.includes(workType) || workType === 'other') {
+    si.step = 3;
+    shopPaintYardIntake();
+    return;
+  }
+  shopYardIntakeFinishSimple(workType);
+}
+// Repuesto/Reparación/Servicio Completo/Afilado — no extra info needed,
+// ticket stays open. Closes the wizard (not the ticket) and returns to
+// the kiosk board — the mechanic comes back to THIS card later, now
+// going straight to the normal Progreso screen since intake's done.
+async function shopYardIntakeFinishSimple(workType) {
   const si = window._syIntake;
   const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
   if (!t) return;
@@ -13080,9 +13129,89 @@ async function shopYardIntakeFinish(workType) {
     });
     t.estimatedPickupDate = si.estimatedPickupDate; t.workType = workType;
     window._syIntake = null;
+    toast('✓ Guardado');
+    document.getElementById('shop-yard-modal')?.remove();
     shopPaintYardKiosk();
-    await shopPaintYardConfirm(si.ticketId, 'ready');
   } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
+}
+async function shopYardIntakeFinishOther() {
+  const si = window._syIntake;
+  const desc = (document.getElementById('syi-other-desc').value || '').trim();
+  if (!desc) { toast('Escribe una descripción', 'err'); return; }
+  const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
+  if (!t) return;
+  try {
+    await db.collection('shop_tickets').doc(si.ticketId).update({
+      estimatedPickupDate: si.estimatedPickupDate, workType: 'other', updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(si.ticketId).collection('events').add({
+      type: 'note', text: 'Fecha est. de regreso: ' + shopFmtDateOnly(si.estimatedPickupDate) + ' — Trabajo: ' + desc,
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.estimatedPickupDate = si.estimatedPickupDate; t.workType = 'other';
+    window._syIntake = null;
+    toast('✓ Guardado');
+    document.getElementById('shop-yard-modal')?.remove();
+    shopPaintYardKiosk();
+  } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
+}
+// Replacement/loaner/extra — the hand-off itself is the resolution, so
+// this closes the ticket outright once the mechanic confirms. Deliberately
+// NOT the same loanerNumber/loanerReturned fields the mid-repair loaner
+// system uses (that one blocks closing until returned and feeds the
+// 72-hour escalation) — this is a different situation with nothing to
+// track a return against, so it's logged as a plain timeline note instead.
+async function shopYardIntakeCloseWithResolution() {
+  const si = window._syIntake;
+  const value = (document.getElementById('syi-resolve-value').value || '').trim();
+  const date = document.getElementById('syi-resolve-date').value;
+  if (!value) { toast('Completa el número', 'err'); return; }
+  if (!date) { toast('Selecciona una fecha', 'err'); return; }
+  const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
+  if (!t) return;
+  const wt = si.workType;
+  const noteText = (wt === 'replacement' ? 'Reemplazo asignado: ' : wt === 'loaner' ? 'Préstamo asignado: ' : 'Equipo extra asignado: ')
+    + value + ' — Fecha: ' + shopFmtDateOnly(date);
+  try {
+    const fromStatus = t.status;
+    await db.collection('shop_tickets').doc(si.ticketId).update({
+      status: 'closed', workType: wt, estimatedPickupDate: si.estimatedPickupDate,
+      closedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(si.ticketId).collection('events').add({
+      type: 'status', fromStatus, toStatus: 'closed', note: noteText,
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    // Replacement also registers the new machine in the registry and
+    // retires the old one — same cross-link the "Add Replacement
+    // Machine" button on a Not Repairable ticket uses.
+    if (wt === 'replacement') {
+      const oldAsset = (window._shopAssets || []).find(a => a.id === t.assetId);
+      const newRef = await db.collection('shop_assets').add({
+        unitNumber: value, assetType: oldAsset?.assetType || t.assetType || 'vehicle',
+        iconKey: null, make: oldAsset?.make || null, model: oldAsset?.model || null, year: null,
+        vinOrSerial: null, divisionId: oldAsset?.divisionId || t.divisionId || null,
+        status: 'active', category: 'in_service', meterType: 'none', currentMeter: null,
+        ticketable: true, pendingReview: false, isLoanerTool: false,
+        replacesUnitNumber: t.unitNumber || null, replacesAssetId: t.assetId || null,
+        addedByUserId: CU.uid, addedByUserName: CD.name,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      if (t.assetId) {
+        try {
+          await db.collection('shop_assets').doc(t.assetId).update({
+            status: 'retired', replacedByUnitNumber: value, replacedByAssetId: newRef.id,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } catch (e) { /* new asset already saved either way — best-effort cross-link */ }
+      }
+    }
+    t.status = 'closed'; t.workType = wt;
+    window._syIntake = null;
+    toast('✓ Boleto cerrado');
+    document.getElementById('shop-yard-modal')?.remove();
+    shopPaintYardKiosk();
+  } catch (e) { toast('No se pudo cerrar — ' + e.message, 'err'); }
 }
 
 // Only shown for 'ready' (En Reparación) cards — the tools an actual
@@ -13601,7 +13730,11 @@ function kwNext() {
 
 async function kwSubmit(priority) {
   const kw = window._kw;
-  const isWalkIn = CD.role === 'yard';
+  // This wizard only exists on the Kiosk — anything entered through it is
+  // by definition equipment that's already physically at the yard, admin
+  // preview included, so it always skips straight to In Progress instead
+  // of waiting on a separate "confirm it arrived" tap.
+  const isWalkIn = true;
   try {
     const ref = await db.collection('shop_tickets').add({
       assetId: kw.assetId, unitNumber: kw.unitNumber || '', assetType: kw.assetType || null, iconKey: kw.iconKey || null, divisionId: kw.divisionId,
