@@ -13018,19 +13018,17 @@ async function shopYardAddNote(ticketId, kind) {
 // and what kind of work does it need. Reuses the same #syd-body element
 // the confirm screen paints into, inside the already-open modal.
 window._syIntake = null;
-// Four of these (part/repair/full_service/sharpening) just record what's
-// happening and leave the ticket open for the repair to continue.
-// Replacement/loaner/extra are different — they're a substitute
-// hand-off, not a repair being tracked on this ticket, so each opens one
-// more screen (which unit + date) and ends with an explicit close.
-// "Other" gets a free-text description instead of a fixed label but
-// still leaves the ticket open.
+// Sharpening/Complete Service just record what's happening and leave
+// the ticket open for the repair to continue. Replacement/Loaner are
+// different — they're a substitute hand-off, not a repair being
+// tracked on this ticket, so each opens one more screen (which unit +
+// date) and ends with an explicit close. Other gets a free-text
+// description instead of a fixed label but still leaves the ticket open.
 const SY_WORK_TYPES = [
-  ['replacement','Reemplazo'], ['part','Repuesto'], ['repair','Reparación'],
-  ['full_service','Servicio Completo'], ['sharpening','Afilado'], ['other','Otro'],
-  ['loaner','Préstamo'], ['extra','Extra']
+  ['replacement','Reemplazo'], ['sharpening','Afilado'], ['full_service','Servicio Completo'],
+  ['loaner','Préstamo'], ['other','Otro']
 ];
-const SY_RESOLVE_TYPES = ['replacement','loaner','extra'];
+const SY_RESOLVE_TYPES = ['replacement','loaner'];
 function shopWorkTypeLabel(v) {
   const hit = SY_WORK_TYPES.find(x => x[0] === v);
   return hit ? hit[1] : (v || '—');
@@ -13074,8 +13072,8 @@ function shopPaintYardIntake() {
   } else {
     // replacement / loaner / extra — collect which unit + date, then an
     // explicit Cerrar Boleto (never an automatic close on selection).
-    const titles = { replacement:'Equipo de Reemplazo', loaner:'Préstamo Asignado', extra:'Equipo Extra Asignado' };
-    const numLabels = { replacement:'Número de Equipo Nuevo', loaner:'Número de Préstamo', extra:'Número de Equipo Extra' };
+    const titles = { replacement:'Equipo de Reemplazo', loaner:'Préstamo Asignado' };
+    const numLabels = { replacement:'Número de Equipo Nuevo', loaner:'Número de Préstamo' };
     inner = shopYardIntakeHead(t, 'Un paso más')
       + '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">' + titles[si.workType] + '</div>'
       + '<div class="fg" style="margin-bottom:12px"><label>' + numLabels[si.workType] + '</label><input type="text" id="syi-resolve-value" value="' + esc(si.resolveValue || '') + '"></div>'
@@ -13170,7 +13168,7 @@ async function shopYardIntakeCloseWithResolution() {
   const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
   if (!t) return;
   const wt = si.workType;
-  const noteText = (wt === 'replacement' ? 'Reemplazo asignado: ' : wt === 'loaner' ? 'Préstamo asignado: ' : 'Equipo extra asignado: ')
+  const noteText = (wt === 'replacement' ? 'Reemplazo asignado: ' : 'Préstamo asignado: ')
     + value + ' — Fecha: ' + shopFmtDateOnly(date);
   try {
     const fromStatus = t.status;
