@@ -13028,7 +13028,7 @@ const SY_WORK_TYPES = [
   ['replacement','Reemplazo'], ['sharpening','Afilado'], ['full_service','Servicio Completo'],
   ['loaner','Préstamo'], ['other','Otro']
 ];
-const SY_RESOLVE_TYPES = ['replacement','loaner'];
+const SY_RESOLVE_TYPES = ['replacement'];
 function shopWorkTypeLabel(v) {
   const hit = SY_WORK_TYPES.find(x => x[0] === v);
   return hit ? hit[1] : (v || '—');
@@ -13069,15 +13069,27 @@ function shopPaintYardIntake() {
       + '<textarea id="syi-other-desc" rows="4" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical">' + esc(si.resolveValue || '') + '</textarea>'
       + '<button onclick="shopYardIntakeFinishOther()" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Guardar</button>'
       + '<button onclick="shopYardIntakeBackTo2()" style="width:100%;margin-top:10px;padding:12px;font-size:13px;font-weight:700;background:none;color:var(--text3);border:none;cursor:pointer">← Atrás</button>';
-  } else {
-    // replacement / loaner / extra — collect which unit + date, then an
-    // explicit Cerrar Boleto (never an automatic close on selection).
-    const titles = { replacement:'Equipo de Reemplazo', loaner:'Préstamo Asignado' };
-    const numLabels = { replacement:'Número de Equipo Nuevo', loaner:'Número de Préstamo' };
+  } else if (si.workType === 'loaner') {
+    // A loaner is still an asset that has to come back — this does NOT
+    // close the ticket. Saves loanerNumber/loanerReturnDate the same way
+    // the Progreso panel's loaner section does, so the existing "can't
+    // close until returned" gate on the pickup screen, the Loaner Tools
+    // inventory, and the 72-hour escalation all apply exactly like they
+    // already do for a loaner assigned mid-repair.
     inner = shopYardIntakeHead(t, 'Un paso más')
-      + '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">' + titles[si.workType] + '</div>'
-      + '<div class="fg" style="margin-bottom:12px"><label>' + numLabels[si.workType] + '</label><input type="text" id="syi-resolve-value" value="' + esc(si.resolveValue || '') + '"></div>'
-      + '<div class="fg"><label>Fecha' + (si.workType === 'replacement' ? ' Asignada' : '') + '</label><input type="date" id="syi-resolve-date" value="' + esc(si.resolveDate || '') + '"></div>'
+      + '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">Préstamo Asignado</div>'
+      + '<div class="fg" style="margin-bottom:12px"><label>Número de Préstamo</label><input type="text" id="syi-resolve-value" value="' + esc(si.resolveValue || '') + '"></div>'
+      + '<div class="fg"><label>Fecha de Devolución Esperada</label><input type="date" id="syi-resolve-date" value="' + esc(si.resolveDate || '') + '"></div>'
+      + '<div style="font-size:12px;color:var(--text3);margin-top:8px;line-height:1.5">Este boleto seguirá abierto hasta que el préstamo sea devuelto.</div>'
+      + '<button onclick="shopYardIntakeFinishLoaner()" style="width:100%;margin-top:16px;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Guardar</button>'
+      + '<button onclick="shopYardIntakeBackTo2()" style="width:100%;margin-top:10px;padding:12px;font-size:13px;font-weight:700;background:none;color:var(--text3);border:none;cursor:pointer">← Atrás</button>';
+  } else {
+    // replacement — collect the new unit + date, then an explicit
+    // Cerrar Boleto (never an automatic close on selection).
+    inner = shopYardIntakeHead(t, 'Un paso más')
+      + '<div style="font-size:19px;font-weight:800;margin-bottom:14px;text-align:center">Equipo de Reemplazo</div>'
+      + '<div class="fg" style="margin-bottom:12px"><label>Número de Equipo Nuevo</label><input type="text" id="syi-resolve-value" value="' + esc(si.resolveValue || '') + '"></div>'
+      + '<div class="fg"><label>Fecha Asignada</label><input type="date" id="syi-resolve-date" value="' + esc(si.resolveDate || '') + '"></div>'
       + '<button onclick="shopYardIntakeCloseWithResolution()" style="width:100%;margin-top:20px;padding:16px;font-size:16px;font-weight:800;background:var(--danger);color:#fff;border:none;border-radius:12px;cursor:pointer">Cerrar Boleto</button>'
       + '<button onclick="shopYardIntakeBackTo2()" style="width:100%;margin-top:10px;padding:12px;font-size:13px;font-weight:700;background:none;color:var(--text3);border:none;cursor:pointer">← Atrás</button>';
   }
@@ -13153,12 +13165,42 @@ async function shopYardIntakeFinishOther() {
     shopPaintYardKiosk();
   } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
 }
-// Replacement/loaner/extra — the hand-off itself is the resolution, so
-// this closes the ticket outright once the mechanic confirms. Deliberately
-// NOT the same loanerNumber/loanerReturned fields the mid-repair loaner
-// system uses (that one blocks closing until returned and feeds the
-// 72-hour escalation) — this is a different situation with nothing to
-// track a return against, so it's logged as a plain timeline note instead.
+// A loaner is an asset that has to come back, unlike replacement — this
+// reuses the exact same loanerNumber/loanerReturnDate/loanerReturned
+// fields the mid-repair Progreso panel writes, so the pickup screen's
+// existing hard gate ("can't close while a loaner's still out"), the
+// Loaner Tools inventory, and the 72-hour #loaners escalation all pick
+// this up automatically — nothing new to wire up for those.
+async function shopYardIntakeFinishLoaner() {
+  const si = window._syIntake;
+  const loanerNumber = (document.getElementById('syi-resolve-value').value || '').trim();
+  const loanerReturnDate = document.getElementById('syi-resolve-date').value;
+  if (!loanerNumber) { toast('Completa el número de préstamo', 'err'); return; }
+  if (!loanerReturnDate) { toast('Selecciona una fecha de devolución esperada', 'err'); return; }
+  const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
+  if (!t) return;
+  try {
+    await db.collection('shop_tickets').doc(si.ticketId).update({
+      loanerNumber, loanerReturnDate, loanerReturned: false,
+      estimatedPickupDate: si.estimatedPickupDate, workType: 'loaner',
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(si.ticketId).collection('events').add({
+      type: 'note', text: 'Préstamo asignado: ' + loanerNumber + ' — devolución esperada ' + shopFmtDateOnly(loanerReturnDate),
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.loanerNumber = loanerNumber; t.loanerReturnDate = loanerReturnDate; t.loanerReturned = false;
+    t.estimatedPickupDate = si.estimatedPickupDate; t.workType = 'loaner';
+    window._syIntake = null;
+    toast('✓ Préstamo guardado');
+    document.getElementById('shop-yard-modal')?.remove();
+    shopPaintYardKiosk();
+  } catch (e) { toast('No se pudo guardar — ' + e.message, 'err'); }
+}
+
+// Replacement — the new machine IS the resolution, so this closes the
+// ticket outright once the mechanic confirms, and registers/cross-links
+// the new asset in the registry.
 async function shopYardIntakeCloseWithResolution() {
   const si = window._syIntake;
   const value = (document.getElementById('syi-resolve-value').value || '').trim();
@@ -13168,8 +13210,7 @@ async function shopYardIntakeCloseWithResolution() {
   const t = (window._shopTickets || []).find(x => x.id === si.ticketId);
   if (!t) return;
   const wt = si.workType;
-  const noteText = (wt === 'replacement' ? 'Reemplazo asignado: ' : 'Préstamo asignado: ')
-    + value + ' — Fecha: ' + shopFmtDateOnly(date);
+  const noteText = 'Reemplazo asignado: ' + value + ' — Fecha: ' + shopFmtDateOnly(date);
   try {
     const fromStatus = t.status;
     await db.collection('shop_tickets').doc(si.ticketId).update({
