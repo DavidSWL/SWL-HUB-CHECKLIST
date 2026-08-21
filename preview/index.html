@@ -12913,6 +12913,7 @@ function shopYardConfirm(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
   window._syIntake = null;
+  window._syReadyMode = 'menu';
   const ex = document.getElementById('shop-yard-modal'); if (ex) ex.remove();
   const m = document.createElement('div');
   m.id = 'shop-yard-modal';
@@ -12929,32 +12930,49 @@ async function shopPaintYardConfirm(ticketId, kind) {
   const t = (window._shopTickets || []).find(x => x.id === ticketId);
   if (!t) return;
   // First time opening an in-progress ticket, walk through a 2-step
-  // intake (est. return date, what work it needs) before the normal
-  // update screen — keeps the mechanic's first look focused on exactly
-  // those two questions instead of the whole Progreso panel at once.
-  // Already-intake'd tickets (or any other kind) go straight through.
+  // intake (est. return date, what work it needs) before anything else
+  // — keeps the mechanic's first look focused on exactly those two
+  // questions instead of the whole Progreso panel at once.
   if (kind === 'ready' && !(t.estimatedPickupDate && t.workType) && !window._syIntake) {
     shopYardIntakeStart(ticketId);
     return;
   }
+  // Already-intake'd "En Reparación" tickets open to a small menu —
+  // view what's been entered, update it, or mark ready — instead of
+  // dropping straight back into the full edit screen every time.
+  if (kind === 'ready' && (window._syReadyMode || 'menu') === 'menu') {
+    body.innerHTML = shopYardReadyMenuHtml(ticketId, t);
+    return;
+  }
+
   let events = [];
   try {
     const snap = await db.collection('shop_tickets').doc(ticketId).collection('events').orderBy('createdAt','asc').get();
     events = snap.docs.map(d => ({ id:d.id, ...d.data() }));
   } catch (e) { /* timeline is best-effort — confirm still works without it */ }
 
-  const actionLabel = { dropoff:'Confirmar Entrega en el Patio', ready:'Marcar Listo para Recoger', pickup:'Confirmar Recogida' }[kind];
-  const question = { dropoff:'¿Confirmar que esta herramienta, equipo o vehículo fue entregado en el patio?', ready:'¿Confirmar que esta herramienta, equipo o vehículo está lista para recoger?', pickup:'¿Confirmar que esta herramienta, equipo o vehículo fue recogido?' }[kind];
+  if (kind === 'ready' && window._syReadyMode === 'view') {
+    body.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+      + '<button onclick="shopYardBackToMenu(\'' + ticketId + '\')" style="background:none;border:none;font-size:14px;font-weight:700;cursor:pointer;color:var(--text2)">← Atrás</button>'
+      + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button></div>'
+      + '<div style="text-align:center;font-size:24px;font-weight:800;margin-bottom:16px">' + esc(t.unitNumber || '—') + '</div>'
+      + shopYardProgressViewHtml(t, events);
+    return;
+  }
+
+  const actionLabel = { dropoff:'Confirmar Entrega en el Patio', ready:'Marcar Listo para Recoger', pickup:'Cerrar Boleto' }[kind];
+  const question = { dropoff:'¿Confirmar que esta herramienta, equipo o vehículo fue entregado en el patio?', ready:'¿Confirmar que esta herramienta, equipo o vehículo está lista para recoger?', pickup:'¿Confirmar y cerrar este boleto?' }[kind];
 
   const badges = (t.partsPending ? '<span style="font-size:9px;font-weight:800;color:var(--warn);background:var(--warn-l);padding:3px 8px;border-radius:20px;margin:0 3px">PIEZAS PENDIENTES</span>' : '')
     + (t.outsourced ? '<span style="font-size:9px;font-weight:800;color:var(--info);background:var(--info-l);padding:3px 8px;border-radius:20px;margin:0 3px">TALLER EXTERNO</span>' : '');
 
   body.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:-8px">'
-    // Delete is admin-only and lives ONLY here in the kiosk view — never
-    // in the manager Shop Tickets screens — since it's meant for David to
-    // clear out test tickets he creates while previewing the kiosk, not
-    // as a general way to erase real ticket history.
-    + (shopIsDavid() ? '<button onclick="shopYardDeleteTicket(\'' + ticketId + '\')" style="background:none;border:none;font-size:13px;font-weight:700;cursor:pointer;color:var(--danger);padding:4px" title="Eliminar boleto">🗑 Eliminar</button>' : '<span></span>')
+    + (kind === 'ready' ? '<button onclick="shopYardBackToMenu(\'' + ticketId + '\')" style="background:none;border:none;font-size:14px;font-weight:700;cursor:pointer;color:var(--text2);padding:4px">← Atrás</button>'
+        // Delete is admin-only and lives ONLY here in the kiosk view —
+        // never in the manager Shop Tickets screens — since it's meant
+        // for David to clear out test tickets he creates while
+        // previewing the kiosk, not as a general way to erase history.
+        : (shopIsDavid() ? '<button onclick="shopYardDeleteTicket(\'' + ticketId + '\')" style="background:none;border:none;font-size:13px;font-weight:700;cursor:pointer;color:var(--danger);padding:4px" title="Eliminar boleto">🗑 Eliminar</button>' : '<span></span>'))
     + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:4px" title="Cerrar">✕</button></div>'
     + '<div style="text-align:center">'
     + '<div style="font-size:28px;font-weight:800;margin-bottom:6px">' + esc(t.unitNumber || '—') + '</div>'
@@ -12965,32 +12983,82 @@ async function shopPaintYardConfirm(ticketId, kind) {
     + (badges ? '<div style="margin-bottom:12px">' + badges + '</div>' : '')
     + '</div>'
     + (kind === 'ready' ? shopYardProgressBlock(ticketId, t) : '')
-    // Enter the actual pickup date/time in the same visit as marking it
-    // ready, instead of a separate trip back to this card later — the
-    // full pickup screen (loaner gate included) still exists for the
-    // real hand-off moment.
-    + (kind === 'ready' ? '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
-        + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Fecha de Recogida</div>'
-        + shopYardPickupDateFields(ticketId, t, 'ready')
-        + '</div>' : '')
+    // The date here means when the equipment was actually set down in
+    // the pickup/staging area, not when the customer physically takes
+    // it — that's still whatever moment "Cerrar Boleto" gets tapped.
     + (kind === 'pickup' ? shopYardPickupBlock(ticketId, t) : '')
     + '<div style="font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:9px">Cronología</div>'
     + '<div style="max-height:180px;overflow-y:auto;margin-bottom:16px;text-align:left">'
-    + (events.length ? events.map(ev => {
-        let line;
-        if (ev.type === 'created') line = 'Boleto enviado' + (ev.note ? ' — ' + esc(ev.note) : '');
-        else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (ev.note ? ' — ' + esc(ev.note) : '');
-        else if (ev.type === 'parts') line = ev.partsPending ? 'Marcado piezas pendientes' : 'Piezas pendientes eliminado';
-        else line = esc(ev.text || '');
-        return '<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:14px">'
-          + '<span style="color:var(--text)">' + line + '</span>'
-          + '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
-      }).join('') : '<div style="font-size:13px;color:var(--text3)">Sin actividad aún.</div>')
+    + shopYardTimelineHtml(events)
     + '</div>'
     + '<textarea id="syd-note-' + ticketId + '" rows="2" placeholder="Nota para la cuadrilla o admin…" style="width:100%;font-size:15px;padding:11px 13px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:10px;resize:vertical"></textarea>'
     + '<button onclick="shopYardAddNote(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:14px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer;margin-bottom:20px">+ Agregar Nota</button>'
     + '<div style="text-align:center;font-size:17px;color:var(--text);margin-bottom:18px">' + question + '</div>'
     + '<button onclick="shopYardDoConfirm(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:20px;font-size:19px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ ' + actionLabel + '</button>';
+}
+
+function shopYardTimelineHtml(events) {
+  return events.length ? events.map(ev => {
+      let line;
+      if (ev.type === 'created') line = 'Boleto enviado' + (ev.note ? ' — ' + esc(ev.note) : '');
+      else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (ev.note ? ' — ' + esc(ev.note) : '');
+      else if (ev.type === 'parts') line = ev.partsPending ? 'Marcado piezas pendientes' : 'Piezas pendientes eliminado';
+      else line = esc(ev.text || '');
+      return '<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:14px">'
+        + '<span style="color:var(--text)">' + line + '</span>'
+        + '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
+    }).join('') : '<div style="font-size:13px;color:var(--text3)">Sin actividad aún.</div>';
+}
+
+// The small landing screen for an already-intake'd "En Reparación"
+// ticket — "click on it, see what's been entered, THEN choose to
+// update" instead of the full Progreso panel every single visit.
+function shopYardReadyMenuHtml(ticketId, t) {
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:-8px">'
+    + (shopIsDavid() ? '<button onclick="shopYardDeleteTicket(\'' + ticketId + '\')" style="background:none;border:none;font-size:13px;font-weight:700;cursor:pointer;color:var(--danger);padding:4px" title="Eliminar boleto">🗑 Eliminar</button>' : '<span></span>')
+    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3);padding:4px" title="Cerrar">✕</button></div>'
+    + '<div style="text-align:center;margin-bottom:6px">'
+    + '<div style="font-size:28px;font-weight:800;margin-bottom:6px">' + esc(t.unitNumber || '—') + '</div>'
+    + '<div style="font-size:16px;color:var(--text2);margin-bottom:7px">' + esc(t.issue || '') + '</div>'
+    + (t.foremanName ? '<div style="font-size:13.5px;color:var(--text3);margin-bottom:4px">👷 ' + esc(t.foremanName) + '</div>' : '')
+    + (t.workType ? '<div style="font-size:13.5px;color:var(--text3)">🔧 ' + shopWorkTypeLabel(t.workType) + '</div>' : '')
+    + '</div>'
+    + '<div style="display:flex;flex-direction:column;gap:10px;margin-top:20px">'
+    + '<button onclick="shopYardShowProgressView(\'' + ticketId + '\')" style="width:100%;padding:18px;font-size:16px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">👁 Ver Progreso</button>'
+    + '<button onclick="shopYardShowProgressUpdate(\'' + ticketId + '\')" style="width:100%;padding:18px;font-size:16px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">✎ Actualizar Progreso</button>'
+    + '<button onclick="shopYardQuickMarkReady(\'' + ticketId + '\')" style="width:100%;padding:20px;font-size:18px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ Listo para Recoger</button>'
+    + '</div>';
+}
+// Read-only — what's been entered so far, no editable fields.
+function shopYardProgressViewHtml(t, events) {
+  return '<div style="text-align:left">'
+    + '<div style="background:var(--surface2);border-radius:14px;padding:16px;margin-bottom:16px;font-size:13.5px">'
+      + (t.workType ? '<div style="margin-bottom:6px"><b>Trabajo:</b> ' + shopWorkTypeLabel(t.workType) + '</div>' : '')
+      + (t.estimatedPickupDate ? '<div style="margin-bottom:6px"><b>Fecha Est. de Regreso:</b> ' + shopFmtDateOnly(t.estimatedPickupDate) + '</div>' : '')
+      + (t.loanerNumber ? '<div style="margin-bottom:6px;' + (shopIsLoanerOverdue(t) ? 'color:var(--danger)' : '') + '"><b>🔁 Préstamo:</b> ' + esc(t.loanerNumber) + (t.loanerReturnDate ? ' — vence ' + shopFmtDateOnly(t.loanerReturnDate) : '') + (t.loanerReturned ? ' (devuelto)' : (shopIsLoanerOverdue(t) ? ' — VENCIDO' : '')) + '</div>' : '')
+      + (t.partsPending ? '<div style="color:var(--warn)">⏳ Piezas pendientes</div>' : '')
+      + (t.outsourced ? '<div style="color:var(--info)">🚚 Enviado a taller externo</div>' : '')
+      + (!t.workType && !t.estimatedPickupDate && !t.loanerNumber && !t.partsPending && !t.outsourced ? '<div style="color:var(--text3)">Nada registrado todavía.</div>' : '')
+    + '</div>'
+    + '<div style="font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:9px">Cronología</div>'
+    + '<div style="max-height:320px;overflow-y:auto">' + shopYardTimelineHtml(events) + '</div>'
+    + '</div>';
+}
+function shopYardShowProgressView(ticketId) {
+  window._syReadyMode = 'view';
+  shopPaintYardConfirm(ticketId, 'ready');
+}
+function shopYardShowProgressUpdate(ticketId) {
+  window._syReadyMode = 'update';
+  shopPaintYardConfirm(ticketId, 'ready');
+}
+function shopYardBackToMenu(ticketId) {
+  window._syReadyMode = 'menu';
+  shopPaintYardConfirm(ticketId, 'ready');
+}
+async function shopYardQuickMarkReady(ticketId) {
+  if (!confirm('¿Confirmar que está listo para recoger?')) return;
+  await shopYardDoConfirm(ticketId, 'ready');
 }
 
 // Translates in place — no navigating away from the kiosk. Uses Google's
@@ -13408,7 +13476,8 @@ function shopYardPickupBlock(ticketId, t) {
   // normal pickup date/time, same as a ticket that never had a loaner.
   const hasOpenLoaner = !!(t.loanerNumber && !t.loanerReturned);
   return '<div style="background:var(--surface2);border-radius:14px;padding:18px;margin-bottom:16px;text-align:left;font-size:15px">'
-    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:12px">Fecha de Recogida</div>'
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:4px">Equipo Dejado en Área de Recogida</div>'
+    + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:12px">Fecha y hora en que se dejó aquí, no cuándo lo recoge el cliente.</div>'
     + shopYardPickupDateFields(ticketId, t, 'pickup')
     + (hasOpenLoaner ? '<div style="border-top:1px solid var(--border2);margin-top:14px;padding-top:14px">'
         + '<div style="font-size:13px;font-weight:700;color:var(--danger);background:var(--danger-l);padding:10px 12px;border-radius:var(--r);margin-bottom:12px">🔁 Préstamo ' + esc(t.loanerNumber) + ' — este boleto no se puede cerrar hasta que el préstamo sea devuelto.</div>'
