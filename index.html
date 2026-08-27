@@ -12170,9 +12170,14 @@ async function shopPaintTicketDetail(ticketId) {
         if (ev.type === 'created') line = T('Ticket submitted','Boleto enviado') + (noteDisplay ? ' — ' + esc(noteDisplay) : '');
         else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (noteDisplay ? ' — ' + esc(noteDisplay) : '');
         else if (ev.type === 'parts') line = ev.partsPending ? T('Flagged parts pending','Marcado piezas pendientes') : T('Cleared parts pending','Piezas pendientes eliminado');
+        else if (ev.type === 'photo') line = textDisplay ? esc(textDisplay) : '📷 ' + T('Photo added','Foto agregada');
         else line = esc(textDisplay || '');
+        const photoThumb = (ev.type === 'photo' && ev.photoData)
+          ? '<img src="' + ev.photoData + '" onclick="shopViewPhoto(this.src)" style="width:120px;height:120px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:pointer;display:block">'
+          : '';
         return '<div style="padding:7px 0;border-bottom:1px solid var(--border);font-size:12px">'
           + '<span style="color:var(--text)">' + line + '</span>'
+          + photoThumb
           + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
       }).join('') : '<div style="font-size:11.5px;color:var(--text3)">' + T('No activity yet.','Sin actividad aún.') + '</div>')
     + '</div>';
@@ -12980,8 +12985,11 @@ async function shopPaintYardConfirm(ticketId, kind) {
     + '<div style="max-height:180px;overflow-y:auto;margin-bottom:16px;text-align:left">'
     + shopYardTimelineHtml(events)
     + '</div>'
-    + '<textarea id="syd-note-' + ticketId + '" rows="2" placeholder="Nota para la cuadrilla o admin…" style="width:100%;font-size:15px;padding:11px 13px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:10px;resize:vertical"></textarea>'
-    + '<button onclick="shopYardAddNote(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:14px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer;margin-bottom:20px">+ Agregar Nota</button>'
+    + '<textarea id="syd-note-' + ticketId + '" rows="2" placeholder="Nota para la cuadrilla o admin… (opcional con la foto)" style="width:100%;font-size:15px;padding:11px 13px;border:1.5px solid var(--border2);border-radius:var(--r);background:var(--surface);color:var(--text);font-family:inherit;margin-bottom:10px;resize:vertical"></textarea>'
+    + '<div style="display:flex;gap:8px;margin-bottom:20px">'
+    + '<button onclick="shopYardAddNote(\'' + ticketId + '\',\'' + kind + '\')" style="flex:1;padding:14px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">+ Agregar Nota</button>'
+    + '<button onclick="shopYardAddPhoto(\'' + ticketId + '\',\'' + kind + '\')" style="flex:1;padding:14px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">📷 Agregar Foto</button>'
+    + '</div>'
     + '<div style="text-align:center;font-size:17px;color:var(--text);margin-bottom:18px">' + question + '</div>'
     + '<button onclick="shopYardDoConfirm(\'' + ticketId + '\',\'' + kind + '\')" style="width:100%;padding:20px;font-size:19px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ ' + actionLabel + '</button>';
 }
@@ -12992,9 +13000,14 @@ function shopYardTimelineHtml(events) {
       if (ev.type === 'created') line = 'Boleto enviado' + (ev.note ? ' — ' + esc(ev.note) : '');
       else if (ev.type === 'status') line = shopTicketStatusLabel(ev.fromStatus) + ' → ' + shopTicketStatusLabel(ev.toStatus) + (ev.note ? ' — ' + esc(ev.note) : '');
       else if (ev.type === 'parts') line = ev.partsPending ? 'Marcado piezas pendientes' : 'Piezas pendientes eliminado';
+      else if (ev.type === 'photo') line = ev.text ? esc(ev.text) : '📷 Foto agregada';
       else line = esc(ev.text || '');
+      const photoThumb = (ev.type === 'photo' && ev.photoData)
+        ? '<img src="' + ev.photoData + '" onclick="shopViewPhoto(this.src)" style="width:140px;height:140px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:pointer;display:block">'
+        : '';
       return '<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:14px">'
         + '<span style="color:var(--text)">' + line + '</span>'
+        + photoThumb
         + '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + esc(ev.userName || '—') + ' · ' + shopFmtWhen(ev.createdAt) + '</div></div>';
     }).join('') : '<div style="font-size:13px;color:var(--text3)">Sin actividad aún.</div>';
 }
@@ -13079,6 +13092,75 @@ async function shopYardAddNote(ticketId, kind) {
     });
     await shopPaintYardConfirm(ticketId, kind);
   } catch (e) { toast('No se pudo agregar — ' + e.message, 'err'); }
+}
+
+// Photos on a ticket — no paid storage service needed. Resized/
+// compressed client-side with Canvas and stored as a data URI directly
+// on its own event document (each event is a separate Firestore doc,
+// so this stays well under the 1MB-per-document limit even though the
+// ticket doc itself never carries any image weight). "capture"
+// prompts a phone/tablet camera directly; on a desktop it just opens
+// the normal file picker.
+function shopCompressImageFile(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+          else { w = Math.round(w * maxDim / h); h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('No se pudo leer la imagen'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.readAsDataURL(file);
+  });
+}
+async function shopYardAddPhoto(ticketId, kind) {
+  let inp = document.getElementById('syd-photo-input');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
+    inp.id = 'syd-photo-input'; inp.style.display = 'none';
+    document.body.appendChild(inp);
+  }
+  inp.onchange = async () => {
+    const file = inp.files && inp.files[0];
+    inp.value = '';
+    if (!file) return;
+    try {
+      toast('Procesando foto…');
+      let dataUrl = await shopCompressImageFile(file, 1000, 0.65);
+      if (dataUrl.length > 700000) dataUrl = await shopCompressImageFile(file, 800, 0.5);
+      if (dataUrl.length > 900000) { toast('La foto sigue siendo muy grande — intenta con otra', 'err'); return; }
+      const ta = document.getElementById('syd-note-' + ticketId);
+      const caption = ta ? ta.value.trim() : '';
+      await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+        type: 'photo', photoData: dataUrl, text: caption || null,
+        userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      if (ta) ta.value = '';
+      toast('✓ Foto agregada');
+      await shopPaintYardConfirm(ticketId, kind);
+    } catch (e) { toast('No se pudo agregar la foto — ' + e.message, 'err'); }
+  };
+  inp.click();
+}
+function shopViewPhoto(src) {
+  const m = document.createElement('div');
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:900;display:flex;align-items:center;justify-content:center;padding:24px;cursor:pointer';
+  m.onclick = () => m.remove();
+  m.innerHTML = '<img src="' + src + '" style="max-width:100%;max-height:100%;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5)">';
+  document.body.appendChild(m);
 }
 
 // ── Mechanic intake wizard — first tap on an "En Reparación" ticket ──
