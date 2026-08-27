@@ -12938,6 +12938,10 @@ async function shopPaintYardConfirm(ticketId, kind) {
     body.innerHTML = shopYardReadyMenuHtml(ticketId, t);
     return;
   }
+  if (kind === 'ready' && window._syReadyMode === 'note') {
+    body.innerHTML = shopYardAddNoteMenuHtml(ticketId, t);
+    return;
+  }
 
   let events = [];
   try {
@@ -13027,6 +13031,10 @@ function shopYardReadyMenuHtml(ticketId, t) {
     + '</div>'
     + '<div style="display:flex;flex-direction:column;gap:10px;margin-top:20px">'
     + '<button onclick="shopYardShowProgressView(\'' + ticketId + '\')" style="width:100%;padding:18px;font-size:16px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">👁 Ver Progreso</button>'
+    + '<div style="display:flex;gap:10px">'
+    + '<button onclick="shopYardShowAddNote(\'' + ticketId + '\')" style="flex:1;padding:18px 10px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">📝 Agregar Nota</button>'
+    + '<button onclick="shopYardAddPhoto(\'' + ticketId + '\',\'ready\')" style="flex:1;padding:18px 10px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">📷 Agregar Foto</button>'
+    + '</div>'
     + '<button onclick="shopYardShowProgressUpdate(\'' + ticketId + '\')" style="width:100%;padding:18px;font-size:16px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">✎ Actualizar Progreso</button>'
     + '<button onclick="shopYardQuickMarkReady(\'' + ticketId + '\')" style="width:100%;padding:20px;font-size:18px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ Listo para Recoger</button>'
     + '</div>';
@@ -13061,6 +13069,37 @@ function shopYardBackToMenu(ticketId) {
 async function shopYardQuickMarkReady(ticketId) {
   if (!confirm('¿Confirmar que está listo para recoger?')) return;
   await shopYardDoConfirm(ticketId, 'ready');
+}
+// Dedicated one-tap paths for the two most common quick updates — a
+// note or a photo shouldn't require opening the full Actualizar
+// Progreso screen (dates, parts pending, loaner, etc.) just to log
+// them. Both still land in the same events subcollection, so they show
+// up in Ticket Progress's timeline exactly like anything else.
+function shopYardShowAddNote(ticketId) {
+  window._syReadyMode = 'note';
+  shopPaintYardConfirm(ticketId, 'ready');
+}
+function shopYardAddNoteMenuHtml(ticketId, t) {
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<button onclick="shopYardBackToMenu(\'' + ticketId + '\')" style="background:none;border:none;font-size:14px;font-weight:700;cursor:pointer;color:var(--text2)">← Atrás</button>'
+    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div style="text-align:center;font-size:22px;font-weight:800;margin-bottom:18px">' + esc(t.unitNumber || '—') + '</div>'
+    + '<textarea id="syd-note-' + ticketId + '" rows="5" placeholder="Nota para la cuadrilla o admin…" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical;margin-bottom:16px"></textarea>'
+    + '<button onclick="shopYardAddNoteQuick(\'' + ticketId + '\')" style="width:100%;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Guardar</button>';
+}
+async function shopYardAddNoteQuick(ticketId) {
+  const ta = document.getElementById('syd-note-' + ticketId);
+  const text = ta ? ta.value.trim() : '';
+  if (!text) { toast('Escribe una nota', 'err'); return; }
+  try {
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text, userId: CU.uid, userName: CD.name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    toast('✓ Nota agregada');
+    window._syReadyMode = 'menu';
+    await shopPaintYardConfirm(ticketId, 'ready');
+  } catch (e) { toast('No se pudo agregar — ' + e.message, 'err'); }
 }
 
 // Translates in place — no navigating away from the kiosk. Uses Google's
