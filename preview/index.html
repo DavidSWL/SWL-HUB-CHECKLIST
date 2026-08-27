@@ -11784,7 +11784,12 @@ function shopPaintTicketProgress() {
           + (t.pickupDate ? '<span>·</span><span>🕐 ' + T('Pickup','Recogida') + ' ' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</span>'
               : (t.estimatedPickupDate ? '<span>·</span><span>🕐 ' + T('Est. pickup','Recogida est.') + ' ' + shopFmtDateOnly(t.estimatedPickupDate) + '</span>' : ''))
           + (t.deleted ? '<span>·</span><span style="color:var(--danger)">' + T('Deleted by','Eliminado por') + ' ' + esc(t.deletedByName || '—') + ' ' + shopFmtWhen(t.deletedAt) + '</span>' : '')
-          + '</div></div>'
+          + '</div>'
+          // Quick reference so a manager can tell where things stand
+          // without opening the ticket — the newest note or photo
+          // caption, whoever left it and when.
+          + (t.lastNoteText ? '<div style="font-size:11.5px;color:var(--text2);background:var(--surface2);border-radius:6px;padding:5px 8px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">💬 ' + esc(t.lastNoteText) + ' <span style="color:var(--text3)">— ' + esc(t.lastNoteBy || '') + ' · ' + shopFmtWhen(t.lastNoteAt) + '</span></div>' : '')
+          + '</div>'
           + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;color:' + shopTicketStatusColor(t.status) + ';background:' + shopTicketStatusBg(t.status) + ';white-space:nowrap">' + shopTicketStatusLabel(t.status) + '</span>'
           + '</div>'
           + (t.deleted ? '' : shopProgressTracker(t))
@@ -13098,6 +13103,17 @@ function shopYardAddNoteMenuHtml(ticketId, t) {
     + '<textarea id="syd-note-' + ticketId + '" rows="5" placeholder="Nota para la cuadrilla o admin…" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical;margin-bottom:16px"></textarea>'
     + '<button onclick="shopYardAddNoteQuick(\'' + ticketId + '\')" style="width:100%;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Guardar</button>';
 }
+// Ticket Progress lists tickets from a single doc fetch, not each one's
+// full events subcollection — so without this, the newest note/photo
+// was invisible until a manager opened the actual ticket. Denormalizing
+// the latest one onto the ticket doc itself lets the list show a quick-
+// reference preview with zero extra reads. Best-effort: never blocks
+// the real save if this secondary update fails for some reason.
+function shopUpdateLastNote(ticketId, text, byName) {
+  return db.collection('shop_tickets').doc(ticketId).update({
+    lastNoteText: text, lastNoteBy: byName, lastNoteAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).catch(() => {});
+}
 async function shopYardAddNoteQuick(ticketId) {
   const ta = document.getElementById('syd-note-' + ticketId);
   const text = ta ? ta.value.trim() : '';
@@ -13107,6 +13123,7 @@ async function shopYardAddNoteQuick(ticketId) {
       type: 'note', text, userId: CU.uid, userName: CD.name,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    await shopUpdateLastNote(ticketId, text, CD.name);
     toast('✓ Nota agregada');
     window._syReadyMode = 'menu';
     await shopPaintYardConfirm(ticketId, 'ready');
@@ -13140,6 +13157,7 @@ async function shopYardAddNote(ticketId, kind) {
       type: 'note', text, userId: CU.uid, userName: CD.name,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    await shopUpdateLastNote(ticketId, text, CD.name);
     await shopPaintYardConfirm(ticketId, kind);
   } catch (e) { toast('No se pudo agregar — ' + e.message, 'err'); }
 }
@@ -13208,7 +13226,10 @@ async function shopYardAddPhoto(ticketId, kind) {
         saved++;
       }
       if (ta) ta.value = '';
-      if (saved) toast('✓ ' + saved + ' foto' + (saved > 1 ? 's agregadas' : ' agregada'));
+      if (saved) {
+        await shopUpdateLastNote(ticketId, (caption ? caption + ' ' : '') + '📷 ' + saved + ' foto' + (saved > 1 ? 's' : ''), CD.name);
+        toast('✓ ' + saved + ' foto' + (saved > 1 ? 's agregadas' : ' agregada'));
+      }
       await shopPaintYardConfirm(ticketId, kind);
     } catch (e) { toast('No se pudo agregar la foto — ' + e.message, 'err'); }
   };
