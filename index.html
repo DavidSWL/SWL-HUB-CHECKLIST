@@ -13040,7 +13040,10 @@ function shopYardReadyMenuHtml(ticketId, t) {
     + '<button onclick="shopYardShowAddNote(\'' + ticketId + '\')" style="flex:1;padding:18px 10px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">📝 Agregar Nota</button>'
     + '<button onclick="shopYardAddPhoto(\'' + ticketId + '\',\'ready\')" style="flex:1;padding:18px 10px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">📷 Agregar Foto</button>'
     + '</div>'
-    + '<button onclick="shopYardShowProgressUpdate(\'' + ticketId + '\')" style="width:100%;padding:18px;font-size:16px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">✎ Actualizar Progreso</button>'
+    // "Actualizar Progreso" removed from the menu per David — Nota/Foto
+    // now cover it directly. The screen and its functions (dates, parts
+    // pending, outsourced, not-repairable, mid-repair loaner) are still
+    // in the code, just not linked from here anymore.
     + '<button onclick="shopYardQuickMarkReady(\'' + ticketId + '\')" style="width:100%;padding:20px;font-size:18px;font-weight:800;background:var(--swl-green);color:#fff;border:none;border-radius:14px;cursor:pointer">✅ Listo para Recoger</button>'
     + '</div>';
 }
