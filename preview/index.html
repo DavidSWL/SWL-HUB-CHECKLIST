@@ -6284,6 +6284,7 @@ async function renderAdmin() {
             <label class="btn sm" style="cursor:pointer" title="Upload photo">
               📷 <input type="file" accept="image/*" style="display:none" onchange="uploadUserPhoto('${d.id}',this)">
             </label>
+            <button class="btn sm" onclick="renameUser('${d.id}','${esc(u.name)}')">✎ Name</button>
             <button class="btn sm" onclick="showChangeRole('${d.id}','${u.role}','${esc(u.name)}')">⚙ Role</button>
             <button class="btn sm" onclick="toggleUser('${d.id}',${u.active})">${u.active?'Disable':'Enable'}</button>
           </div>
@@ -6482,6 +6483,27 @@ async function toggleUser(uid, active) {
     });
   } catch(e) { /* audit log failure is non-critical */ }
   toast('User ' + (active ? 'disabled' : 'enabled')); renderAdmin();
+}
+
+// One-click rename straight from the user row — no need to look up
+// their Firebase UID and go through the separate "Update Existing
+// Profile" form just to fix a name. Same audit-log pattern as
+// enabling/disabling a user, so a rename is traceable too.
+async function renameUser(uid, currentName) {
+  const newName = prompt('New name for this user:', currentName || '');
+  if (newName === null) return;
+  const trimmed = newName.trim();
+  if (!trimmed || trimmed === currentName) return;
+  try {
+    await db.collection('users').doc(uid).update({ name: trimmed });
+    await db.collection('sync_log').add({
+      action: 'user_renamed', targetUid: uid, targetName: trimmed, previousName: currentName,
+      by: CD.name, byUid: CU.uid, byRole: CD.role,
+      at: new Date().toISOString(), ts: firebase.firestore.FieldValue.serverTimestamp()
+    }).catch(() => {});
+    toast('✓ Name updated to ' + trimmed);
+    renderAdmin();
+  } catch (e) { toast('Error: ' + e.message, 'err'); }
 }
 
 async function createUserProfile() {
