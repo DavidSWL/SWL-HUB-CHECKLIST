@@ -910,7 +910,6 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   15%,45%,75% { box-shadow:0 0 0 7px rgba(220,38,38,.5); }
   30%,60%,90% { box-shadow:0 0 0 0 rgba(220,38,38,0); }
 }
-<div id="swl-preview-badge">⚠ Preview build — not the live app</div>
 .yard-flash-urgent { animation: yardFlashUrgent 1.8s ease-in-out 2; }
 @keyframes yardUrgentPulse {
   0%,100% { background:var(--surface); box-shadow:0 6px 18px -12px rgba(13,27,18,.18); }
@@ -952,6 +951,7 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
 </style>
 </head>
 <body>
+<div id="swl-preview-badge">⚠ Preview build — not the live app</div>
 
 <!-- ══════════════════════════════════════
      LOGIN
@@ -1099,7 +1099,18 @@ const ROLES = {
   // Chat included (not just the kiosk) so a shared yard account can still
   // report issues — David: "the only things he needs to see is yard kiosk
   // and the chat... he does not need or get access to anything else."
-  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)', restrictedTo:['yard-kiosk','shop-progress','chat'] }
+  yard:                 { label:'Yard Supervisor', branch:null, canViewAll:false, isManager:false, color:'var(--warn)', restrictedTo:['yard-kiosk','shop-progress','chat'] },
+  // Trees/Enhancements division managers — David: "they only have the view
+  // of ticket progress and the loaner chats... they should not have access
+  // to anything else." One shared role; branch carries WHICH division
+  // ('trees' or 'enhancements', matching SHOP_DIVISIONS ids exactly) so
+  // renderShopTicketProgress/shopOpenTicketDetail can scope their view to
+  // their own division's tickets instead of "tickets I personally
+  // submitted" (the default non-admin scoping, which would show them
+  // nothing). isManager:true is what makes #loaners visible to them via
+  // chVisibleChannels' audience:'managers' check — restrictedTo below is
+  // what stops that from also pulling in Weekly Items/Reports/Docs/etc.
+  division_manager:     { label:'Division Manager', branch:null, canViewAll:false, isManager:true, color:'#16A34A', restrictedTo:['shop-progress','chat'] }
 };
 
 const TEAM = [
@@ -1663,7 +1674,15 @@ function wsAreas() {
   const restrictedTo = ROLES[role]?.restrictedTo;
   if (restrictedTo) {
     const allowed = Array.isArray(restrictedTo) ? restrictedTo : [restrictedTo];
-    return areas.filter(a => a.screens.some(s => allowed.includes(s.id)));
+    // Trim to allowed screens WITHIN each kept area too, not just keep/drop
+    // whole areas — otherwise a restricted role sharing an area with a
+    // manager-only screen (e.g. division_manager in the 'shop' area, which
+    // also holds Submit Ticket) would still see that extra screen listed.
+    // No-op for yard/ops_specialist_oc since every screen in their kept
+    // areas was already in their allowed list.
+    return areas
+      .map(a => ({ ...a, screens: a.screens.filter(s => allowed.includes(s.id)) }))
+      .filter(a => a.screens.length);
   }
   return areas;
 }
@@ -6319,6 +6338,8 @@ async function renderAdmin() {
           <select id="nu-branch">
             <option value="OC">OC — Orange County</option>
             <option value="LA">LA — Los Angeles</option>
+            <option value="trees">Trees</option>
+            <option value="enhancements">Enhancements</option>
             <option value="ALL">ALL — Admin Access</option>
           </select>
         </div>
@@ -6913,7 +6934,7 @@ function showChangeRole(uid, currentRole, userName) {
     + '<select id="cr-new-role" style="width:100%;padding:8px 10px;background:#1E1E1E;border:1px solid #383838;border-radius:6px;color:#E0E0E0;font-size:13px">'+roleOptions+'</select></div>'
     + '<div style="margin-bottom:16px"><label style="font-size:11px;color:#888;display:block;margin-bottom:4px">New Branch</label>'
     + '<select id="cr-new-branch" style="width:100%;padding:8px 10px;background:#1E1E1E;border:1px solid #383838;border-radius:6px;color:#E0E0E0;font-size:13px">'
-    + '<option value="OC">OC — Orange County</option><option value="LA">LA — Los Angeles</option><option value="ALL">ALL — Both Branches</option>'
+    + '<option value="OC">OC — Orange County</option><option value="LA">LA — Los Angeles</option><option value="trees">Trees</option><option value="enhancements">Enhancements</option><option value="ALL">ALL — Both Branches</option>'
     + '</select></div>'
     + '<div style="display:flex;gap:8px"><button class="btn primary" id="apply-role-btn">Save Change</button>'
     + '<button class="btn" id="cancel-role-btn">Cancel</button></div>'
@@ -11685,7 +11706,15 @@ async function renderShopTicketProgress() {
   // has no access to this screen at all) — so admin gets every ticket,
   // unfiltered by submitter.
   const isAdmin = CD.role === 'admin';
-  const baseQuery = isAdmin ? db.collection('shop_tickets') : db.collection('shop_tickets').where('submittedByUserId','==',CU.uid);
+  // Trees/Enhancements division managers don't submit tickets themselves —
+  // they need every ticket for THEIR division, not just ones they entered.
+  // Branch carries which division (see ROLES.division_manager) and is set
+  // to the exact SHOP_DIVISIONS id ('trees'/'enhancements') when creating
+  // their account.
+  const divScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements')) ? CD.branch : null;
+  const baseQuery = isAdmin ? db.collection('shop_tickets')
+    : divScope ? db.collection('shop_tickets').where('divisionId','==',divScope)
+    : db.collection('shop_tickets').where('submittedByUserId','==',CU.uid);
   window._shopProgressUnsub = baseQuery
     .onSnapshot(snap => {
       const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() }))
@@ -12101,7 +12130,8 @@ async function shopOpenTicketDetail(ticketId) {
   // Admin's list is deliberately unscoped (needs to see everything,
   // including walk-in tickets a yard supervisor entered), so admin is
   // exempt from this check same as the query.
-  if (CD.role !== 'admin' && t.submittedByUserId !== CU.uid) {
+  const divScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements')) ? CD.branch : null;
+  if (CD.role !== 'admin' && t.submittedByUserId !== CU.uid && !(divScope && t.divisionId === divScope)) {
     toast(T('You can only view tickets you submitted','Solo puedes ver los boletos que enviaste'), 'err');
     return;
   }
