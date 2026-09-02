@@ -13832,17 +13832,34 @@ async function shopCheckLoanerEscalations() {
   if (CD.role !== 'admin') return;
   try {
     const snap = await db.collection('shop_tickets').get();
+    const today = new Date().toISOString().split('T')[0];
     const cutoff = Date.now() - 72 * 60 * 60 * 1000;
-    const toEscalate = snap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t =>
-      !t.deleted && t.loanerNumber && !t.loanerReturned && !t.loanerEscalatedExecAt &&
-      t.loanerNotifiedManagerAt && t.loanerNotifiedManagerAt.toMillis && t.loanerNotifiedManagerAt.toMillis() < cutoff
-    );
-    if (!toEscalate.length) return;
+    const tickets = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+      .filter(t => !t.deleted && t.loanerNumber && !t.loanerReturned);
+    if (!tickets.length) return;
     const ch = (window._chChannels || []).find(c => c.key === 'loaners' || c.name === 'loaners');
     if (!ch) return;
+
+    // Stage 1 — this used to require someone to notice it's overdue and
+    // manually tap "Reportar que no fue devuelto" on the pickup screen,
+    // which meant a loaner nobody happened to look at just sat overdue
+    // with no notice ever going out. Now the moment its return date has
+    // passed, this fires on its own at the next admin login. The manual
+    // button still exists too, for reporting one early before its due
+    // date if someone already knows it's not coming back on time.
+    const toNotify = tickets.filter(t => !t.loanerNotifiedManagerAt && t.loanerReturnDate && t.loanerReturnDate < today);
+    for (const t of toNotify) {
+      await shopNotifyLoanerNotCollected(t);
+      await db.collection('shop_tickets').doc(t.id).update({ loanerNotifiedManagerAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
+
+    // Stage 2 — escalate to exec 72 hours after Stage 1, unchanged.
+    const toEscalate = tickets.filter(t =>
+      !t.loanerEscalatedExecAt && t.loanerNotifiedManagerAt && t.loanerNotifiedManagerAt.toMillis && t.loanerNotifiedManagerAt.toMillis() < cutoff
+    );
     for (const t of toEscalate) {
       await db.collection('channels').doc(ch.id).collection('messages').add({
-        text: '🚨 Escalation — Loaner ' + t.loanerNumber + ' for unit ' + (t.unitNumber || '—') + ' (' + shopDivisionName(t.divisionId) + ') still hasn\'t been returned 72 hours after pickup. Executive follow-up needed.',
+        text: '🚨 Escalation — Loaner ' + t.loanerNumber + ' for unit ' + (t.unitNumber || '—') + ' (' + shopDivisionName(t.divisionId) + ') still hasn\'t been returned 72 hours after being flagged. Executive follow-up needed.',
         uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
