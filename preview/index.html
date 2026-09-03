@@ -6352,6 +6352,7 @@ async function renderAdmin() {
           <select id="nu-branch">
             <option value="OC">OC — Orange County</option>
             <option value="LA">LA — Los Angeles</option>
+            <option value="maint_ie">Corona — Inland Empire</option>
             <option value="trees">Trees</option>
             <option value="enhancements">Enhancements</option>
             <option value="ALL">ALL — Admin Access</option>
@@ -6948,7 +6949,7 @@ function showChangeRole(uid, currentRole, userName) {
     + '<select id="cr-new-role" style="width:100%;padding:8px 10px;background:#1E1E1E;border:1px solid #383838;border-radius:6px;color:#E0E0E0;font-size:13px">'+roleOptions+'</select></div>'
     + '<div style="margin-bottom:16px"><label style="font-size:11px;color:#888;display:block;margin-bottom:4px">New Branch</label>'
     + '<select id="cr-new-branch" style="width:100%;padding:8px 10px;background:#1E1E1E;border:1px solid #383838;border-radius:6px;color:#E0E0E0;font-size:13px">'
-    + '<option value="OC">OC — Orange County</option><option value="LA">LA — Los Angeles</option><option value="trees">Trees</option><option value="enhancements">Enhancements</option><option value="ALL">ALL — Both Branches</option>'
+    + '<option value="OC">OC — Orange County</option><option value="LA">LA — Los Angeles</option><option value="maint_ie">Corona — Inland Empire</option><option value="trees">Trees</option><option value="enhancements">Enhancements</option><option value="ALL">ALL — Both Branches</option>'
     + '</select></div>'
     + '<div style="display:flex;gap:8px"><button class="btn primary" id="apply-role-btn">Save Change</button>'
     + '<button class="btn" id="cancel-role-btn">Cancel</button></div>'
@@ -11795,12 +11796,12 @@ async function renderShopTicketProgress() {
   // has no access to this screen at all) — so admin gets every ticket,
   // unfiltered by submitter.
   const isAdmin = CD.role === 'admin';
-  // Trees/Enhancements division managers don't submit tickets themselves —
-  // they need every ticket for THEIR division, not just ones they entered.
-  // Branch carries which division (see ROLES.division_manager) and is set
-  // to the exact SHOP_DIVISIONS id ('trees'/'enhancements') when creating
-  // their account.
-  const divScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements')) ? CD.branch : null;
+  // Division managers (Trees, Enhancements, Corona/IE) don't submit
+  // tickets themselves — they need every ticket for THEIR division, not
+  // just ones they entered. Branch carries which division (see
+  // ROLES.division_manager) and is set to the exact SHOP_DIVISIONS id
+  // ('trees'/'enhancements'/'maint_ie') when creating their account.
+  const divScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements' || CD.branch === 'maint_ie')) ? CD.branch : null;
   const baseQuery = isAdmin ? db.collection('shop_tickets')
     : divScope ? db.collection('shop_tickets').where('divisionId','==',divScope)
     : db.collection('shop_tickets').where('submittedByUserId','==',CU.uid);
@@ -11904,7 +11905,7 @@ function shopPaintTicketProgress() {
   // matching the same divisionId scoping the ticket query above uses.
   // Everyone else who reaches this screen (isManager, yard, admin) sees
   // every division, same as the rest of the app's manager-facing screens.
-  const tcDivScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements')) ? CD.branch : null;
+  const tcDivScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements' || CD.branch === 'maint_ie')) ? CD.branch : null;
   const toolsOut = (window._toolCheckouts || []).filter(tc => tc.status === 'out' && (!tcDivScope || tc.divisionId === tcDivScope));
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -12248,7 +12249,7 @@ async function shopOpenTicketDetail(ticketId) {
   // Admin's list is deliberately unscoped (needs to see everything,
   // including walk-in tickets a yard supervisor entered), so admin is
   // exempt from this check same as the query.
-  const divScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements')) ? CD.branch : null;
+  const divScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements' || CD.branch === 'maint_ie')) ? CD.branch : null;
   if (CD.role !== 'admin' && t.submittedByUserId !== CU.uid && !(divScope && t.divisionId === divScope)) {
     toast(T('You can only view tickets you submitted','Solo puedes ver los boletos que enviaste'), 'err');
     return;
