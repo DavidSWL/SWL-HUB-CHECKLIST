@@ -11903,6 +11903,7 @@ function shopPaintTicketProgress() {
               + '<div style="color:var(--text3);font-size:11px;margin-top:2px">👷 ' + esc(tc.foremanName || '—') + ' · ' + esc(shopDivisionName(tc.divisionId)) + '</div></div>'
             + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap;color:' + (overdue ? 'var(--danger)' : 'var(--text3)') + ';background:' + (overdue ? 'var(--danger-l)' : 'var(--surface2)') + '">'
               + (overdue ? T('OVERDUE','VENCIDO') : T('Due','Vence') + ' ' + shopFmtDateOnly(tc.expectedReturnDate)) + '</span>'
+            + (shopIsDavid() ? '<button class="btn sm" style="padding:3px 8px" onclick="tcDelete(\'' + tc.id + '\')" title="Delete">🗑</button>' : '')
             + '</div>';
         }).join('')
       + '</div>' : '')
@@ -14443,6 +14444,21 @@ async function tcMarkReturned(id) {
   }
 }
 
+// David-only, matching shopDetailDeleteTicket's gate — not soft-delete
+// like tickets (no "Deleted" filter view exists for checkouts, and there's
+// no audit reason to keep a hard-deleted test entry around), just a
+// straight remove after a confirm.
+async function tcDelete(id) {
+  if (!shopIsDavid()) return;
+  if (!confirm('¿Eliminar este registro de préstamo de herramienta? Esto no se puede deshacer.')) return;
+  try {
+    await db.collection('tool_checkouts').doc(id).delete();
+    toast('✓ Eliminado');
+  } catch (e) {
+    toast(e.message || 'No se pudo eliminar', 'err');
+  }
+}
+
 // Kiosk board card for an open checkout — a plain div, not a button like
 // the ticket cards, since its one action (Devuelto) is its own nested
 // button and buttons can't nest.
@@ -14464,7 +14480,10 @@ function tcCardHtml(tc) {
     + (tc.foremanName ? '👷 ' + esc(tc.foremanName) + '<br>' : '')
     + '↩ Vence: ' + shopFmtDateOnly(tc.expectedReturnDate)
     + '</div>'
-    + '<button class="btn sm primary" style="margin-top:10px;width:100%" onclick="tcMarkReturned(\'' + tc.id + '\')">✓ Devuelto</button>'
+    + '<div style="display:flex;gap:8px;margin-top:10px">'
+    + '<button class="btn sm primary" style="flex:1" onclick="tcMarkReturned(\'' + tc.id + '\')">✓ Devuelto</button>'
+    + (shopIsDavid() ? '<button class="btn sm" onclick="tcDelete(\'' + tc.id + '\')" title="Eliminar">🗑</button>' : '')
+    + '</div>'
     + '</div>';
 }
 
