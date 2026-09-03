@@ -14291,19 +14291,41 @@ function tcStep1() {
     + '<div id="tc-asset-dropdown" class="st-typeahead-dd" style="display:none;max-height:280px"></div>'
     + '</div>';
 }
+// Something already out — as another tool checkout, OR as a repair
+// ticket's loaner — still shows up in search (so it's not confusingly
+// "missing"), but grayed out and unpickable, naming who/what has it.
+// Ticket loaners are a free-text field, not a real assetId link, so this
+// matches on unit number the same way the Loaner Tools report already
+// does (shopPaintLoanerReport's outByUnit) — best-effort, not a hard key.
+function tcUnavailableWith(asset) {
+  const co = (window._toolCheckouts || []).find(t => t.status === 'out' && t.assetId === asset.id);
+  if (co) return co.foremanName || 'alguien';
+  const unit = (asset.unitNumber || '').trim().toLowerCase();
+  if (unit) {
+    const t = (window._shopTickets || []).find(x => !x.deleted && x.loanerNumber && !x.loanerReturned && x.loanerNumber.trim().toLowerCase() === unit);
+    if (t) return 'préstamo del boleto ' + (t.unitNumber || '—');
+  }
+  return null;
+}
 function tcAssetSearchInput(evt) {
   if (evt && evt.type === 'input') window._tc.assetId = null;
   const q = (document.getElementById('tc-asset-search').value || '').trim().toLowerCase();
   const dd = document.getElementById('tc-asset-dropdown');
-  const outIds = new Set((window._toolCheckouts || []).filter(t => t.status === 'out').map(t => t.assetId));
-  const pool = (window._shopAssets || []).filter(a =>
-    (a.assetType === 'power_tool' || a.assetType === 'lawn_equipment') && !outIds.has(a.id));
+  const pool = (window._shopAssets || []).filter(a => a.assetType === 'power_tool' || a.assetType === 'lawn_equipment');
   const matches = (q ? pool.filter(a => {
     const hay = [a.unitNumber, a.make, a.model, shopAssetTypeLabel(a.assetType)].filter(Boolean).join(' ').toLowerCase();
     return hay.includes(q);
   }) : pool).sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||'')).slice(0, 40);
   dd.innerHTML = matches.length
-    ? matches.map(a => '<div class="st-ta-opt" onmousedown="tcPickAsset(\'' + a.id + '\')"><b>' + esc(a.unitNumber) + '</b> — ' + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType)) + '</div>').join('')
+    ? matches.map(a => {
+        const label = '<b>' + esc(a.unitNumber) + '</b> — ' + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType));
+        const withWho = tcUnavailableWith(a);
+        if (withWho) {
+          return '<div class="st-ta-opt" style="opacity:.5;pointer-events:none">' + label
+            + '<br><span style="font-size:11px;color:var(--danger);font-weight:700">🔒 Ya está con ' + esc(withWho) + '</span></div>';
+        }
+        return '<div class="st-ta-opt" onmousedown="tcPickAsset(\'' + a.id + '\')">' + label + '</div>';
+      }).join('')
     : '<div class="st-ta-empty">No hay herramientas disponibles que coincidan</div>';
   dd.style.display = 'block';
 }
