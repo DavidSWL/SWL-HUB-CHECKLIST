@@ -1091,7 +1091,7 @@ const ROLES = {
   // employee access (dashboard, check-in form, weekly items). This one is
   // deliberately locked down to a single read-only screen, so it's a
   // separate role rather than a branch variant of the same one.
-  ops_specialist_oc:    { label:'Operations Specialist (OC)', branch:'OC', canViewAll:false, isManager:false, color:'var(--oc)', restrictedTo:'saturday-schedule' },
+  ops_specialist_oc:    { label:'Operations Specialist (OC)', branch:'OC', canViewAll:false, isManager:false, color:'var(--oc)', restrictedTo:['saturday-schedule','chat'] },
   // Shop Tickets (Central Shop) — kiosk-only role. Locked to the one
   // screen the same way ops_specialist_oc is, so a shared yard account
   // (build plan §11.4, still open) never sees any other nav — tap-only,
