@@ -1505,6 +1505,7 @@ async function chBootstrapUnread() {
     // Fire-and-forget — admin-only inside the function itself, and never
     // awaited here so a slow check can't delay login for anyone.
     shopCheckLoanerEscalations();
+    shopCheckToolCheckoutEscalations();
   } catch (e) { /* badges are cosmetic — never block app startup */ }
 }
 
@@ -1526,6 +1527,8 @@ async function doSignOut() {
   if (window._chUnsub) { window._chUnsub(); window._chUnsub = null; }
   if (window._shopYardUnsub) { window._shopYardUnsub(); window._shopYardUnsub = null; }
   if (window._shopProgressUnsub) { window._shopProgressUnsub(); window._shopProgressUnsub = null; }
+  if (window._shopYardToolsUnsub) { window._shopYardToolsUnsub(); window._shopYardToolsUnsub = null; }
+  if (window._shopProgressToolsUnsub) { window._shopProgressToolsUnsub(); window._shopProgressToolsUnsub = null; }
   await auth.signOut();
   // Tear the Spanish observer down — otherwise it survives into the next
   // sign-in on the same tab and would keep translating for an English user.
@@ -11802,6 +11805,15 @@ async function renderShopTicketProgress() {
     }, err => {
       ca.innerHTML = '<div class="empty">' + esc(err.message) + '</div>';
     });
+  // Tools Checked Out — a separate collection (it's not a ticket), same
+  // divisionId scoping as above for a Division Manager. Every role that
+  // reaches this screen (isManager, yard, admin) is allowed to see it.
+  if (window._shopProgressToolsUnsub) { window._shopProgressToolsUnsub(); window._shopProgressToolsUnsub = null; }
+  window._shopProgressToolsUnsub = db.collection('tool_checkouts').orderBy('checkedOutAt','desc')
+    .onSnapshot(snap => {
+      window._toolCheckouts = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      shopPaintTicketProgress();
+    }, () => {});
 }
 
 function shopSetProgressFilter(val) { window._shopProgressFilter = val; shopPaintTicketProgress(); }
@@ -11870,10 +11882,29 @@ function shopPaintTicketProgress() {
   ];
   if (CD.role === 'admin') chips.push(['deleted', T('Deleted','Eliminados')]);
   const overdueLoaners = (window._shopProgressTickets || []).filter(shopIsLoanerOverdue);
+  // Tools Checked Out — a Division Manager only sees their own division,
+  // matching the same divisionId scoping the ticket query above uses.
+  // Everyone else who reaches this screen (isManager, yard, admin) sees
+  // every division, same as the rest of the app's manager-facing screens.
+  const tcDivScope = (CD.role === 'division_manager' && (CD.branch === 'trees' || CD.branch === 'enhancements')) ? CD.branch : null;
+  const toolsOut = (window._toolCheckouts || []).filter(tc => tc.status === 'out' && (!tcDivScope || tc.divisionId === tcDivScope));
+  const todayStr = new Date().toISOString().split('T')[0];
 
   ca.innerHTML = (overdueLoaners.length ? '<div style="font-size:12.5px;color:var(--danger);background:var(--danger-l);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-weight:600">'
       + '⚠ ' + T(overdueLoaners.length + ' loaner' + (overdueLoaners.length>1?'s':'') + ' past the expected return date — ' + overdueLoaners.map(t=>t.unitNumber).join(', '),
                  overdueLoaners.length + ' préstamo' + (overdueLoaners.length>1?'s':'') + ' vencido' + (overdueLoaners.length>1?'s':'') + ' — ' + overdueLoaners.map(t=>t.unitNumber).join(', '))
+      + '</div>' : '')
+    + (toolsOut.length ? '<div class="card" style="margin-bottom:14px">'
+      + '<div class="card-header"><div class="card-title">🔁 ' + T('Tools Checked Out','Herramientas Prestadas') + ' (' + toolsOut.length + ')</div></div>'
+      + toolsOut.map(tc => {
+          const overdue = tc.expectedReturnDate && tc.expectedReturnDate < todayStr;
+          return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px">'
+            + '<div style="min-width:0"><b>' + esc(tc.unitNumber || '—') + '</b> ' + esc(tc.toolLabel || '')
+              + '<div style="color:var(--text3);font-size:11px;margin-top:2px">👷 ' + esc(tc.foremanName || '—') + ' · ' + esc(shopDivisionName(tc.divisionId)) + '</div></div>'
+            + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap;color:' + (overdue ? 'var(--danger)' : 'var(--text3)') + ';background:' + (overdue ? 'var(--danger-l)' : 'var(--surface2)') + '">'
+              + (overdue ? T('OVERDUE','VENCIDO') : T('Due','Vence') + ' ' + shopFmtDateOnly(tc.expectedReturnDate)) + '</span>'
+            + '</div>';
+        }).join('')
       + '</div>' : '')
     + '<div class="card">'
     + '<div class="card-header"><div class="card-title">📡 ' + T('Ticket Progress','Progreso del Boleto')
@@ -12966,6 +12997,15 @@ async function renderYardKiosk() {
     }, err => {
       ca.innerHTML = '<div class="empty">No se pudo conectar — ' + esc(err.message) + '</div>';
     });
+  // Tools Checked Out — separate collection, own listener, same live-board
+  // feel as tickets above but no flash/beep (not something anyone's
+  // waiting to react to the instant it lands).
+  if (window._shopYardToolsUnsub) { window._shopYardToolsUnsub(); window._shopYardToolsUnsub = null; }
+  window._shopYardToolsUnsub = db.collection('tool_checkouts').orderBy('checkedOutAt','desc')
+    .onSnapshot(snap => {
+      window._toolCheckouts = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      shopPaintYardKiosk();
+    }, () => {});
 }
 
 function shopPaintYardKiosk() {
@@ -12976,6 +13016,7 @@ function shopPaintYardKiosk() {
     .sort((a,b) => (a.estimatedDropoffDate||'9999').localeCompare(b.estimatedDropoffDate||'9999'));
   const inProgress = tickets.filter(t => t.status === 'in_progress');
   const readyPickup = tickets.filter(t => t.status === 'ready_pickup');
+  const toolsOut = (window._toolCheckouts || []).filter(tc => tc.status === 'out');
 
   const tapCard = (t, kind) => {
     const urgent = t.priority === 'urgent';
@@ -13018,14 +13059,19 @@ function shopPaintYardKiosk() {
       + '</div>' : '')
     + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:18px">'
     + '<div style="font-size:22px;font-weight:800">🔧 Patio</div>'
+    + '<div style="display:flex;gap:8px">'
+    + '<button class="btn sm" onclick="tcOpen()">🔁 Prestar Herramienta</button>'
     + '<button class="btn sm primary" onclick="kwOpen()">+ Nuevo Boleto</button>'
+    + '</div>'
     + '</div>'
     + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:10px">🚚 Equipo Entrante (' + incoming.length + ')</div>'
     + (incoming.length ? incoming.map(t => tapCard(t,'dropoff')).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Nada entrante.</div>')
     + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:22px 0 10px">🔧 En Reparación (' + inProgress.length + ')</div>'
     + (inProgress.length ? inProgress.map(t => tapCard(t,'ready')).join('') : '<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Nada en reparación.</div>')
     + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:22px 0 10px">✅ Listo para Recoger (' + readyPickup.length + ')</div>'
-    + (readyPickup.length ? readyPickup.map(t => tapCard(t,'pickup')).join('') : '<div style="font-size:13px;color:var(--text3)">Nada listo.</div>');
+    + (readyPickup.length ? readyPickup.map(t => tapCard(t,'pickup')).join('') : '<div style="font-size:13px;color:var(--text3)">Nada listo.</div>')
+    + '<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:22px 0 10px">🔁 Herramientas Prestadas (' + toolsOut.length + ')</div>'
+    + (toolsOut.length ? toolsOut.map(tc => tcCardHtml(tc)).join('') : '<div style="font-size:13px;color:var(--text3)">Nada prestado.</div>');
 
   // The flash class is meant to fire once per new arrival, not replay on
   // every unrelated repaint (e.g. after confirming a different ticket) —
@@ -13977,6 +14023,32 @@ async function shopCheckLoanerEscalations() {
   } catch (e) { /* best-effort background check, never blocks login */ }
 }
 
+// Same one-time overdue notice as shopCheckLoanerEscalations, for the
+// separate Tool Checkout flow (not a ticket, so its own collection) — no
+// 72-hour exec escalation tier for these, David only asked for the first
+// notice.
+async function shopCheckToolCheckoutEscalations() {
+  if (CD.role !== 'admin') return;
+  try {
+    const snap = await db.collection('tool_checkouts').get();
+    const today = new Date().toISOString().split('T')[0];
+    const toNotify = snap.docs.map(d => ({ id:d.id, ...d.data() }))
+      .filter(tc => tc.status === 'out' && !tc.notifiedOverdueAt && tc.expectedReturnDate && tc.expectedReturnDate < today);
+    if (!toNotify.length) return;
+    const ch = (window._chChannels || []).find(c => c.key === 'loaners' || c.name === 'loaners');
+    if (!ch) return;
+    for (const tc of toNotify) {
+      const divName = shopDivisionName(tc.divisionId);
+      await db.collection('channels').doc(ch.id).collection('messages').add({
+        text: '⚠️ Tool checkout not returned — ' + (tc.unitNumber || '—') + ' ' + (tc.toolLabel || '') + ' (checked out to ' + (tc.foremanName || '—') + ', ' + divName + ') was due back ' + tc.expectedReturnDate + '. ' + divName + ' manager, please follow up on getting it returned.',
+        uid: CU.uid, name: CD.name, role: CD.role, branch: CD.branch,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      await db.collection('tool_checkouts').doc(tc.id).update({ notifiedOverdueAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
+  } catch (e) { /* best-effort background check, never blocks login */ }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Kiosk New Ticket — step-by-step wizard. Kiosk-only ("a little more
 // simple... instead of one window showing them everything") — the
@@ -14164,6 +14236,236 @@ async function kwSubmit(priority) {
   } catch (e) {
     toast(e.message || 'No se pudo enviar', 'err');
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Tool Checkout — "someone needs an additional tool... the mechanic needs
+// to be able to give them that tool and have a return date." Deliberately
+// NOT a ticket (own collection, own wizard) — kiosk/mechanic-side entry
+// and return, same 4-step one-thing-per-screen style as the ticket
+// wizards above. Tool source is real Asset Registry units (power_tool /
+// lawn_equipment types only, and never one already checked out), per
+// David's answer when this was mocked up. Manager visibility (Ticket
+// Progress) and the #loaners overdue notice are handled elsewhere —
+// shopPaintTicketProgress's Tools Checked Out card and
+// shopCheckToolCheckoutEscalations respectively — both read the same
+// tool_checkouts collection this writes.
+// ══════════════════════════════════════════════════════════════════════
+window._tc = null;
+const TC_STEPS = 4;
+function tcOpen() {
+  window._tc = { step:1, assetId:null, unitNumber:'', assetType:null, iconKey:null, toolLabel:'', divisionId:null, foremanName:'', expectedReturnDate:'' };
+  const ex = document.getElementById('tc-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'tc-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:22px;padding:30px;width:520px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--shm)" id="tc-body"></div>';
+  document.body.appendChild(m);
+  tcRender();
+}
+function tcClose() { const m = document.getElementById('tc-modal'); if (m) m.remove(); window._tc = null; }
+
+function tcShell(inner, nextLabel) {
+  const tc = window._tc;
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Paso ' + tc.step + ' de ' + TC_STEPS + '</div>'
+    + '<button onclick="tcClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div>'
+    + '<div style="height:5px;border-radius:3px;background:var(--surface2);overflow:hidden;margin-bottom:22px">'
+    + '<div style="height:100%;width:' + (tc.step / TC_STEPS * 100) + '%;background:var(--burg);border-radius:3px;transition:width .3s"></div>'
+    + '</div>'
+    + inner
+    + '<div style="display:flex;gap:10px;margin-top:24px">'
+    + (tc.step > 1 ? '<button onclick="tcBack()" style="padding:16px 20px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">← Atrás</button>' : '')
+    + '<button onclick="tcNext()" style="flex:1;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">' + nextLabel + '</button>'
+    + '</div>';
+}
+
+function tcStep1() {
+  const tc = window._tc;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:6px">¿Qué herramienta?</div>'
+    + '<div style="font-size:11px;color:var(--text3);margin-bottom:14px">Buscando en Registro de Activos — Herramientas y Equipo de Jardín</div>'
+    + '<div style="position:relative">'
+    + '<input type="text" id="tc-asset-search" autocomplete="off" placeholder="Número de unidad o nombre…" value="' + esc(tc.unitNumber || '') + '" oninput="tcAssetSearchInput(event)" onfocus="tcAssetSearchInput(event)" onblur="tcAssetSearchBlur()" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
+    + '<div id="tc-asset-dropdown" class="st-typeahead-dd" style="display:none;max-height:280px"></div>'
+    + '</div>';
+}
+function tcAssetSearchInput(evt) {
+  if (evt && evt.type === 'input') window._tc.assetId = null;
+  const q = (document.getElementById('tc-asset-search').value || '').trim().toLowerCase();
+  const dd = document.getElementById('tc-asset-dropdown');
+  const outIds = new Set((window._toolCheckouts || []).filter(t => t.status === 'out').map(t => t.assetId));
+  const pool = (window._shopAssets || []).filter(a =>
+    (a.assetType === 'power_tool' || a.assetType === 'lawn_equipment') && !outIds.has(a.id));
+  const matches = (q ? pool.filter(a => {
+    const hay = [a.unitNumber, a.make, a.model, shopAssetTypeLabel(a.assetType)].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  }) : pool).sort((a,b) => (a.unitNumber||'').localeCompare(b.unitNumber||'')).slice(0, 40);
+  dd.innerHTML = matches.length
+    ? matches.map(a => '<div class="st-ta-opt" onmousedown="tcPickAsset(\'' + a.id + '\')"><b>' + esc(a.unitNumber) + '</b> — ' + esc([a.make,a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType)) + '</div>').join('')
+    : '<div class="st-ta-empty">No hay herramientas disponibles que coincidan</div>';
+  dd.style.display = 'block';
+}
+function tcPickAsset(id) {
+  const a = (window._shopAssets || []).find(x => x.id === id);
+  if (!a) return;
+  const tc = window._tc;
+  tc.assetId = id; tc.unitNumber = a.unitNumber; tc.assetType = a.assetType; tc.iconKey = a.iconKey || null;
+  tc.toolLabel = [a.make, a.model].filter(Boolean).join(' ') || shopAssetTypeLabel(a.assetType);
+  document.getElementById('tc-asset-search').value = a.unitNumber + ' — ' + tc.toolLabel;
+  document.getElementById('tc-asset-dropdown').style.display = 'none';
+}
+function tcAssetSearchBlur() {
+  setTimeout(() => { const dd = document.getElementById('tc-asset-dropdown'); if (dd) dd.style.display = 'none'; }, 150);
+}
+
+function tcStep2() {
+  const tc = window._tc;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:14px">¿Quién lo pide?</div>'
+    + '<div style="position:relative">'
+    + '<input type="text" id="tc-foreman-search" autocomplete="off" placeholder="Escribe un nombre…" value="' + esc(tc.foremanName || '') + '" oninput="tcForemanSearchInput()" onfocus="tcForemanSearchInput()" onblur="tcForemanSearchBlur()" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
+    + '<div id="tc-foreman-dropdown" class="st-typeahead-dd" style="display:none;max-height:280px"></div>'
+    + '</div>';
+}
+function tcForemanSearchInput() {
+  const tc = window._tc;
+  const q = (document.getElementById('tc-foreman-search').value || '').trim().toLowerCase();
+  const dd = document.getElementById('tc-foreman-dropdown');
+  const roster = (window._shopForemen || []).filter(f => f.active !== false && (!tc.divisionId || f.divisionId === tc.divisionId));
+  const matches = (q ? roster.filter(f => (f.name||'').toLowerCase().includes(q)) : roster).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  dd.innerHTML = matches.length
+    ? matches.map(f => '<div class="st-ta-opt" onmousedown="tcPickForeman(\'' + esc(f.name).replace(/'/g,"\\'") + '\')">' + esc(f.name) + '</div>').join('')
+    : '<div class="st-ta-empty">Sin coincidencia — escribe un nombre y continúa</div>';
+  dd.style.display = 'block';
+}
+function tcPickForeman(name) {
+  window._tc.foremanName = name;
+  document.getElementById('tc-foreman-search').value = name;
+  document.getElementById('tc-foreman-dropdown').style.display = 'none';
+}
+function tcForemanSearchBlur() {
+  setTimeout(() => { const dd = document.getElementById('tc-foreman-dropdown'); if (dd) dd.style.display = 'none'; }, 150);
+}
+
+function tcStep3() {
+  const tc = window._tc;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:14px">¿Qué división?</div>'
+    + '<select id="tc-division" onchange="window._tc.divisionId=this.value||null" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
+    + '<option value="">Selecciona…</option>'
+    + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + ((tc.divisionId||'') === d.id ? ' selected' : '') + '>' + esc(d.nameEs) + '</option>').join('')
+    + '</select>';
+}
+
+function tcStep4() {
+  const tc = window._tc;
+  return '<div style="font-size:19px;font-weight:800;margin-bottom:14px">¿Fecha de devolución esperada?</div>'
+    + '<input type="date" id="tc-return-date" value="' + esc(tc.expectedReturnDate || '') + '" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)">'
+    + '<div style="background:var(--surface2);border-radius:14px;padding:16px;margin-top:16px;font-size:13.5px;line-height:1.9">'
+    + '<div>🧰 <b>' + (tc.unitNumber ? esc('#' + tc.unitNumber + ' — ' + tc.toolLabel) : '—') + '</b></div>'
+    + '<div>👷 <b>' + esc(tc.foremanName || '—') + '</b></div>'
+    + '<div>📍 <b>' + esc(shopDivisionName(tc.divisionId)) + '</b></div>'
+    + '</div>';
+}
+
+function tcSuccessHtml() {
+  const tc = window._tc;
+  return '<div style="text-align:center;padding:10px 0">'
+    + '<div style="font-size:44px;margin-bottom:10px">✅</div>'
+    + '<div style="font-size:18px;font-weight:800;margin-bottom:8px">Préstamo Registrado</div>'
+    + '<div style="font-size:13.5px;color:var(--text2);line-height:1.7;margin-bottom:14px">'
+    + esc(tc.toolLabel) + ' asignado a <b>' + esc(tc.foremanName) + '</b><br>Vence ' + shopFmtDateOnly(tc.expectedReturnDate)
+    + '</div>'
+    + '<div style="background:var(--info-l);border-radius:10px;padding:10px 12px;font-size:11.5px;color:var(--info);text-align:left;margin-bottom:20px">'
+    + '💬 Si se pasa la fecha de devolución, se publicará automáticamente en #loaners — igual que con las herramientas de préstamo en boletos.</div>'
+    + '<button onclick="tcClose()" style="width:100%;padding:16px;font-size:16px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Listo</button>'
+    + '</div>';
+}
+
+function tcRender() {
+  const body = document.getElementById('tc-body');
+  if (!body) return;
+  const tc = window._tc;
+  if (tc.step === 5) { body.innerHTML = tcSuccessHtml(); return; }
+  const stepFns = { 1:tcStep1, 2:tcStep2, 3:tcStep3, 4:tcStep4 };
+  body.innerHTML = tcShell(stepFns[tc.step](), tc.step === 4 ? '✅ Confirmar Préstamo' : 'Siguiente →');
+  if (tc.step === 1) document.getElementById('tc-asset-search')?.focus();
+  if (tc.step === 2) document.getElementById('tc-foreman-search')?.focus();
+}
+
+function tcBack() { window._tc.step--; tcRender(); }
+function tcNext() {
+  const tc = window._tc;
+  if (tc.step === 1 && !tc.assetId) { toast('Selecciona una herramienta', 'err'); return; }
+  if (tc.step === 2 && !tc.foremanName) { toast('Escribe quién lo pide', 'err'); return; }
+  if (tc.step === 3 && !tc.divisionId) { toast('Selecciona una división', 'err'); return; }
+  if (tc.step === 4) {
+    const d = document.getElementById('tc-return-date').value;
+    if (!d) { toast('Selecciona una fecha', 'err'); return; }
+    tc.expectedReturnDate = d;
+    tcSubmit();
+    return;
+  }
+  tc.step++;
+  tcRender();
+}
+
+async function tcSubmit() {
+  const tc = window._tc;
+  try {
+    await db.collection('tool_checkouts').add({
+      assetId: tc.assetId, unitNumber: tc.unitNumber || '', assetType: tc.assetType || null, iconKey: tc.iconKey || null, toolLabel: tc.toolLabel || '',
+      foremanName: tc.foremanName || '', divisionId: tc.divisionId || null,
+      expectedReturnDate: tc.expectedReturnDate || null,
+      status: 'out',
+      checkedOutByUserId: CU.uid, checkedOutByName: CD.name,
+      checkedOutAt: firebase.firestore.FieldValue.serverTimestamp(),
+      returnedAt: null, returnedByUserId: null, returnedByName: null,
+      notifiedOverdueAt: null,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    tc.step = 5;
+    tcRender();
+  } catch (e) {
+    toast(e.message || 'No se pudo registrar', 'err');
+  }
+}
+
+async function tcMarkReturned(id) {
+  try {
+    await db.collection('tool_checkouts').doc(id).update({
+      status: 'returned', returnedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      returnedByUserId: CU.uid, returnedByName: CD.name,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    toast('✓ Devuelto');
+  } catch (e) {
+    toast(e.message || 'No se pudo actualizar', 'err');
+  }
+}
+
+// Kiosk board card for an open checkout — a plain div, not a button like
+// the ticket cards, since its one action (Devuelto) is its own nested
+// button and buttons can't nest.
+function tcCardHtml(tc) {
+  const overdue = tc.expectedReturnDate && tc.expectedReturnDate < new Date().toISOString().split('T')[0];
+  const div = shopDivision(tc.divisionId);
+  return '<div class="kiosk-card" style="--accent:' + (overdue ? 'var(--danger)' : (div ? div.color : 'var(--border2)')) + '">'
+    + '<div class="kiosk-card-top">'
+    + '<div class="kiosk-icon-chip">' + shopAssetIconHtml(tc.iconKey, tc.assetType, 30) + '</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+    + '<span class="kiosk-unit">' + esc(tc.unitNumber || '—') + '</span>'
+    + (overdue ? '<span class="kiosk-pill" style="background:var(--danger-l);color:var(--danger)">VENCIDO</span>' : '')
+    + '</div></div>'
+    + '<div class="kiosk-issue">' + esc(tc.toolLabel || '') + '</div>'
+    + '<div class="kiosk-badges">'
+    + '<span class="kiosk-pill" style="background:' + (div ? div.color + '22' : 'var(--surface2)') + ';color:' + (div ? div.color : 'var(--text3)') + '">' + esc(shopDivisionName(tc.divisionId)) + '</span>'
+    + '</div>'
+    + '<div class="kiosk-meta">'
+    + (tc.foremanName ? '👷 ' + esc(tc.foremanName) + '<br>' : '')
+    + '↩ Vence: ' + shopFmtDateOnly(tc.expectedReturnDate)
+    + '</div>'
+    + '<button class="btn sm primary" style="margin-top:10px;width:100%" onclick="tcMarkReturned(\'' + tc.id + '\')">✓ Devuelto</button>'
+    + '</div>';
 }
 
 </script>
