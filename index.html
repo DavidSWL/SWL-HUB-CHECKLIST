@@ -658,10 +658,15 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   flex-shrink:0;border:none;background:none;padding:0}
 .ws-ric:hover{background:#25392E;color:#fff}
 .ws-ric.on{background:#25392E;color:#fff;box-shadow:inset 2.5px 0 0 #FC6020}
-.ws-ric-b{position:absolute;top:2px;right:2px;background:#C93D00;color:#fff;font-size:9px;
+.ws-ric-b{position:absolute;top:2px;right:2px;background:var(--danger,#DC2626);color:#fff;font-size:9px;
   font-weight:700;border-radius:9px;min-width:15px;height:15px;padding:0 3px;border:2px solid #16241D;
   display:inline-flex;align-items:center;justify-content:center;line-height:1;
   font-variant-numeric:tabular-nums}
+@keyframes chBadgeFlash{
+  0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(220,38,38,.65)}
+  50%{transform:scale(1.22);box-shadow:0 0 0 5px rgba(220,38,38,0)}
+}
+.ws-ric-b.flash,.ws-nav-badge.flash{animation:chBadgeFlash .9s ease-in-out 3}
 .ws-rail-sp{flex:1;min-height:8px}
 .ws-rail-user{position:relative;flex-shrink:0;cursor:pointer}
 .ws-rail-av{width:31px;height:31px;border-radius:50%;background:#7A1C2E;color:#fff;
@@ -827,7 +832,7 @@ body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:var(--text);b
   font-size:12px;font-weight:700;cursor:pointer}
 .ch-send:disabled{opacity:.45;cursor:default}
 .ch-empty{text-align:center;color:#9BADA2;font-size:12.5px;padding:40px 20px}
-.ws-nav-badge{margin-left:auto;background:#C93D00;color:#fff;font-size:9px;font-weight:700;
+.ws-nav-badge{margin-left:auto;background:var(--danger,#DC2626);color:#fff;font-size:9px;font-weight:700;
   border-radius:9px;padding:1px 6px;flex-shrink:0}
 .ws-nav-dot{margin-left:auto;width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .ws-nav-wrap{position:relative}
@@ -1697,11 +1702,12 @@ function buildWorkspaceNav() {
   const active = wsAreaForScreen(activeScreen || 'dashboard');
   window._wsArea = active.id;
 
+  const chatFlashing = (window._chFlashIds || new Set()).size > 0;
   rail.innerHTML = areas.map(a =>
     '<button class="ws-ric' + (a.id === active.id ? ' on' : '') + '"'
     + ' onclick="wsGoArea(\'' + a.id + '\')" title="' + esc(a.label) + '">'
     + a.icon
-    + (a.badgeCount ? '<span class="ws-ric-b">' + (a.badgeCount > 99 ? '99+' : a.badgeCount) + '</span>' : '')
+    + (a.badgeCount ? '<span class="ws-ric-b' + (a.id === 'chat' && chatFlashing ? ' flash' : '') + '">' + (a.badgeCount > 99 ? '99+' : a.badgeCount) + '</span>' : '')
     + '</button>'
   ).join('');
 
@@ -1710,10 +1716,14 @@ function buildWorkspaceNav() {
 
   // Chat replaces the flat screen list with its channel + DM list, since
   // "which channel" is the real navigation inside that area.
-  if (active.custom === 'chat') { nav.innerHTML = chSidebarHtml(); return; }
+  if (active.custom === 'chat') {
+    nav.innerHTML = chSidebarHtml();
+    window._chFlashIds = new Set(); // consumed by both the rail badge above and chSidebarHtml's rows — clear once both have read it
+    return;
+  }
   // Same idea for Docs — the page library, grouped by category, is the
   // real navigation there.
-  if (active.custom === 'docs') { nav.innerHTML = docSidebarHtml(); return; }
+  if (active.custom === 'docs') { nav.innerHTML = docSidebarHtml(); window._chFlashIds = new Set(); return; }
 
   nav.innerHTML = '<div class="ws-grp">' + esc(active.label) + '</div>'
     + active.screens.map(s =>
@@ -1722,6 +1732,7 @@ function buildWorkspaceNav() {
         + '<span class="ws-nav-ic">' + s.icon + '</span>' + esc(s.label)
         + '</button>'
       ).join('');
+  window._chFlashIds = new Set();
 }
 
 function chSidebarHtml() {
@@ -1736,7 +1747,7 @@ function chSidebarHtml() {
       + ' onclick="chSelect(\'' + c.id + '\')">'
       + '<span class="ws-nav-ic">' + (c.kind === 'dm' ? '👤' : '#') + '</span>'
       + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(c.kind === 'dm' ? chLabel(c) : c.name) + '</span>'
-      + (unread ? '<span class="ws-nav-badge">' + (unread > 30 ? '30+' : unread) + '</span>'
+      + (unread ? '<span class="ws-nav-badge' + ((window._chFlashIds || new Set()).has(c.id) ? ' flash' : '') + '">' + (unread > 30 ? '30+' : unread) + '</span>'
           : (c.branch && c.branch !== 'ALL'
               ? '<span class="ws-nav-dot" style="background:' + (c.branch === 'OC' ? '#C93D00' : '#005A9C') + '"></span>' : ''))
       + '</button>';
@@ -9785,12 +9796,19 @@ function chStartUnreadWatchers() {
   });
 }
 
+// Flash ids — which channel just went from read (or lower) to a higher
+// unread count, so the badge doesn't just sit there as a static number.
+// Set here, read once by buildWorkspaceNav/chSidebarHtml, then cleared —
+// same one-shot pattern as window._shopYardFlashIds on the kiosk.
+window._chFlashIds = new Set();
 async function chCountUnread(channelId, sinceMs) {
+  const before = window._chUnread[channelId] || 0;
   try {
     const snap = await db.collection('channels').doc(channelId).collection('messages')
       .where('createdAt', '>', new Date(sinceMs || 0)).limit(30).get();
     window._chUnread[channelId] = snap.size;
   } catch (e) { window._chUnread[channelId] = 0; }
+  if (window._chUnread[channelId] > before) window._chFlashIds.add(channelId);
   chRefreshUnreadUI();
 }
 
