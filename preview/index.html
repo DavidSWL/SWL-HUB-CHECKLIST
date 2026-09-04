@@ -12290,6 +12290,7 @@ async function shopPaintTicketDetail(ticketId) {
   const issueDisplay = (window._stdLang === 'en' && t._issueEn) ? t._issueEn : t.issue;
 
   const isTerminal = t.status === 'closed' || t.status === 'cancelled' || t.status === 'not_repairable';
+  const editing = window._stdEditing === ticketId;
   // Always the simple view now, for everyone — "those options should only
   // be for our yard supervisor, not a requestor." This screen shows what's
   // happening (status, timeline, whatever the yard supervisor has noted or
@@ -12308,6 +12309,11 @@ async function shopPaintTicketDetail(ticketId) {
     + '<button onclick="shopToggleDetailLang(\'' + ticketId + '\',\'en\')" style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:11px;border:none;cursor:pointer;font-family:inherit;background:' + (window._stdLang === 'en' ? 'var(--swl-green);color:#fff' : 'none;color:var(--text3)') + '">EN</button>'
     + '<button onclick="shopToggleDetailLang(\'' + ticketId + '\',\'es\')" style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:11px;border:none;cursor:pointer;font-family:inherit;background:' + (window._stdLang === 'es' ? 'var(--swl-green);color:#fff' : 'none;color:var(--text3)') + '">ES</button>'
     + '</div>'
+    // David-only — correcting a wrong division/foreman/priority/issue
+    // after the fact (e.g. a ticket tagged to the wrong division). Not a
+    // status change, so it doesn't touch anything the Kiosk's advance-
+    // status flow owns.
+    + (shopIsDavid() ? '<button onclick="shopToggleTicketEdit(\'' + ticketId + '\')" style="background:none;border:none;font-size:12.5px;font-weight:700;cursor:pointer;color:' + (editing ? 'var(--swl-green)' : 'var(--text3)') + '" title="' + T('Edit ticket','Editar boleto') + '">✎</button>' : '')
     // David-only, same as the Kiosk delete — this is the one screen that
     // actually lists every status (including already-closed/cancelled
     // test tickets), which the Kiosk's active-card view never surfaces.
@@ -12320,7 +12326,26 @@ async function shopPaintTicketDetail(ticketId) {
     + (t.partsPending ? '<span style="font-size:9px;font-weight:700;color:var(--warn);background:var(--warn-l);padding:3px 8px;border-radius:20px">' + T('Parts Pending','Piezas Pendientes') + '</span>' : '')
     + (t.outsourced ? '<span style="font-size:9px;font-weight:700;color:var(--info);background:var(--info-l);padding:3px 8px;border-radius:20px">' + T('Sent to Outside Shop','Enviado a Taller Externo') + '</span>' : '')
     + '</div>'
-    + '<div style="font-size:13px;color:var(--text);background:var(--surface2);padding:10px 12px;border-radius:var(--r);margin-bottom:14px;white-space:pre-wrap">' + esc(issueDisplay || '') + '</div>'
+    + (editing
+        ? '<div style="background:var(--surface2);border:1px solid var(--border2);border-radius:var(--r);padding:14px;margin-bottom:14px">'
+          + '<div class="fg" style="margin-bottom:10px"><label style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;display:block;margin-bottom:4px">' + T('Division','División') + '</label>'
+          + '<select id="std-edit-division" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px">'
+          + SHOP_DIVISIONS.map(d => '<option value="' + d.id + '"' + ((t.divisionId||'') === d.id ? ' selected' : '') + '>' + esc(T(d.name,d.nameEs)) + '</option>').join('')
+          + '</select></div>'
+          + '<div class="fg" style="margin-bottom:10px"><label style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;display:block;margin-bottom:4px">' + T('Foreman','Capataz') + '</label>'
+          + '<input type="text" id="std-edit-foreman" value="' + esc(t.foremanName || '') + '" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px"></div>'
+          + '<div class="fg" style="margin-bottom:10px"><label style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;display:block;margin-bottom:4px">' + T('Priority','Prioridad') + '</label>'
+          + '<select id="std-edit-priority" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px">'
+          + '<option value="normal"' + (t.priority !== 'urgent' ? ' selected' : '') + '>' + T('Normal','Normal') + '</option>'
+          + '<option value="urgent"' + (t.priority === 'urgent' ? ' selected' : '') + '>' + T('Urgent','Urgente') + '</option>'
+          + '</select></div>'
+          + '<div class="fg" style="margin-bottom:12px"><label style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;display:block;margin-bottom:4px">' + T('Issue','Problema') + '</label>'
+          + '<textarea id="std-edit-issue" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;font-family:inherit;resize:vertical">' + esc(t.issue || '') + '</textarea></div>'
+          + '<div style="display:flex;gap:8px">'
+          + '<button class="btn sm primary" onclick="shopSaveTicketEdit(\'' + ticketId + '\')">' + T('Save Changes','Guardar Cambios') + '</button>'
+          + '<button class="btn sm" onclick="shopToggleTicketEdit(\'' + ticketId + '\')">' + T('Cancel','Cancelar') + '</button>'
+          + '</div></div>'
+        : '<div style="font-size:13px;color:var(--text);background:var(--surface2);padding:10px 12px;border-radius:var(--r);margin-bottom:14px;white-space:pre-wrap">' + esc(issueDisplay || '') + '</div>')
     + ((t.estimatedDropoffDate || t.requestedReturnDate) ? '<div style="display:flex;gap:18px;font-size:12px;color:var(--text2);margin-bottom:10px;flex-wrap:wrap">'
         + (t.estimatedDropoffDate ? '<div>📅 ' + T('Drop-off','Entrega') + ': <b>' + shopFmtDateOnly(t.estimatedDropoffDate) + '</b></div>' : '')
         + (t.requestedReturnDate ? '<div>↩ ' + T('Needed back','Se necesita de vuelta') + ': <b>' + shopFmtDateOnly(t.requestedReturnDate) + '</b></div>' : '')
@@ -12330,7 +12355,7 @@ async function shopPaintTicketDetail(ticketId) {
         + (t.estimatedPickupDate ? '<div>🕐 ' + T('Est. Pickup Date','Fecha Est. de Recogida') + ': <b>' + shopFmtDateOnly(t.estimatedPickupDate) + '</b></div>' : '')
         + '</div>' : '')
     + '<div style="font-size:11px;color:var(--text3);margin-bottom:' + (t.foremanName ? '2' : '14') + 'px">' + T('Submitted by','Enviado por') + ' ' + esc(t.submittedByName || '—') + ' · ' + shopFmtWhen(t.createdAt) + '</div>'
-    + (t.foremanName ? '<div style="font-size:11px;color:var(--text3);margin-bottom:14px">' + T('Foreman','Capataz') + ': ' + esc(t.foremanName) + '</div>' : '')
+    + (t.foremanName && !editing ? '<div style="font-size:11px;color:var(--text3);margin-bottom:14px">' + T('Foreman','Capataz') + ': ' + esc(t.foremanName) + '</div>' : '')
     + (t.loanerNumber ? '<div style="font-size:12px;' + (shopIsLoanerOverdue(t) ? 'color:var(--danger);background:var(--danger-l)' : 'color:var(--text2);background:var(--surface2)') + ';padding:8px 12px;border-radius:var(--r);margin-bottom:14px">🔁 ' + T('Loaner','Préstamo') + ' ' + esc(t.loanerNumber) + (t.loanerReturnDate ? ' — ' + T('due','vence') + ' ' + shopFmtDateOnly(t.loanerReturnDate) : '') + (t.loanerReturned ? ' (' + T('returned','devuelto') + ')' : (shopIsLoanerOverdue(t) ? ' — ' + T('OVERDUE','VENCIDO') : '')) + '</div>' : '')
     + (t.pickupDate ? '<div style="font-size:12px;color:var(--text2);margin-bottom:14px">🕐 ' + T('Pickup scheduled','Recogida programada') + ': <b>' + shopFmtDateOnly(t.pickupDate) + (t.pickupTime ? ' ' + shopFmtTimeOnly(t.pickupTime) : '') + '</b></div>' : '')
     + (t.cancelReason ? '<div style="font-size:12px;color:var(--danger);background:var(--danger-l);padding:8px 12px;border-radius:var(--r);margin-bottom:14px">' + T('Cancellation reason','Motivo de cancelación') + ': ' + esc(t.cancelReason) + '</div>' : '')
@@ -12384,6 +12409,50 @@ async function shopTranslateToEnglish(text) {
     const data = await res.json();
     return (data[0] || []).map(seg => seg[0]).join('') || text;
   } catch (e) { return text; }
+}
+
+// David-only — correcting a ticket entered wrong (wrong division being
+// the reported case, but foreman/priority/issue can drift too) without
+// going through the Kiosk's status-advancing flow, which owns none of
+// these fields. window._stdEditing gates the form (see shopPaintTicket-
+// Detail), toggled per-ticket-id so switching tickets never leaves an
+// old one silently still in edit mode.
+function shopToggleTicketEdit(ticketId) {
+  if (!shopIsDavid()) return;
+  window._stdEditing = window._stdEditing === ticketId ? null : ticketId;
+  shopPaintTicketDetail(ticketId);
+}
+async function shopSaveTicketEdit(ticketId) {
+  if (!shopIsDavid()) return;
+  const t = (window._shopTickets || []).find(x => x.id === ticketId);
+  if (!t) return;
+  const divisionId = document.getElementById('std-edit-division').value || null;
+  const foremanName = document.getElementById('std-edit-foreman').value.trim() || null;
+  const priority = document.getElementById('std-edit-priority').value;
+  const issue = document.getElementById('std-edit-issue').value.trim();
+  const changes = [];
+  if (divisionId !== (t.divisionId || null)) changes.push('división: ' + shopDivisionName(t.divisionId) + ' → ' + shopDivisionName(divisionId));
+  if (foremanName !== (t.foremanName || null)) changes.push('capataz: ' + (t.foremanName || '—') + ' → ' + (foremanName || '—'));
+  if (priority !== t.priority) changes.push('prioridad: ' + (t.priority || 'normal') + ' → ' + priority);
+  if (issue !== (t.issue || '')) changes.push('descripción actualizada');
+  if (!changes.length) { window._stdEditing = null; shopPaintTicketDetail(ticketId); return; }
+  try {
+    await db.collection('shop_tickets').doc(ticketId).update({
+      divisionId, foremanName, priority, issue,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('shop_tickets').doc(ticketId).collection('events').add({
+      type: 'note', text: 'Boleto editado por ' + CD.name + ' — ' + changes.join('; '),
+      userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    t.divisionId = divisionId; t.foremanName = foremanName; t.priority = priority; t.issue = issue;
+    t._issueEn = null; // stale translation of the pre-edit text — re-translate on next EN toggle
+    window._stdEditing = null;
+    toast('✓ ' + T('Ticket updated','Boleto actualizado'));
+    shopPaintTicketDetail(ticketId);
+  } catch (e) {
+    toast(e.message || T('Could not save','No se pudo guardar'), 'err');
+  }
 }
 
 // David-only, reachable from Ticket Progress specifically because it's
