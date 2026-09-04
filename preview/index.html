@@ -13213,6 +13213,10 @@ async function shopPaintYardConfirm(ticketId, kind) {
     body.innerHTML = shopYardAddNoteMenuHtml(ticketId, t);
     return;
   }
+  if (kind === 'ready' && window._syReadyMode === 'loaner') {
+    body.innerHTML = shopYardLoanerEditHtml(ticketId, t);
+    return;
+  }
 
   let events = [];
   try {
@@ -13306,6 +13310,9 @@ function shopYardReadyMenuHtml(ticketId, t) {
     + '<button onclick="shopYardShowAddNote(\'' + ticketId + '\')" style="flex:1;padding:18px 10px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">📝 Agregar Nota</button>'
     + '<button onclick="shopYardAddPhoto(\'' + ticketId + '\',\'ready\')" style="flex:1;padding:18px 10px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">📷 Agregar Foto</button>'
     + '</div>'
+    // Only shown once a loaner actually exists on this ticket — reconnects
+    // the number/return-date fields that had no menu path back to them.
+    + (t.loanerNumber ? '<button onclick="shopYardShowLoanerEdit(\'' + ticketId + '\')" style="width:100%;padding:18px;font-size:15px;font-weight:700;background:var(--info-l);color:var(--info);border:1.5px dashed var(--info);border-radius:12px;cursor:pointer;text-align:left">🔁 Préstamo — ' + esc(t.loanerNumber) + (t.loanerReturnDate ? ', vence ' + shopFmtDateOnly(t.loanerReturnDate) : '') + '</button>' : '')
     // "Actualizar Progreso" removed from the menu per David — Nota/Foto
     // now cover it directly. The screen and its functions (dates, parts
     // pending, outsourced, not-repairable, mid-repair loaner) are still
@@ -13352,6 +13359,27 @@ async function shopYardQuickMarkReady(ticketId) {
 function shopYardShowAddNote(ticketId) {
   window._syReadyMode = 'note';
   shopPaintYardConfirm(ticketId, 'ready');
+}
+// Reconnects loaner editing — the number and return-date fields lived on
+// the old Actualizar Progreso screen, which no longer has a menu button
+// pointing to it, so there was no way left to fix a wrong date after
+// intake. Same one-focus-screen style as Agregar Nota; the actual save/
+// mark-returned logic is unchanged (shopYardSaveLoaner,
+// shopYardMarkLoanerReturned) — this only reconnects a path to it.
+function shopYardShowLoanerEdit(ticketId) {
+  window._syReadyMode = 'loaner';
+  shopPaintYardConfirm(ticketId, 'ready');
+}
+function shopYardLoanerEditHtml(ticketId, t) {
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
+    + '<button onclick="shopYardBackToMenu(\'' + ticketId + '\')" style="background:none;border:none;font-size:14px;font-weight:700;cursor:pointer;color:var(--text2)">← Atrás</button>'
+    + '<button onclick="document.getElementById(\'shop-yard-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button></div>'
+    + '<div style="text-align:center;font-size:22px;font-weight:800;margin-bottom:18px">🔁 Préstamo</div>'
+    + '<div class="fg"><label>Número de Préstamo</label><input type="text" id="syd-loanernum-' + ticketId + '" value="' + esc(t.loanerNumber || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)"></div>'
+    + '<div class="fg" style="margin-top:12px"><label>Devolución Esperada</label><input type="date" id="syd-loanerdate-' + ticketId + '" value="' + esc(t.loanerReturnDate || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)"></div>'
+    + (t.loanerReturned
+        ? '<div style="font-size:13.5px;color:var(--success);font-weight:700;text-align:center;padding:16px 0">✓ Préstamo devuelto</div>'
+        : '<button class="btn sm" style="width:100%;margin-top:16px;background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopYardMarkLoanerReturned(\'' + ticketId + '\',\'ready\')">✓ Marcar Préstamo Devuelto</button>');
 }
 function shopYardAddNoteMenuHtml(ticketId, t) {
   return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">'
@@ -14554,6 +14582,41 @@ async function tcMarkReturned(id) {
   }
 }
 
+// Change the expected return date on an already-checked-out tool.
+// Kiosk-only, same as everything else on this card — the Kiosk screen
+// itself is only reachable by role 'yard' (Saul) or 'admin' (David), so
+// no separate gate is needed here for "only him or me."
+function tcShowEditDate(id) {
+  const tc = (window._toolCheckouts || []).find(x => x.id === id);
+  if (!tc) return;
+  const ex = document.getElementById('tc-edit-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'tc-edit-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:22px;padding:26px;width:380px;max-width:100%;box-shadow:var(--shm)">'
+    + '<div style="font-size:17px;font-weight:800;margin-bottom:14px">🔁 ' + esc(tc.unitNumber || '—') + '</div>'
+    + '<div class="fg"><label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:4px">Devolución Esperada</label>'
+    + '<input type="date" id="tc-edit-date" value="' + esc(tc.expectedReturnDate || '') + '" style="width:100%;font-size:16px;padding:12px 14px;border:1.5px solid var(--border2);border-radius:10px;background:var(--surface);color:var(--text)"></div>'
+    + '<div style="display:flex;gap:8px;margin-top:16px">'
+    + '<button onclick="tcSaveEditDate(\'' + id + '\')" style="flex:1;padding:14px;font-size:15px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Guardar</button>'
+    + '<button onclick="document.getElementById(\'tc-edit-modal\').remove()" style="padding:14px 18px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">Cancelar</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+async function tcSaveEditDate(id) {
+  const d = document.getElementById('tc-edit-date').value;
+  if (!d) { toast('Selecciona una fecha', 'err'); return; }
+  try {
+    await db.collection('tool_checkouts').doc(id).update({
+      expectedReturnDate: d, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    const m = document.getElementById('tc-edit-modal'); if (m) m.remove();
+    toast('✓ Fecha actualizada');
+  } catch (e) {
+    toast(e.message || 'No se pudo guardar', 'err');
+  }
+}
+
 // David-only, matching shopDetailDeleteTicket's gate — not soft-delete
 // like tickets (no "Deleted" filter view exists for checkouts, and there's
 // no audit reason to keep a hard-deleted test entry around), just a
@@ -14592,6 +14655,7 @@ function tcCardHtml(tc) {
     + '</div>'
     + '<div style="display:flex;gap:8px;margin-top:10px">'
     + '<button class="btn sm primary" style="flex:1" onclick="tcMarkReturned(\'' + tc.id + '\')">✓ Devuelto</button>'
+    + '<button class="btn sm" onclick="tcShowEditDate(\'' + tc.id + '\')" title="Cambiar fecha">✎</button>'
     + (shopIsDavid() ? '<button class="btn sm" onclick="tcDelete(\'' + tc.id + '\')" title="Eliminar">🗑</button>' : '')
     + '</div>'
     + '</div>';
