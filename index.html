@@ -12667,11 +12667,13 @@ function shopPaintYardRepairReport(tickets, assets) {
       + T('First pass at this report — reach out if the breakdown here doesn\'t match what you had in mind and I\'ll adjust it.',
           'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
       + '</div>'
-    // David-only — this is his own report to copy into an email himself,
-    // not a dashboard feature for admin/exec generally, per his request.
+    // David-only — this is his own report, not a dashboard feature for
+    // admin/exec generally, per his request. Opens a full printable page
+    // in a new tab (not a clipboard copy) — "a very well detailed report
+    // to read," which a wall of plain text didn't deliver on.
     + (shopIsDavid() ? '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px">'
-      + '<button class="btn sm primary" onclick="shopCopySummary(7)">📋 ' + T('Copy Weekly Summary','Copiar Resumen Semanal') + '</button>'
-      + '<button class="btn sm primary" onclick="shopCopySummary(30)">📆 ' + T('Copy Monthly Summary','Copiar Resumen Mensual') + '</button>'
+      + '<button class="btn sm primary" onclick="shopExportPeriodReport(7)">🖨 ' + T('Export Weekly Report','Exportar Reporte Semanal') + '</button>'
+      + '<button class="btn sm primary" onclick="shopExportPeriodReport(30)">🖨 ' + T('Export Monthly Report','Exportar Reporte Mensual') + '</button>'
     + '</div>' : '')
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
       + '<div class="stat-card"><div class="stat-num">' + openTickets.length + '</div><div class="stat-lbl">' + T('Open Now','Abiertos Ahora') + '</div></div>'
@@ -12711,24 +12713,17 @@ function shopPaintYardRepairReport(tickets, assets) {
     + '</div>';
 }
 
-// Plain-text digest, weekly or monthly — David copies this into an email
-// himself rather than the app sending one (no backend here to run a real
-// schedule). Per-ticket detail, not just counts: every ticket submitted
-// in the period gets its outcome, its latest note (the denormalized
-// lastNoteText — the same "quick reference" field Ticket Progress shows,
-// not a full per-event history pull, which would mean a Firestore read
-// per ticket), and its loaner status if it has one. Tool checkouts get
-// their own section, unfiltered by the period — EVERY checkout still out
-// shows up regardless of when it started, plus anything returned within
-// the period, so nothing currently out can silently go missing from the
-// report just because it was checked out before the window started.
-function shopBuildPeriodSummaryText(tickets, checkouts, days) {
+// Shared data layer for the weekly/monthly report — everything below
+// just renders whatever this computes. Tool checkouts are deliberately
+// NOT filtered by the period start: an item checked out 3 weeks ago and
+// still out today is exactly the kind of thing a report like this exists
+// to surface, not drop for being "old."
+function shopComputePeriodSummary(tickets, checkouts, days) {
   const now = new Date();
   const periodStart = new Date(now.getTime() - days * 86400000);
-  const periodLabel = days >= 28 ? 'MONTHLY' : 'WEEKLY';
   const toDate = (ts) => ts?.toDate ? ts.toDate() : null;
   const inWindow = (ts) => { const d = toDate(ts); return !!d && d >= periodStart; };
-  const fmtD = (d) => d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+  const todayStr = now.toISOString().split('T')[0];
 
   const newThisPeriod = tickets.filter(t => inWindow(t.createdAt))
     .sort((a,b) => (toDate(a.createdAt) || 0) - (toDate(b.createdAt) || 0));
@@ -12738,78 +12733,141 @@ function shopBuildPeriodSummaryText(tickets, checkouts, days) {
   const urgentOpen = openNow.filter(t => t.priority === 'urgent');
   const readyNow = tickets.filter(t => t.status === 'ready_pickup');
   const overdueLoaners = tickets.filter(shopIsLoanerOverdue);
+  const relevantCheckouts = (checkouts || []).filter(c => c.status === 'out' || inWindow(c.returnedAt));
 
-  const loanerLine = (t) => {
+  const loanerStatus = (t) => {
     if (!t.loanerNumber) return null;
-    if (t.loanerReturned) return 'Loaner ' + t.loanerNumber + ' — RETURNED';
-    if (shopIsLoanerOverdue(t)) return 'Loaner ' + t.loanerNumber + ' — STILL OUT, OVERDUE (was due ' + shopFmtDateOnly(t.loanerReturnDate) + ')';
-    return 'Loaner ' + t.loanerNumber + ' — STILL OUT, due ' + (t.loanerReturnDate ? shopFmtDateOnly(t.loanerReturnDate) : 'no date set');
+    if (t.loanerReturned) return { text: 'Returned', cls: 'ok' };
+    if (shopIsLoanerOverdue(t)) return { text: 'Still out — OVERDUE, was due ' + shopFmtDateOnly(t.loanerReturnDate), cls: 'bad' };
+    return { text: 'Still out — due ' + (t.loanerReturnDate ? shopFmtDateOnly(t.loanerReturnDate) : 'no date set'), cls: 'warn' };
+  };
+  const checkoutStatus = (c) => {
+    const overdue = c.status === 'out' && c.expectedReturnDate && c.expectedReturnDate < todayStr;
+    if (c.status === 'returned') return { text: 'Returned' + (toDate(c.returnedAt) ? ' ' + shopFmtDateOnly(c.returnedAt) : ''), cls: 'ok' };
+    return overdue
+      ? { text: 'Still out — OVERDUE, was due ' + shopFmtDateOnly(c.expectedReturnDate), cls: 'bad' }
+      : { text: 'Still out — due ' + shopFmtDateOnly(c.expectedReturnDate), cls: 'warn' };
   };
 
-  const lines = [];
-  lines.push('SWL SHOP TICKETS — ' + periodLabel + ' SUMMARY');
-  lines.push((periodLabel === 'MONTHLY' ? 'Period' : 'Week') + ' of ' + fmtD(periodStart) + ' – ' + fmtD(now));
-  lines.push('');
-  lines.push('New tickets this period: ' + newThisPeriod.length);
-  lines.push('Closed this period: ' + closedThisPeriod.length);
-  lines.push('Still open (all-time): ' + openNow.length + ' (' + urgentOpen.length + ' urgent)');
-  lines.push('Ready for pickup: ' + readyNow.length);
-  lines.push('Overdue loaners: ' + overdueLoaners.length);
-  lines.push('');
-  lines.push('TICKETS SUBMITTED THIS PERIOD');
-  lines.push('----------------------------------------');
-  if (!newThisPeriod.length) {
-    lines.push('None.');
-  } else {
-    newThisPeriod.forEach(t => {
-      lines.push((t.unitNumber || '—') + ' — ' + shopDivisionName(t.divisionId) + ' — submitted ' + (toDate(t.createdAt) ? fmtD(toDate(t.createdAt)) : '—') + (t.priority === 'urgent' ? ' — URGENT' : ''));
-      if (t.issue) lines.push('  Issue: ' + t.issue);
-      lines.push('  Outcome: ' + shopTicketStatusLabel(t.status) + (t.workType ? ' — ' + shopWorkTypeLabel(t.workType) : '') + (t.status === 'cancelled' && t.cancelReason ? ' (' + t.cancelReason + ')' : ''));
-      const ll = loanerLine(t);
-      if (ll) lines.push('  ' + ll);
-      if (t.lastNoteText) lines.push('  Latest note: "' + t.lastNoteText + '" — ' + (t.lastNoteBy || '—'));
-      lines.push('');
-    });
-  }
-  lines.push('TOOL CHECKOUTS — CURRENT STATUS (' + (checkouts || []).length + ' total on record)');
-  lines.push('----------------------------------------');
-  // Deliberately NOT filtered by the period start — an item checked out
-  // 3 weeks ago and still out today is exactly the kind of thing a report
-  // like this exists to surface, not drop for being "old."
-  const relevantCheckouts = (checkouts || []).filter(c => c.status === 'out' || inWindow(c.returnedAt));
-  if (!relevantCheckouts.length) {
-    lines.push((checkouts || []).length ? 'None currently out or returned this period.' : 'None on record.');
-  } else {
-    relevantCheckouts.forEach(c => {
-      const overdue = c.status === 'out' && c.expectedReturnDate && c.expectedReturnDate < now.toISOString().split('T')[0];
-      const statusText = c.status === 'returned'
-        ? 'RETURNED' + (toDate(c.returnedAt) ? ' ' + fmtD(toDate(c.returnedAt)) : '')
-        : (overdue ? 'STILL OUT, OVERDUE (was due ' + shopFmtDateOnly(c.expectedReturnDate) + ')' : 'STILL OUT, due ' + shopFmtDateOnly(c.expectedReturnDate));
-      lines.push((c.unitNumber || '—') + ' ' + (c.toolLabel || '') + ' — ' + (c.foremanName || '—') + ' — ' + shopDivisionName(c.divisionId));
-      lines.push('  Status: ' + statusText);
-      lines.push('');
-    });
-  }
-  return lines.join('\n');
+  return { now, periodStart, newThisPeriod, closedThisPeriod, openNow, urgentOpen, readyNow,
+    overdueLoaners, relevantCheckouts, totalCheckouts: (checkouts || []).length, loanerStatus, checkoutStatus };
 }
 
-async function shopCopySummary(days) {
+// A full standalone HTML document — not a fragment injected into the app
+// — opened in its own tab so printing it (or Save as PDF from the
+// browser's print dialog) never fights the app's own nav/overlay/dark
+// theme. "A very well detailed report to read," not a clipboard dump.
+function shopBuildPeriodReportHtml(tickets, checkouts, days) {
+  const s = shopComputePeriodSummary(tickets, checkouts, days);
+  const periodLabel = days >= 28 ? 'Monthly' : 'Weekly';
+  const fmtD = (d) => d.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' });
+  const statusDot = { ok:'#059669', warn:'#D97706', bad:'#DC2626' };
+
+  const statCard = (label, num, color) => `<div class="stat"><div class="stat-n" style="color:${color || '#0D1B12'}">${num}</div><div class="stat-l">${esc(label)}</div></div>`;
+
+  const ticketCard = (t) => {
+    const ls = s.loanerStatus(t);
+    return `<div class="entry">
+      <div class="entry-hd">
+        <span class="unit">${esc(t.unitNumber || '—')}</span>
+        <span class="div-tag">${esc(shopDivisionName(t.divisionId))}</span>
+        ${t.priority === 'urgent' ? '<span class="pill bad">URGENT</span>' : ''}
+        <span class="entry-date">Submitted ${t.createdAt?.toDate ? fmtD(t.createdAt.toDate()) : '—'}</span>
+      </div>
+      ${t.issue ? `<div class="issue">${esc(t.issue)}</div>` : ''}
+      <div class="row"><b>Outcome:</b> ${esc(shopTicketStatusLabel(t.status))}${t.workType ? ' — ' + esc(shopWorkTypeLabel(t.workType)) : ''}${t.status === 'cancelled' && t.cancelReason ? ' (' + esc(t.cancelReason) + ')' : ''}</div>
+      ${ls ? `<div class="row"><b>Loaner ${esc(t.loanerNumber)}:</b> <span class="dot" style="background:${statusDot[ls.cls]}"></span>${esc(ls.text)}</div>` : ''}
+      ${t.lastNoteText ? `<div class="note">&ldquo;${esc(t.lastNoteText)}&rdquo; — ${esc(t.lastNoteBy || '—')}</div>` : ''}
+    </div>`;
+  };
+
+  const checkoutRow = (c) => {
+    const cs = s.checkoutStatus(c);
+    return `<tr>
+      <td>${esc(c.unitNumber || '—')} ${esc(c.toolLabel || '')}</td>
+      <td>${esc(c.foremanName || '—')}</td>
+      <td>${esc(shopDivisionName(c.divisionId))}</td>
+      <td><span class="dot" style="background:${statusDot[cs.cls]}"></span>${esc(cs.text)}</td>
+    </tr>`;
+  };
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<title>SWL Shop Tickets — ${periodLabel} Report</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#F1F3F4;color:#0D1B12;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;-webkit-font-smoothing:antialiased}
+  .page{max-width:820px;margin:0 auto;padding:40px 28px 80px}
+  .toolbar{position:sticky;top:0;background:#fff;border-bottom:1px solid #E2E8E4;padding:12px 28px;display:flex;justify-content:flex-end;gap:8px;z-index:10}
+  .toolbar button{font-family:inherit;font-size:13px;font-weight:700;padding:9px 16px;border-radius:8px;border:none;cursor:pointer}
+  .btn-print{background:#0E4C2D;color:#fff}
+  .btn-close{background:#F0F2F0;color:#0D1B12}
+  h1{font-size:22px;font-weight:800;margin:0 0 4px}
+  .sub{font-size:13px;color:#3A4F43;margin-bottom:28px}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:32px}
+  .stat{background:#fff;border:1px solid #E2E8E4;border-radius:10px;padding:14px}
+  .stat-n{font-size:22px;font-weight:800}
+  .stat-l{font-size:11px;color:#3A4F43;margin-top:2px}
+  h2{font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#3A4F43;border-bottom:2px solid #0E4C2D;padding-bottom:6px;margin:32px 0 14px}
+  .entry{background:#fff;border:1px solid #E2E8E4;border-radius:10px;padding:14px 16px;margin-bottom:10px;break-inside:avoid}
+  .entry-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .unit{font-size:15px;font-weight:800}
+  .div-tag{font-size:10.5px;color:#3A4F43;background:#F8F9FA;padding:2px 8px;border-radius:20px}
+  .pill{font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:20px;color:#fff}
+  .pill.bad{background:#DC2626}
+  .entry-date{margin-left:auto;font-size:11px;color:#7A9088}
+  .issue{font-size:13px;color:#0D1B12;margin-bottom:6px}
+  .row{font-size:12.5px;color:#3A4F43;margin-bottom:4px}
+  .note{font-size:12.5px;color:#3A4F43;font-style:italic;margin-top:6px;padding-top:6px;border-top:1px solid #F0F2F0}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+  .empty{font-size:13px;color:#7A9088;padding:10px 0}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #E2E8E4;border-radius:10px;overflow:hidden;font-size:12.5px}
+  th{text-align:left;padding:9px 12px;background:#F8F9FA;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#3A4F43;border-bottom:1px solid #E2E8E4}
+  td{padding:9px 12px;border-bottom:1px solid #F0F2F0}
+  @media print{
+    .toolbar{display:none}
+    body{background:#fff}
+    .entry,.stat{border:1px solid #ccc}
+  }
+</style></head>
+<body>
+  <div class="toolbar">
+    <button class="btn-print" onclick="window.print()">🖨 Print / Save as PDF</button>
+    <button class="btn-close" onclick="window.close()">✕ Close</button>
+  </div>
+  <div class="page">
+    <h1>SWL Shop Tickets — ${periodLabel} Report</h1>
+    <div class="sub">${fmtD(s.periodStart)} – ${fmtD(s.now)} · Generated ${fmtD(s.now)} by ${esc(CD.name)}</div>
+
+    <div class="stats">
+      ${statCard('New This Period', s.newThisPeriod.length)}
+      ${statCard('Closed This Period', s.closedThisPeriod.length)}
+      ${statCard('Still Open', s.openNow.length)}
+      ${statCard('Urgent Open', s.urgentOpen.length, s.urgentOpen.length ? '#DC2626' : null)}
+      ${statCard('Ready for Pickup', s.readyNow.length)}
+      ${statCard('Overdue Loaners', s.overdueLoaners.length, s.overdueLoaners.length ? '#DC2626' : null)}
+    </div>
+
+    <h2>Tickets Submitted This Period</h2>
+    ${s.newThisPeriod.length ? s.newThisPeriod.map(ticketCard).join('') : '<div class="empty">None.</div>'}
+
+    <h2>Tool Checkouts — Current Status (${s.totalCheckouts} total on record)</h2>
+    ${s.relevantCheckouts.length
+      ? `<table><thead><tr><th>Tool</th><th>Assigned To</th><th>Division</th><th>Status</th></tr></thead><tbody>${s.relevantCheckouts.map(checkoutRow).join('')}</tbody></table>`
+      : `<div class="empty">${s.totalCheckouts ? 'None currently out or returned this period.' : 'None on record.'}</div>`}
+  </div>
+</body></html>`;
+}
+
+function shopExportPeriodReport(days) {
   if (!shopIsDavid()) return;
   const tickets = window._yardRepairTickets || [];
   const checkouts = window._yardRepairCheckouts || [];
-  const text = shopBuildPeriodSummaryText(tickets, checkouts, days);
-  try {
-    await navigator.clipboard.writeText(text);
-    toast('✓ ' + T('Copied to clipboard','Copiado al portapapeles'));
-  } catch (e) {
-    // Fallback for browsers/contexts that block the async clipboard API
-    const ta = document.createElement('textarea');
-    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); toast('✓ ' + T('Copied to clipboard','Copiado al portapapeles')); }
-    catch (e2) { toast(T('Could not copy — select and copy manually','No se pudo copiar — selecciona y copia manualmente'), 'err'); }
-    document.body.removeChild(ta);
-  }
+  const html = shopBuildPeriodReportHtml(tickets, checkouts, days);
+  const win = window.open('', '_blank');
+  if (!win) { toast(T('Please allow pop-ups to export the report','Permite ventanas emergentes para exportar el reporte'), 'err'); return; }
+  win.document.write(html);
+  win.document.close();
 }
 
 // ══════════════════════════════════════════════════════════════════════
