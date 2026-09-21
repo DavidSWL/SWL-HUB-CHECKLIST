@@ -12667,9 +12667,12 @@ function shopPaintYardRepairReport(tickets, assets) {
       + T('First pass at this report — reach out if the breakdown here doesn\'t match what you had in mind and I\'ll adjust it.',
           'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
       + '</div>'
-    + '<div style="display:flex;justify-content:flex-end;margin-bottom:14px">'
-      + '<button class="btn sm primary" onclick="shopCopyWeeklySummary()">📋 ' + T('Copy Weekly Summary','Copiar Resumen Semanal') + '</button>'
-    + '</div>'
+    // David-only — this is his own report to copy into an email himself,
+    // not a dashboard feature for admin/exec generally, per his request.
+    + (shopIsDavid() ? '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px">'
+      + '<button class="btn sm primary" onclick="shopCopySummary(7)">📋 ' + T('Copy Weekly Summary','Copiar Resumen Semanal') + '</button>'
+      + '<button class="btn sm primary" onclick="shopCopySummary(30)">📆 ' + T('Copy Monthly Summary','Copiar Resumen Mensual') + '</button>'
+    + '</div>' : '')
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
       + '<div class="stat-card"><div class="stat-num">' + openTickets.length + '</div><div class="stat-lbl">' + T('Open Now','Abiertos Ahora') + '</div></div>'
       + '<div class="stat-card" style="border-top:3px solid var(--danger)"><div class="stat-num">' + urgentOpen.length + '</div><div class="stat-lbl">' + T('Urgent Open','Urgentes Abiertos') + '</div></div>'
@@ -12708,25 +12711,28 @@ function shopPaintYardRepairReport(tickets, assets) {
     + '</div>';
 }
 
-// Plain-text weekly digest — David copies this into an email himself
-// rather than the app sending one (no backend here to run a real
+// Plain-text digest, weekly or monthly — David copies this into an email
+// himself rather than the app sending one (no backend here to run a real
 // schedule). Per-ticket detail, not just counts: every ticket submitted
-// in the last 7 days gets its outcome, its latest note (the denormalized
+// in the period gets its outcome, its latest note (the denormalized
 // lastNoteText — the same "quick reference" field Ticket Progress shows,
 // not a full per-event history pull, which would mean a Firestore read
 // per ticket), and its loaner status if it has one. Tool checkouts get
-// their own section — anything still out, or returned this week, so a
-// resolved one doesn't just vanish from the record the week it closes.
-function shopBuildWeeklySummaryText(tickets, checkouts) {
+// their own section, unfiltered by the period — EVERY checkout still out
+// shows up regardless of when it started, plus anything returned within
+// the period, so nothing currently out can silently go missing from the
+// report just because it was checked out before the window started.
+function shopBuildPeriodSummaryText(tickets, checkouts, days) {
   const now = new Date();
-  const weekAgo = new Date(now.getTime() - 7 * 86400000);
+  const periodStart = new Date(now.getTime() - days * 86400000);
+  const periodLabel = days >= 28 ? 'MONTHLY' : 'WEEKLY';
   const toDate = (ts) => ts?.toDate ? ts.toDate() : null;
-  const inWindow = (ts) => { const d = toDate(ts); return !!d && d >= weekAgo; };
+  const inWindow = (ts) => { const d = toDate(ts); return !!d && d >= periodStart; };
   const fmtD = (d) => d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
 
-  const newThisWeek = tickets.filter(t => inWindow(t.createdAt))
+  const newThisPeriod = tickets.filter(t => inWindow(t.createdAt))
     .sort((a,b) => (toDate(a.createdAt) || 0) - (toDate(b.createdAt) || 0));
-  const closedThisWeek = tickets.filter(t => t.status === 'closed' && inWindow(t.closedAt));
+  const closedThisPeriod = tickets.filter(t => t.status === 'closed' && inWindow(t.closedAt));
   const openStatuses = ['submitted','acknowledged','in_progress','ready_pickup'];
   const openNow = tickets.filter(t => openStatuses.includes(t.status));
   const urgentOpen = openNow.filter(t => t.priority === 'urgent');
@@ -12741,21 +12747,21 @@ function shopBuildWeeklySummaryText(tickets, checkouts) {
   };
 
   const lines = [];
-  lines.push('SWL SHOP TICKETS — WEEKLY SUMMARY');
-  lines.push('Week of ' + fmtD(weekAgo) + ' – ' + fmtD(now));
+  lines.push('SWL SHOP TICKETS — ' + periodLabel + ' SUMMARY');
+  lines.push((periodLabel === 'MONTHLY' ? 'Period' : 'Week') + ' of ' + fmtD(periodStart) + ' – ' + fmtD(now));
   lines.push('');
-  lines.push('New tickets this week: ' + newThisWeek.length);
-  lines.push('Closed this week: ' + closedThisWeek.length);
+  lines.push('New tickets this period: ' + newThisPeriod.length);
+  lines.push('Closed this period: ' + closedThisPeriod.length);
   lines.push('Still open (all-time): ' + openNow.length + ' (' + urgentOpen.length + ' urgent)');
   lines.push('Ready for pickup: ' + readyNow.length);
   lines.push('Overdue loaners: ' + overdueLoaners.length);
   lines.push('');
-  lines.push('TICKETS SUBMITTED THIS WEEK');
+  lines.push('TICKETS SUBMITTED THIS PERIOD');
   lines.push('----------------------------------------');
-  if (!newThisWeek.length) {
+  if (!newThisPeriod.length) {
     lines.push('None.');
   } else {
-    newThisWeek.forEach(t => {
+    newThisPeriod.forEach(t => {
       lines.push((t.unitNumber || '—') + ' — ' + shopDivisionName(t.divisionId) + ' — submitted ' + (toDate(t.createdAt) ? fmtD(toDate(t.createdAt)) : '—') + (t.priority === 'urgent' ? ' — URGENT' : ''));
       if (t.issue) lines.push('  Issue: ' + t.issue);
       lines.push('  Outcome: ' + shopTicketStatusLabel(t.status) + (t.workType ? ' — ' + shopWorkTypeLabel(t.workType) : '') + (t.status === 'cancelled' && t.cancelReason ? ' (' + t.cancelReason + ')' : ''));
@@ -12765,11 +12771,14 @@ function shopBuildWeeklySummaryText(tickets, checkouts) {
       lines.push('');
     });
   }
-  lines.push('TOOL CHECKOUTS — CURRENT STATUS');
+  lines.push('TOOL CHECKOUTS — CURRENT STATUS (' + (checkouts || []).length + ' total on record)');
   lines.push('----------------------------------------');
+  // Deliberately NOT filtered by the period start — an item checked out
+  // 3 weeks ago and still out today is exactly the kind of thing a report
+  // like this exists to surface, not drop for being "old."
   const relevantCheckouts = (checkouts || []).filter(c => c.status === 'out' || inWindow(c.returnedAt));
   if (!relevantCheckouts.length) {
-    lines.push('None.');
+    lines.push((checkouts || []).length ? 'None currently out or returned this period.' : 'None on record.');
   } else {
     relevantCheckouts.forEach(c => {
       const overdue = c.status === 'out' && c.expectedReturnDate && c.expectedReturnDate < now.toISOString().split('T')[0];
@@ -12784,10 +12793,11 @@ function shopBuildWeeklySummaryText(tickets, checkouts) {
   return lines.join('\n');
 }
 
-async function shopCopyWeeklySummary() {
+async function shopCopySummary(days) {
+  if (!shopIsDavid()) return;
   const tickets = window._yardRepairTickets || [];
   const checkouts = window._yardRepairCheckouts || [];
-  const text = shopBuildWeeklySummaryText(tickets, checkouts);
+  const text = shopBuildPeriodSummaryText(tickets, checkouts, days);
   try {
     await navigator.clipboard.writeText(text);
     toast('✓ ' + T('Copied to clipboard','Copiado al portapapeles'));
