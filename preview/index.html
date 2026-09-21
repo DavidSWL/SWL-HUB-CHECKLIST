@@ -12913,35 +12913,46 @@ function shopSetReportRange(days) {
 // blocker or a download permission — he WILL see something the moment
 // he clicks. Download is still offered, just as a secondary button once
 // he can already see the report worked.
+// Wrapped in try/catch and every early-out now shows a toast — three
+// silent mechanisms in a row (new tab, download, in-app modal) all got
+// reported as "completely silent, nothing at all" even in a fresh
+// incognito window, which rules out caching. The one thing every one of
+// those failures had in common is that nothing here ever showed an
+// error if something threw — so this makes sure SOMETHING is always
+// visible, even if it's just an error message, instead of true silence.
 function shopExportPeriodReport() {
-  if (!shopIsDavid()) return;
-  const fromVal = document.getElementById('rep-from')?.value;
-  const toVal = document.getElementById('rep-to')?.value;
-  if (!fromVal || !toVal) { toast(T('Pick a from and to date first','Elige una fecha de inicio y de fin primero'), 'err'); return; }
-  const periodStart = new Date(fromVal + 'T00:00:00');
-  const periodEnd = new Date(toVal + 'T23:59:59');
-  if (periodStart > periodEnd) { toast(T('The from date is after the to date','La fecha de inicio es posterior a la de fin'), 'err'); return; }
-  const tickets = window._yardRepairTickets || [];
-  const checkouts = window._yardRepairCheckouts || [];
-  const html = shopBuildPeriodReportHtml(tickets, checkouts, periodStart, periodEnd, fromVal + ' – ' + toVal);
-  window._reportHtml = html;
-  window._reportFilename = 'SWL_Shop_Tickets_Report_' + fromVal + '_to_' + toVal + '.html';
+  try {
+    if (!shopIsDavid()) { toast('Export is David-only (shopIsDavid() was false)', 'err'); return; }
+    const fromVal = document.getElementById('rep-from')?.value;
+    const toVal = document.getElementById('rep-to')?.value;
+    if (!fromVal || !toVal) { toast(T('Pick a from and to date first','Elige una fecha de inicio y de fin primero'), 'err'); return; }
+    const periodStart = new Date(fromVal + 'T00:00:00');
+    const periodEnd = new Date(toVal + 'T23:59:59');
+    if (periodStart > periodEnd) { toast(T('The from date is after the to date','La fecha de inicio es posterior a la de fin'), 'err'); return; }
+    const tickets = window._yardRepairTickets || [];
+    const checkouts = window._yardRepairCheckouts || [];
+    const html = shopBuildPeriodReportHtml(tickets, checkouts, periodStart, periodEnd, fromVal + ' – ' + toVal);
+    window._reportHtml = html;
+    window._reportFilename = 'SWL_Shop_Tickets_Report_' + fromVal + '_to_' + toVal + '.html';
 
-  const ex = document.getElementById('report-preview-modal'); if (ex) ex.remove();
-  const m = document.createElement('div');
-  m.id = 'report-preview-modal';
-  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:700;display:flex;align-items:center;justify-content:center;padding:20px';
-  m.innerHTML = '<div style="background:var(--surface);border-radius:16px;width:900px;max-width:100%;height:88vh;display:flex;flex-direction:column;box-shadow:var(--shm);overflow:hidden">'
-    + '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0">'
-    + '<div style="font-size:13px;font-weight:800">' + T('Report Preview','Vista Previa del Reporte') + '</div>'
-    + '<div style="display:flex;gap:8px;align-items:center">'
-    + '<button class="btn sm" onclick="shopDownloadReportHtml()">⬇ ' + T('Download File','Descargar Archivo') + '</button>'
-    + '<button onclick="document.getElementById(\'report-preview-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button>'
-    + '</div></div>'
-    + '<iframe id="report-preview-frame" style="flex:1;border:none;width:100%"></iframe>'
-    + '</div>';
-  document.body.appendChild(m);
-  document.getElementById('report-preview-frame').srcdoc = html;
+    const ex = document.getElementById('report-preview-modal'); if (ex) ex.remove();
+    const m = document.createElement('div');
+    m.id = 'report-preview-modal';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:700;display:flex;align-items:center;justify-content:center;padding:20px';
+    m.innerHTML = '<div style="background:var(--surface);border-radius:16px;width:900px;max-width:100%;height:88vh;display:flex;flex-direction:column;box-shadow:var(--shm);overflow:hidden">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0">'
+      + '<div style="font-size:13px;font-weight:800">' + T('Report Preview','Vista Previa del Reporte') + '</div>'
+      + '<div style="display:flex;gap:8px;align-items:center">'
+      + '<button class="btn sm" onclick="shopDownloadReportHtml()">⬇ ' + T('Download File','Descargar Archivo') + '</button>'
+      + '<button onclick="document.getElementById(\'report-preview-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button>'
+      + '</div></div>'
+      + '<iframe id="report-preview-frame" style="flex:1;border:none;width:100%"></iframe>'
+      + '</div>';
+    document.body.appendChild(m);
+    document.getElementById('report-preview-frame').srcdoc = html;
+  } catch (e) {
+    alert('Export failed — please screenshot this and send it to Claude:\n\n' + (e && e.stack ? e.stack : e));
+  }
 }
 
 // The generated report page has its own Print/Save-as-PDF button inside
