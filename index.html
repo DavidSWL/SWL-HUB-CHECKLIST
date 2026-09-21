@@ -10356,8 +10356,16 @@ async function renderShopAssets() {
   if (!canView) { ca.innerHTML = '<div class="empty">' + T('Asset Registry is only available to admin and executives.','El Registro de Activos solo está disponible para admin y ejecutivos.') + '</div>'; return; }
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   try {
-    const snap = await db.collection('shop_assets').get();
-    window._shopAssets = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    const [assetSnap, checkoutSnap] = await Promise.all([
+      db.collection('shop_assets').get(),
+      db.collection('tool_checkouts').where('status','==','out').get()
+    ]);
+    window._shopAssets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    // Keyed by assetId so the registry row can show "On Loan" instead of
+    // a generic Active status when a unit is actually out with someone
+    // right now — David: "this shows as in service but it's a loaner?"
+    window._shopAssetCheckouts = {};
+    checkoutSnap.docs.forEach(d => { const c = d.data(); if (c.assetId) window._shopAssetCheckouts[c.assetId] = c; });
     window._shopFilterDivision = window._shopFilterDivision || '';
     window._shopFilterType = window._shopFilterType || '';
     shopPaintAssets();
@@ -10425,6 +10433,11 @@ function shopPaintAssets() {
     + (list.length ? list.map(a => {
         const statusColor = a.status === 'down' ? 'var(--danger)' : a.status === 'retired' ? 'var(--text3)' : 'var(--success)';
         const statusBg = a.status === 'down' ? 'var(--danger-l)' : a.status === 'retired' ? 'var(--surface2)' : 'var(--success-l)';
+        // A unit's registry status (Active/Down/Retired) says nothing
+        // about whether it's physically sitting in the yard or out with
+        // a crew right now via Tool Checkout — cross-reference so "In
+        // Service" doesn't read as "available" when it's actually out.
+        const onLoan = (window._shopAssetCheckouts || {})[a.id];
         return '<tr style="cursor:' + (CD.role === 'admin' ? 'pointer' : 'default') + '"' + (CD.role === 'admin' ? ' onclick="shopOpenAssetForm(\'' + a.id + '\')"' : '') + '>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);font-weight:700;color:var(--text)">'
           + '<span style="display:inline-flex;align-items:center;gap:7px">' + shopAssetIconHtml(a.iconKey, a.assetType, 20) + '<span>' + esc(a.unitNumber || '') + '</span></span>'
@@ -10440,7 +10453,10 @@ function shopPaintAssets() {
                 + '</select>'
               : shopDivisionChip(a.divisionId))
           + '</td>'
-          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + statusColor + ';background:' + statusBg + '">' + shopStatusLabel(a.status) + '</span></td>'
+          + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)">'
+          + '<span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:' + statusColor + ';background:' + statusBg + '">' + shopStatusLabel(a.status) + '</span>'
+          + (onLoan ? '<div style="margin-top:3px"><span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:var(--info);background:var(--info-l)">🔁 ' + T('On Loan','En Préstamo') + '</span><div style="font-size:10px;color:var(--text3);margin-top:2px">' + esc(onLoan.foremanName || '—') + '</div></div>' : '')
+          + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border)">' + (a.category === 'extra' ? '<span style="font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:20px;color:var(--info);background:var(--info-l)">' + shopCategoryLabel('extra') + '</span>' : '<span style="font-size:11px;color:var(--text3)">' + shopCategoryLabel('in_service') + '</span>') + '</td>'
           + '<td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text2)">' + (a.meterType && a.meterType !== 'none' ? (a.currentMeter != null ? a.currentMeter : '—') + ' ' + shopMeterLabel(a.meterType) : '—') + '</td>'
           + '</tr>';
@@ -12747,7 +12763,7 @@ function shopComputePeriodSummary(tickets, checkouts, periodStart, periodEnd) {
   const urgentOpen = openNow.filter(t => t.priority === 'urgent');
   const readyNow = tickets.filter(t => t.status === 'ready_pickup');
   const overdueLoaners = tickets.filter(shopIsLoanerOverdue);
-  const relevantCheckouts = (checkouts || []).filter(c => c.status === 'out' || inWindow(c.returnedAt));
+  const relevantCheckouts = (checkouts || []).filter(c => c.status === 'out' || inWindow(c.returnedAt) || inWindow(c.assignedAt));
 
   const loanerStatus = (t) => {
     if (!t.loanerNumber) return null;
@@ -12764,6 +12780,7 @@ function shopComputePeriodSummary(tickets, checkouts, periodStart, periodEnd) {
     // strings — shopFmtDateOnly expects the string form and throws on a
     // Timestamp, hence shopFmtWhen here instead.
     if (c.status === 'returned') return { text: 'Returned' + (toDate(c.returnedAt) ? ' ' + shopFmtWhen(c.returnedAt) : ''), cls: 'ok' };
+    if (c.status === 'assigned') return { text: 'Permanently assigned' + (toDate(c.assignedAt) ? ' ' + shopFmtWhen(c.assignedAt) : '') + ' to ' + (c.foremanName || '—'), cls: 'ok' };
     return overdue
       ? { text: 'Still out — OVERDUE, was due ' + shopFmtDateOnly(c.expectedReturnDate), cls: 'bad' }
       : { text: 'Still out — due ' + shopFmtDateOnly(c.expectedReturnDate), cls: 'warn' };
@@ -14887,6 +14904,36 @@ async function tcSaveEditDate(id) {
   }
 }
 
+// David-only — "what they dropped off was unrepairable... the loaner
+// would be able to be permanently assigned to that crew." Closes the
+// checkout as a permanent transfer instead of a return: status moves to
+// 'assigned' (not 'out', so it stops showing as an open loan anywhere —
+// the kiosk board, Ticket Progress's summary, the weekly/monthly report
+// — without needing any of those filters touched), and the asset's own
+// registry division moves to match the crew it's now with, since it's
+// no longer just visiting.
+async function tcAssignPermanently(id) {
+  if (!shopIsDavid()) return;
+  const tc = (window._toolCheckouts || []).find(x => x.id === id);
+  if (!tc) return;
+  if (!confirm('¿Asignar "' + (tc.unitNumber || '—') + ' ' + (tc.toolLabel || '') + '" de forma permanente a ' + (tc.foremanName || 'esta persona') + '? Ya no se rastreará como préstamo, y el activo se reasignará a ' + shopDivisionName(tc.divisionId) + ' en el Registro de Activos.')) return;
+  try {
+    await db.collection('tool_checkouts').doc(id).update({
+      status: 'assigned', assignedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      assignedByUserId: CU.uid, assignedByName: CD.name,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    if (tc.assetId) {
+      await db.collection('shop_assets').doc(tc.assetId).update({
+        divisionId: tc.divisionId || null, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    toast('✓ Asignado permanentemente');
+  } catch (e) {
+    toast(e.message || 'No se pudo asignar', 'err');
+  }
+}
+
 // David-only, matching shopDetailDeleteTicket's gate — not soft-delete
 // like tickets (no "Deleted" filter view exists for checkouts, and there's
 // no audit reason to keep a hard-deleted test entry around), just a
@@ -14926,6 +14973,7 @@ function tcCardHtml(tc) {
     + '<div style="display:flex;gap:8px;margin-top:10px">'
     + '<button class="btn sm primary" style="flex:1" onclick="tcMarkReturned(\'' + tc.id + '\')">✓ Devuelto</button>'
     + '<button class="btn sm" onclick="tcShowEditDate(\'' + tc.id + '\')" title="Cambiar fecha">✎</button>'
+    + (shopIsDavid() ? '<button class="btn sm" onclick="tcAssignPermanently(\'' + tc.id + '\')" title="Asignar permanentemente">📌</button>' : '')
     + (shopIsDavid() ? '<button class="btn sm" onclick="tcDelete(\'' + tc.id + '\')" title="Eliminar">🗑</button>' : '')
     + '</div>'
     + '</div>';
