@@ -11932,13 +11932,13 @@ function shopPaintTicketProgress() {
               + '<div style="color:var(--text3);font-size:11px;margin-top:2px">👷 ' + esc(tc.foremanName || '—') + ' · ' + esc(shopDivisionName(tc.divisionId)) + '</div></div>'
             + '<span style="font-size:9.5px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap;color:' + (overdue ? 'var(--danger)' : 'var(--text3)') + ';background:' + (overdue ? 'var(--danger-l)' : 'var(--surface2)') + '">'
               + (overdue ? T('OVERDUE','VENCIDO') : T('Due','Vence') + ' ' + shopFmtDateOnly(tc.expectedReturnDate)) + '</span>'
-            + (canAct ? '<button class="btn sm primary" style="padding:3px 8px" onclick="tcMarkReturned(\'' + tc.id + '\')" title="Devuelto">✓</button>' : '')
-            + (canAct ? '<button class="btn sm" style="padding:3px 8px" onclick="tcShowEditDate(\'' + tc.id + '\')" title="Editar">✎</button>' : '')
+            + (canAct ? '<button class="btn sm primary" style="padding:3px 8px" onclick="tcMarkReturned(\'' + tc.id + '\')" title="' + T('Returned','Devuelto') + '">✓</button>' : '')
+            + (canAct ? '<button class="btn sm" style="padding:3px 8px" onclick="tcShowEditDate(\'' + tc.id + '\')" title="' + T('Edit','Editar') + '">✎</button>' : '')
             // Permanent reassignment (like delete) is David-only, not
             // Saul — a bigger inventory decision than day-to-day loan
             // tracking, matching tcAssignPermanently's own internal gate.
-            + (shopIsDavid() ? '<button class="btn sm" style="padding:3px 8px" onclick="tcAssignPermanently(\'' + tc.id + '\')" title="Asignar permanentemente">📌</button>' : '')
-            + (shopIsDavid() ? '<button class="btn sm" style="padding:3px 8px" onclick="tcDelete(\'' + tc.id + '\')" title="Delete">🗑</button>' : '')
+            + (shopIsDavid() ? '<button class="btn sm" style="padding:3px 8px" onclick="tcAssignPermanently(\'' + tc.id + '\')" title="' + T('Permanently assign','Asignar permanentemente') + '">📌</button>' : '')
+            + (shopIsDavid() ? '<button class="btn sm" style="padding:3px 8px" onclick="tcDelete(\'' + tc.id + '\')" title="' + T('Delete','Eliminar') + '">🗑</button>' : '')
             + '</div>';
         }).join('')
       + '</div>' : '')
@@ -12433,13 +12433,26 @@ function shopToggleDetailLang(ticketId, lang) {
 // Ticket Progress, not the mechanics.
 async function shopToggleTicketProgressLang(lang) {
   window._tpLang = lang;
+  // Repaint immediately so the EN/ES pill itself updates right away —
+  // translating every row is a network call per ticket and can take a
+  // few seconds, which otherwise looks exactly like "nothing happened."
+  shopPaintTicketProgress();
   if (lang === 'en') {
+    let sawFailure = false;
     for (const t of (window._shopProgressTickets || [])) {
-      if (t.issue && !t._issueEn) t._issueEn = await shopTranslateToEnglish(t.issue);
+      if (t.issue && !t._issueEn) {
+        t._issueEn = await shopTranslateToEnglish(t.issue);
+        if (t._issueEn === t.issue) sawFailure = true;
+      }
       if (t.lastNoteText && !t._lastNoteTextEn) t._lastNoteTextEn = await shopTranslateToEnglish(t.lastNoteText);
     }
+    shopPaintTicketProgress();
+    // shopTranslateToEnglish quietly returns the original text if the
+    // translate endpoint is unreachable — that's the right call for a
+    // single field, but for a whole-list toggle it would otherwise look
+    // identical to nothing happening at all, so say so explicitly here.
+    if (sawFailure) toast(T('Translation service unavailable right now — showing original text','Servicio de traducción no disponible en este momento — mostrando texto original'), 'err');
   }
-  shopPaintTicketProgress();
 }
 // Same public, no-key translate endpoint the Kiosk's own "Traducir"
 // button already uses — no billing decision or API key to wire up, and
@@ -14895,16 +14908,19 @@ async function tcMarkReturned(id) {
       returnedByUserId: CU.uid, returnedByName: CD.name,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    toast('✓ Devuelto');
+    toast('✓ ' + T('Returned','Devuelto'));
   } catch (e) {
-    toast(e.message || 'No se pudo actualizar', 'err');
+    toast(e.message || T('Could not update','No se pudo actualizar'), 'err');
   }
 }
 
 // Change the expected return date on an already-checked-out tool.
-// Kiosk-only, same as everything else on this card — the Kiosk screen
-// itself is only reachable by role 'yard' (Saul) or 'admin' (David), so
-// no separate gate is needed here for "only him or me."
+// Reachable from both the Kiosk (Spanish-only by design) and Ticket
+// Progress (a language-aware screen David reads in English) — unlike
+// the Kiosk's own screens, everything here goes through T() so it
+// actually shows in whichever language the viewer's account is set to,
+// instead of being hardcoded Spanish like it was when this only opened
+// from the Kiosk.
 function tcShowEditDate(id) {
   const tc = (window._toolCheckouts || []).find(x => x.id === id);
   if (!tc) return;
@@ -14914,30 +14930,30 @@ function tcShowEditDate(id) {
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:flex;align-items:center;justify-content:center;padding:20px';
   m.innerHTML = '<div style="background:var(--surface);border-radius:22px;padding:26px;width:380px;max-width:100%;box-shadow:var(--shm)">'
     + '<div style="font-size:17px;font-weight:800;margin-bottom:14px">🔁 ' + esc(tc.unitNumber || '—') + '</div>'
-    + '<div class="fg"><label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:4px">Devolución Esperada</label>'
+    + '<div class="fg"><label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:4px">' + T('Expected Return','Devolución Esperada') + '</label>'
     + '<input type="date" id="tc-edit-date" value="' + esc(tc.expectedReturnDate || '') + '" style="width:100%;font-size:16px;padding:12px 14px;border:1.5px solid var(--border2);border-radius:10px;background:var(--surface);color:var(--text)"></div>'
     // Overrides the automatic status text in the weekly/monthly report —
     // same idea as the ticket loaner note.
-    + '<div class="fg" style="margin-top:12px"><label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:4px">Nota (aparece en el reporte en vez del estado automático)</label>'
+    + '<div class="fg" style="margin-top:12px"><label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:4px">' + T('Note (shows in the report instead of the automatic status)','Nota (aparece en el reporte en vez del estado automático)') + '</label>'
     + '<textarea id="tc-edit-note" rows="2" style="width:100%;font-size:14px;padding:10px 12px;border:1.5px solid var(--border2);border-radius:10px;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical">' + esc(tc.note || '') + '</textarea></div>'
     + '<div style="display:flex;gap:8px;margin-top:16px">'
-    + '<button onclick="tcSaveEditDate(\'' + id + '\')" style="flex:1;padding:14px;font-size:15px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Guardar</button>'
-    + '<button onclick="document.getElementById(\'tc-edit-modal\').remove()" style="padding:14px 18px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">Cancelar</button>'
+    + '<button onclick="tcSaveEditDate(\'' + id + '\')" style="flex:1;padding:14px;font-size:15px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">' + T('Save','Guardar') + '</button>'
+    + '<button onclick="document.getElementById(\'tc-edit-modal\').remove()" style="padding:14px 18px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">' + T('Cancel','Cancelar') + '</button>'
     + '</div></div>';
   document.body.appendChild(m);
 }
 async function tcSaveEditDate(id) {
   const d = document.getElementById('tc-edit-date').value;
   const note = document.getElementById('tc-edit-note').value.trim() || null;
-  if (!d) { toast('Selecciona una fecha', 'err'); return; }
+  if (!d) { toast(T('Pick a date','Selecciona una fecha'), 'err'); return; }
   try {
     await db.collection('tool_checkouts').doc(id).update({
       expectedReturnDate: d, note, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     const m = document.getElementById('tc-edit-modal'); if (m) m.remove();
-    toast('✓ Fecha actualizada');
+    toast('✓ ' + T('Date updated','Fecha actualizada'));
   } catch (e) {
-    toast(e.message || 'No se pudo guardar', 'err');
+    toast(e.message || T('Could not save','No se pudo guardar'), 'err');
   }
 }
 
@@ -14953,7 +14969,10 @@ async function tcAssignPermanently(id) {
   if (!shopIsDavid()) return;
   const tc = (window._toolCheckouts || []).find(x => x.id === id);
   if (!tc) return;
-  if (!confirm('¿Asignar "' + (tc.unitNumber || '—') + ' ' + (tc.toolLabel || '') + '" de forma permanente a ' + (tc.foremanName || 'esta persona') + '? Ya no se rastreará como préstamo, y el activo se reasignará a ' + shopDivisionName(tc.divisionId) + ' en el Registro de Activos.')) return;
+  if (!confirm(T(
+    'Permanently assign "' + (tc.unitNumber || '—') + ' ' + (tc.toolLabel || '') + '" to ' + (tc.foremanName || 'this person') + '? It will no longer be tracked as a loan, and the asset will be reassigned to ' + shopDivisionName(tc.divisionId) + ' in the Asset Registry.',
+    '¿Asignar "' + (tc.unitNumber || '—') + ' ' + (tc.toolLabel || '') + '" de forma permanente a ' + (tc.foremanName || 'esta persona') + '? Ya no se rastreará como préstamo, y el activo se reasignará a ' + shopDivisionName(tc.divisionId) + ' en el Registro de Activos.'
+  ))) return;
   try {
     await db.collection('tool_checkouts').doc(id).update({
       status: 'assigned', assignedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -14965,9 +14984,9 @@ async function tcAssignPermanently(id) {
         divisionId: tc.divisionId || null, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     }
-    toast('✓ Asignado permanentemente');
+    toast('✓ ' + T('Permanently assigned','Asignado permanentemente'));
   } catch (e) {
-    toast(e.message || 'No se pudo asignar', 'err');
+    toast(e.message || T('Could not assign','No se pudo asignar'), 'err');
   }
 }
 
@@ -14977,12 +14996,12 @@ async function tcAssignPermanently(id) {
 // straight remove after a confirm.
 async function tcDelete(id) {
   if (!shopIsDavid()) return;
-  if (!confirm('¿Eliminar este registro de préstamo de herramienta? Esto no se puede deshacer.')) return;
+  if (!confirm(T('Delete this tool checkout record? This cannot be undone.','¿Eliminar este registro de préstamo de herramienta? Esto no se puede deshacer.'))) return;
   try {
     await db.collection('tool_checkouts').doc(id).delete();
-    toast('✓ Eliminado');
+    toast('✓ ' + T('Deleted','Eliminado'));
   } catch (e) {
-    toast(e.message || 'No se pudo eliminar', 'err');
+    toast(e.message || T('Could not delete','No se pudo eliminar'), 'err');
   }
 }
 
