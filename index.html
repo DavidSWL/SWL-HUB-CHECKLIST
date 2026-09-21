@@ -12607,12 +12607,18 @@ async function renderYardRepairReport() {
   if (!canView) { ca.innerHTML = '<div class="empty">' + T('Admin and executives only.','Solo admin y ejecutivos.') + '</div>'; return; }
   ca.innerHTML = '<div class="empty">' + T('Loading…','Cargando…') + '</div>';
   try {
-    const [ticketSnap, assetSnap] = await Promise.all([
+    const [ticketSnap, assetSnap, checkoutSnap] = await Promise.all([
       db.collection('shop_tickets').get(),
-      db.collection('shop_assets').get()
+      db.collection('shop_assets').get(),
+      db.collection('tool_checkouts').get()
     ]);
     const tickets = ticketSnap.docs.map(d => ({ id:d.id, ...d.data() })).filter(t => !t.deleted);
     const assets = assetSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    const checkouts = checkoutSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+    // Held for the Copy Weekly Summary button so it doesn't need its own
+    // fetch — this report's own data is already exactly what it needs.
+    window._yardRepairTickets = tickets;
+    window._yardRepairCheckouts = checkouts;
     shopPaintYardRepairReport(tickets, assets);
   } catch (e) {
     ca.innerHTML = '<div class="card" style="border-top:3px solid var(--danger);max-width:600px;margin:20px auto">'
@@ -12661,6 +12667,9 @@ function shopPaintYardRepairReport(tickets, assets) {
       + T('First pass at this report — reach out if the breakdown here doesn\'t match what you had in mind and I\'ll adjust it.',
           'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
       + '</div>'
+    + '<div style="display:flex;justify-content:flex-end;margin-bottom:14px">'
+      + '<button class="btn sm primary" onclick="shopCopyWeeklySummary()">📋 ' + T('Copy Weekly Summary','Copiar Resumen Semanal') + '</button>'
+    + '</div>'
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
       + '<div class="stat-card"><div class="stat-num">' + openTickets.length + '</div><div class="stat-lbl">' + T('Open Now','Abiertos Ahora') + '</div></div>'
       + '<div class="stat-card" style="border-top:3px solid var(--danger)"><div class="stat-num">' + urgentOpen.length + '</div><div class="stat-lbl">' + T('Urgent Open','Urgentes Abiertos') + '</div></div>'
@@ -12697,6 +12706,100 @@ function shopPaintYardRepairReport(tickets, assets) {
           + '<span style="color:var(--text3)">' + shopAssetTypeLabel(a.assetType) + ' · ' + esc(shopDivisionName(a.divisionId)) + '</span>'
           + '</div>').join('') : '<div class="empty">' + T('No assets marked down.','No hay activos marcados como fuera de servicio.') + '</div>')
     + '</div>';
+}
+
+// Plain-text weekly digest — David copies this into an email himself
+// rather than the app sending one (no backend here to run a real
+// schedule). Per-ticket detail, not just counts: every ticket submitted
+// in the last 7 days gets its outcome, its latest note (the denormalized
+// lastNoteText — the same "quick reference" field Ticket Progress shows,
+// not a full per-event history pull, which would mean a Firestore read
+// per ticket), and its loaner status if it has one. Tool checkouts get
+// their own section — anything still out, or returned this week, so a
+// resolved one doesn't just vanish from the record the week it closes.
+function shopBuildWeeklySummaryText(tickets, checkouts) {
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 86400000);
+  const toDate = (ts) => ts?.toDate ? ts.toDate() : null;
+  const inWindow = (ts) => { const d = toDate(ts); return !!d && d >= weekAgo; };
+  const fmtD = (d) => d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+
+  const newThisWeek = tickets.filter(t => inWindow(t.createdAt))
+    .sort((a,b) => (toDate(a.createdAt) || 0) - (toDate(b.createdAt) || 0));
+  const closedThisWeek = tickets.filter(t => t.status === 'closed' && inWindow(t.closedAt));
+  const openStatuses = ['submitted','acknowledged','in_progress','ready_pickup'];
+  const openNow = tickets.filter(t => openStatuses.includes(t.status));
+  const urgentOpen = openNow.filter(t => t.priority === 'urgent');
+  const readyNow = tickets.filter(t => t.status === 'ready_pickup');
+  const overdueLoaners = tickets.filter(shopIsLoanerOverdue);
+
+  const loanerLine = (t) => {
+    if (!t.loanerNumber) return null;
+    if (t.loanerReturned) return 'Loaner ' + t.loanerNumber + ' — RETURNED';
+    if (shopIsLoanerOverdue(t)) return 'Loaner ' + t.loanerNumber + ' — STILL OUT, OVERDUE (was due ' + shopFmtDateOnly(t.loanerReturnDate) + ')';
+    return 'Loaner ' + t.loanerNumber + ' — STILL OUT, due ' + (t.loanerReturnDate ? shopFmtDateOnly(t.loanerReturnDate) : 'no date set');
+  };
+
+  const lines = [];
+  lines.push('SWL SHOP TICKETS — WEEKLY SUMMARY');
+  lines.push('Week of ' + fmtD(weekAgo) + ' – ' + fmtD(now));
+  lines.push('');
+  lines.push('New tickets this week: ' + newThisWeek.length);
+  lines.push('Closed this week: ' + closedThisWeek.length);
+  lines.push('Still open (all-time): ' + openNow.length + ' (' + urgentOpen.length + ' urgent)');
+  lines.push('Ready for pickup: ' + readyNow.length);
+  lines.push('Overdue loaners: ' + overdueLoaners.length);
+  lines.push('');
+  lines.push('TICKETS SUBMITTED THIS WEEK');
+  lines.push('----------------------------------------');
+  if (!newThisWeek.length) {
+    lines.push('None.');
+  } else {
+    newThisWeek.forEach(t => {
+      lines.push((t.unitNumber || '—') + ' — ' + shopDivisionName(t.divisionId) + ' — submitted ' + (toDate(t.createdAt) ? fmtD(toDate(t.createdAt)) : '—') + (t.priority === 'urgent' ? ' — URGENT' : ''));
+      if (t.issue) lines.push('  Issue: ' + t.issue);
+      lines.push('  Outcome: ' + shopTicketStatusLabel(t.status) + (t.workType ? ' — ' + shopWorkTypeLabel(t.workType) : '') + (t.status === 'cancelled' && t.cancelReason ? ' (' + t.cancelReason + ')' : ''));
+      const ll = loanerLine(t);
+      if (ll) lines.push('  ' + ll);
+      if (t.lastNoteText) lines.push('  Latest note: "' + t.lastNoteText + '" — ' + (t.lastNoteBy || '—'));
+      lines.push('');
+    });
+  }
+  lines.push('TOOL CHECKOUTS — CURRENT STATUS');
+  lines.push('----------------------------------------');
+  const relevantCheckouts = (checkouts || []).filter(c => c.status === 'out' || inWindow(c.returnedAt));
+  if (!relevantCheckouts.length) {
+    lines.push('None.');
+  } else {
+    relevantCheckouts.forEach(c => {
+      const overdue = c.status === 'out' && c.expectedReturnDate && c.expectedReturnDate < now.toISOString().split('T')[0];
+      const statusText = c.status === 'returned'
+        ? 'RETURNED' + (toDate(c.returnedAt) ? ' ' + fmtD(toDate(c.returnedAt)) : '')
+        : (overdue ? 'STILL OUT, OVERDUE (was due ' + shopFmtDateOnly(c.expectedReturnDate) + ')' : 'STILL OUT, due ' + shopFmtDateOnly(c.expectedReturnDate));
+      lines.push((c.unitNumber || '—') + ' ' + (c.toolLabel || '') + ' — ' + (c.foremanName || '—') + ' — ' + shopDivisionName(c.divisionId));
+      lines.push('  Status: ' + statusText);
+      lines.push('');
+    });
+  }
+  return lines.join('\n');
+}
+
+async function shopCopyWeeklySummary() {
+  const tickets = window._yardRepairTickets || [];
+  const checkouts = window._yardRepairCheckouts || [];
+  const text = shopBuildWeeklySummaryText(tickets, checkouts);
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('✓ ' + T('Copied to clipboard','Copiado al portapapeles'));
+  } catch (e) {
+    // Fallback for browsers/contexts that block the async clipboard API
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('✓ ' + T('Copied to clipboard','Copiado al portapapeles')); }
+    catch (e2) { toast(T('Could not copy — select and copy manually','No se pudo copiar — selecciona y copia manualmente'), 'err'); }
+    document.body.removeChild(ta);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════
