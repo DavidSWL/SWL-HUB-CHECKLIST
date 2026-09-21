@@ -12893,6 +12893,15 @@ function shopSetReportRange(days) {
   if (toEl) toEl.value = to.toISOString().split('T')[0];
 }
 
+// Opens the report inline via a modal + iframe instead of a download —
+// a Blob download turned out to be just as invisible for David as
+// window.open() was (verified the HTML-building and download-triggering
+// code both run without error in a clean browser, so it's something in
+// his specific browser/OS silently eating the file either way). DOM
+// rendering inside the current page can't be blocked by a pop-up
+// blocker or a download permission — he WILL see something the moment
+// he clicks. Download is still offered, just as a secondary button once
+// he can already see the report worked.
 function shopExportPeriodReport() {
   if (!shopIsDavid()) return;
   const fromVal = document.getElementById('rep-from')?.value;
@@ -12903,18 +12912,42 @@ function shopExportPeriodReport() {
   if (periodStart > periodEnd) { toast(T('The from date is after the to date','La fecha de inicio es posterior a la de fin'), 'err'); return; }
   const tickets = window._yardRepairTickets || [];
   const checkouts = window._yardRepairCheckouts || [];
-  const periodLabel = fromVal + '_to_' + toVal;
   const html = shopBuildPeriodReportHtml(tickets, checkouts, periodStart, periodEnd, fromVal + ' – ' + toVal);
+  window._reportHtml = html;
+  window._reportFilename = 'SWL_Shop_Tickets_Report_' + fromVal + '_to_' + toVal + '.html';
+
+  const ex = document.getElementById('report-preview-modal'); if (ex) ex.remove();
+  const m = document.createElement('div');
+  m.id = 'report-preview-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:700;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML = '<div style="background:var(--surface);border-radius:16px;width:900px;max-width:100%;height:88vh;display:flex;flex-direction:column;box-shadow:var(--shm);overflow:hidden">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0">'
+    + '<div style="font-size:13px;font-weight:800">' + T('Report Preview','Vista Previa del Reporte') + '</div>'
+    + '<div style="display:flex;gap:8px;align-items:center">'
+    + '<button class="btn sm" onclick="shopDownloadReportHtml()">⬇ ' + T('Download File','Descargar Archivo') + '</button>'
+    + '<button onclick="document.getElementById(\'report-preview-modal\').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">✕</button>'
+    + '</div></div>'
+    + '<iframe id="report-preview-frame" style="flex:1;border:none;width:100%"></iframe>'
+    + '</div>';
+  document.body.appendChild(m);
+  document.getElementById('report-preview-frame').srcdoc = html;
+}
+
+// The generated report page has its own Print/Save-as-PDF button inside
+// the iframe already — this is just for whoever wants the raw file.
+function shopDownloadReportHtml() {
+  const html = window._reportHtml;
+  if (!html) return;
   const blob = new Blob([html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'SWL_Shop_Tickets_Report_' + periodLabel + '.html';
+  a.download = window._reportFilename || 'report.html';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 10000);
-  toast('✓ ' + T('Report downloaded — open the file to view or print it','Reporte descargado — abre el archivo para verlo o imprimirlo'));
+  toast('✓ ' + T('Downloaded','Descargado'));
 }
 
 // ══════════════════════════════════════════════════════════════════════
