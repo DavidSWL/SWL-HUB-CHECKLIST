@@ -12668,12 +12668,19 @@ function shopPaintYardRepairReport(tickets, assets) {
           'Primera versión de este reporte — avísame si el desglose no coincide con lo que tenías en mente y lo ajusto.')
       + '</div>'
     // David-only — this is his own report, not a dashboard feature for
-    // admin/exec generally, per his request. Opens a full printable page
-    // in a new tab (not a clipboard copy) — "a very well detailed report
-    // to read," which a wall of plain text didn't deliver on.
-    + (shopIsDavid() ? '<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px">'
-      + '<button class="btn sm primary" onclick="shopExportPeriodReport(7)">🖨 ' + T('Export Weekly Report','Exportar Reporte Semanal') + '</button>'
-      + '<button class="btn sm primary" onclick="shopExportPeriodReport(30)">🖨 ' + T('Export Monthly Report','Exportar Reporte Mensual') + '</button>'
+    // admin/exec generally, per his request. Downloads a full printable
+    // page (not a clipboard copy) — "a very well detailed report to
+    // read," which a wall of plain text didn't deliver on — for
+    // whatever date range he picks, defaulted to the last 7 days.
+    + (shopIsDavid() ? '<div class="card" style="margin-bottom:14px;padding:14px 16px">'
+      + '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:10px">' + T('Export Report','Exportar Reporte') + '</div>'
+      + '<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">'
+        + '<div class="fg" style="margin:0"><label>' + T('From','Desde') + '</label><input type="date" id="rep-from" value="' + new Date(Date.now() - 7*86400000).toISOString().split('T')[0] + '" style="padding:8px 10px;font-size:13px"></div>'
+        + '<div class="fg" style="margin:0"><label>' + T('To','Hasta') + '</label><input type="date" id="rep-to" value="' + new Date().toISOString().split('T')[0] + '" style="padding:8px 10px;font-size:13px"></div>'
+        + '<button class="btn sm" onclick="shopSetReportRange(7)">' + T('Last 7 Days','Últimos 7 Días') + '</button>'
+        + '<button class="btn sm" onclick="shopSetReportRange(30)">' + T('Last 30 Days','Últimos 30 Días') + '</button>'
+        + '<button class="btn sm primary" onclick="shopExportPeriodReport()">🖨 ' + T('Export Report','Exportar Reporte') + '</button>'
+      + '</div>'
     + '</div>' : '')
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px">'
       + '<div class="stat-card"><div class="stat-num">' + openTickets.length + '</div><div class="stat-lbl">' + T('Open Now','Abiertos Ahora') + '</div></div>'
@@ -12714,16 +12721,23 @@ function shopPaintYardRepairReport(tickets, assets) {
 }
 
 // Shared data layer for the weekly/monthly report — everything below
-// just renders whatever this computes. Tool checkouts are deliberately
-// NOT filtered by the period start: an item checked out 3 weeks ago and
-// still out today is exactly the kind of thing a report like this exists
-// to surface, not drop for being "old."
-function shopComputePeriodSummary(tickets, checkouts, days) {
-  const now = new Date();
-  const periodStart = new Date(now.getTime() - days * 86400000);
+// just renders whatever this computes. periodStart/periodEnd are actual
+// Date objects now, not a fixed day count — David wanted to pick an
+// arbitrary range, not just 7 or 30 days back. Tool checkouts are
+// deliberately NOT filtered by the period start: an item checked out 3
+// weeks ago and still out today is exactly the kind of thing a report
+// like this exists to surface, not drop for being "old."
+//
+// A loanerNote/note field (added from the Kiosk's loaner-edit screens)
+// overrides the automatic status TEXT shown per item here — "extended
+// verbally," "manager approved," etc. — without changing the underlying
+// overdue facts the summary counts still use, so the stat numbers stay
+// honest even when an individual line reads differently.
+function shopComputePeriodSummary(tickets, checkouts, periodStart, periodEnd) {
+  const now = periodEnd || new Date();
   const toDate = (ts) => ts?.toDate ? ts.toDate() : null;
-  const inWindow = (ts) => { const d = toDate(ts); return !!d && d >= periodStart; };
-  const todayStr = now.toISOString().split('T')[0];
+  const inWindow = (ts) => { const d = toDate(ts); return !!d && d >= periodStart && d <= now; };
+  const todayStr = new Date().toISOString().split('T')[0];
 
   const newThisPeriod = tickets.filter(t => inWindow(t.createdAt))
     .sort((a,b) => (toDate(a.createdAt) || 0) - (toDate(b.createdAt) || 0));
@@ -12737,11 +12751,13 @@ function shopComputePeriodSummary(tickets, checkouts, days) {
 
   const loanerStatus = (t) => {
     if (!t.loanerNumber) return null;
+    if (t.loanerNote) return { text: 'Note: ' + t.loanerNote, cls: 'note' };
     if (t.loanerReturned) return { text: 'Returned', cls: 'ok' };
     if (shopIsLoanerOverdue(t)) return { text: 'Still out — OVERDUE, was due ' + shopFmtDateOnly(t.loanerReturnDate), cls: 'bad' };
     return { text: 'Still out — due ' + (t.loanerReturnDate ? shopFmtDateOnly(t.loanerReturnDate) : 'no date set'), cls: 'warn' };
   };
   const checkoutStatus = (c) => {
+    if (c.note) return { text: 'Note: ' + c.note, cls: 'note' };
     const overdue = c.status === 'out' && c.expectedReturnDate && c.expectedReturnDate < todayStr;
     if (c.status === 'returned') return { text: 'Returned' + (toDate(c.returnedAt) ? ' ' + shopFmtDateOnly(c.returnedAt) : ''), cls: 'ok' };
     return overdue
@@ -12757,11 +12773,10 @@ function shopComputePeriodSummary(tickets, checkouts, days) {
 // — opened in its own tab so printing it (or Save as PDF from the
 // browser's print dialog) never fights the app's own nav/overlay/dark
 // theme. "A very well detailed report to read," not a clipboard dump.
-function shopBuildPeriodReportHtml(tickets, checkouts, days) {
-  const s = shopComputePeriodSummary(tickets, checkouts, days);
-  const periodLabel = days >= 28 ? 'Monthly' : 'Weekly';
+function shopBuildPeriodReportHtml(tickets, checkouts, periodStart, periodEnd, periodLabel) {
+  const s = shopComputePeriodSummary(tickets, checkouts, periodStart, periodEnd);
   const fmtD = (d) => d.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' });
-  const statusDot = { ok:'#059669', warn:'#D97706', bad:'#DC2626' };
+  const statusDot = { ok:'#059669', warn:'#D97706', bad:'#DC2626', note:'#2563EB' };
 
   const statCard = (label, num, color) => `<div class="stat"><div class="stat-n" style="color:${color || '#0D1B12'}">${num}</div><div class="stat-l">${esc(label)}</div></div>`;
 
@@ -12859,15 +12874,47 @@ function shopBuildPeriodReportHtml(tickets, checkouts, days) {
 </body></html>`;
 }
 
-function shopExportPeriodReport(days) {
+// Downloads a standalone .html file instead of opening a new tab —
+// window.open()+document.write silently did nothing for David (almost
+// certainly a pop-up blocker swallowing it with no error at all, since
+// even the "please allow pop-ups" fallback never fired). A download
+// triggered by a real click isn't subject to pop-up blocking the same
+// way. The file is fully self-contained — same Print/Save-as-PDF button
+// works after opening it, no internet connection needed at that point.
+// Quick-fill for the date range inputs — still just sets the same two
+// <input type="date"> fields the manual pickers use, so "pick your own
+// range" and "last 7/30 days" are the same code path, not two systems.
+function shopSetReportRange(days) {
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 86400000);
+  const fromEl = document.getElementById('rep-from');
+  const toEl = document.getElementById('rep-to');
+  if (fromEl) fromEl.value = from.toISOString().split('T')[0];
+  if (toEl) toEl.value = to.toISOString().split('T')[0];
+}
+
+function shopExportPeriodReport() {
   if (!shopIsDavid()) return;
+  const fromVal = document.getElementById('rep-from')?.value;
+  const toVal = document.getElementById('rep-to')?.value;
+  if (!fromVal || !toVal) { toast(T('Pick a from and to date first','Elige una fecha de inicio y de fin primero'), 'err'); return; }
+  const periodStart = new Date(fromVal + 'T00:00:00');
+  const periodEnd = new Date(toVal + 'T23:59:59');
+  if (periodStart > periodEnd) { toast(T('The from date is after the to date','La fecha de inicio es posterior a la de fin'), 'err'); return; }
   const tickets = window._yardRepairTickets || [];
   const checkouts = window._yardRepairCheckouts || [];
-  const html = shopBuildPeriodReportHtml(tickets, checkouts, days);
-  const win = window.open('', '_blank');
-  if (!win) { toast(T('Please allow pop-ups to export the report','Permite ventanas emergentes para exportar el reporte'), 'err'); return; }
-  win.document.write(html);
-  win.document.close();
+  const periodLabel = fromVal + '_to_' + toVal;
+  const html = shopBuildPeriodReportHtml(tickets, checkouts, periodStart, periodEnd, fromVal + ' – ' + toVal);
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'SWL_Shop_Tickets_Report_' + periodLabel + '.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  toast('✓ ' + T('Report downloaded — open the file to view or print it','Reporte descargado — abre el archivo para verlo o imprimirlo'));
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -13537,6 +13584,10 @@ function shopYardLoanerEditHtml(ticketId, t) {
     + '<div style="text-align:center;font-size:22px;font-weight:800;margin-bottom:18px">🔁 Préstamo</div>'
     + '<div class="fg"><label>Número de Préstamo</label><input type="text" id="syd-loanernum-' + ticketId + '" value="' + esc(t.loanerNumber || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)"></div>'
     + '<div class="fg" style="margin-top:12px"><label>Devolución Esperada</label><input type="date" id="syd-loanerdate-' + ticketId + '" value="' + esc(t.loanerReturnDate || '') + '" onchange="shopYardSaveLoaner(\'' + ticketId + '\')" style="width:100%;font-size:16px;padding:14px 16px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text)"></div>'
+    // Overrides the automatic status text in the weekly/monthly report —
+    // "extended verbally," "manager approved late return," etc. — without
+    // having to fake the actual return date to make an exception fit.
+    + '<div class="fg" style="margin-top:12px"><label>Nota (aparece en el reporte en vez del estado automático)</label><textarea id="syd-loanernote-' + ticketId + '" rows="2" onchange="shopYardSaveLoaner(\'' + ticketId + '\')" style="width:100%;font-size:15px;padding:12px 14px;border:1.5px solid var(--border2);border-radius:12px;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical">' + esc(t.loanerNote || '') + '</textarea></div>'
     + (t.loanerReturned
         ? '<div style="font-size:13.5px;color:var(--success);font-weight:700;text-align:center;padding:16px 0">✓ Préstamo devuelto</div>'
         : '<button class="btn sm" style="width:100%;margin-top:16px;background:var(--success-l);color:var(--success);border-color:transparent" onclick="shopYardMarkLoanerReturned(\'' + ticketId + '\',\'ready\')">✓ Marcar Préstamo Devuelto</button>');
@@ -13999,13 +14050,19 @@ async function shopYardSaveLoaner(ticketId) {
   if (!t) return;
   const loanerNumber = document.getElementById('syd-loanernum-' + ticketId).value.trim() || null;
   const loanerReturnDate = document.getElementById('syd-loanerdate-' + ticketId).value || null;
+  // The note field only exists on shopYardLoanerEditHtml, not the older
+  // Progreso screen this function is also called from — fall back to
+  // whatever's already on the ticket so saving from that other screen
+  // never silently wipes out a note entered elsewhere.
+  const noteEl = document.getElementById('syd-loanernote-' + ticketId);
+  const loanerNote = noteEl ? (noteEl.value.trim() || null) : (t.loanerNote || null);
   try {
-    await db.collection('shop_tickets').doc(ticketId).update({ loanerNumber, loanerReturnDate, loanerReturned: false, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('shop_tickets').doc(ticketId).update({ loanerNumber, loanerReturnDate, loanerNote, loanerReturned: false, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
     await db.collection('shop_tickets').doc(ticketId).collection('events').add({
       type: 'note', text: 'Préstamo asignado' + (loanerNumber ? ': ' + loanerNumber : '') + (loanerReturnDate ? ' — devolución esperada ' + shopFmtDateOnly(loanerReturnDate) : ''),
       userId: CU.uid, userName: CD.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    t.loanerNumber = loanerNumber; t.loanerReturnDate = loanerReturnDate; t.loanerReturned = false;
+    t.loanerNumber = loanerNumber; t.loanerReturnDate = loanerReturnDate; t.loanerNote = loanerNote; t.loanerReturned = false;
     toast('✓ Préstamo guardado');
     shopPaintYardKiosk();
     await shopPaintYardConfirm(ticketId, 'ready');
@@ -14757,6 +14814,10 @@ function tcShowEditDate(id) {
     + '<div style="font-size:17px;font-weight:800;margin-bottom:14px">🔁 ' + esc(tc.unitNumber || '—') + '</div>'
     + '<div class="fg"><label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:4px">Devolución Esperada</label>'
     + '<input type="date" id="tc-edit-date" value="' + esc(tc.expectedReturnDate || '') + '" style="width:100%;font-size:16px;padding:12px 14px;border:1.5px solid var(--border2);border-radius:10px;background:var(--surface);color:var(--text)"></div>'
+    // Overrides the automatic status text in the weekly/monthly report —
+    // same idea as the ticket loaner note.
+    + '<div class="fg" style="margin-top:12px"><label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:4px">Nota (aparece en el reporte en vez del estado automático)</label>'
+    + '<textarea id="tc-edit-note" rows="2" style="width:100%;font-size:14px;padding:10px 12px;border:1.5px solid var(--border2);border-radius:10px;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical">' + esc(tc.note || '') + '</textarea></div>'
     + '<div style="display:flex;gap:8px;margin-top:16px">'
     + '<button onclick="tcSaveEditDate(\'' + id + '\')" style="flex:1;padding:14px;font-size:15px;font-weight:800;background:var(--burg);color:#fff;border:none;border-radius:12px;cursor:pointer">Guardar</button>'
     + '<button onclick="document.getElementById(\'tc-edit-modal\').remove()" style="padding:14px 18px;font-size:15px;font-weight:700;background:var(--surface2);color:var(--text);border:none;border-radius:12px;cursor:pointer">Cancelar</button>'
@@ -14765,10 +14826,11 @@ function tcShowEditDate(id) {
 }
 async function tcSaveEditDate(id) {
   const d = document.getElementById('tc-edit-date').value;
+  const note = document.getElementById('tc-edit-note').value.trim() || null;
   if (!d) { toast('Selecciona una fecha', 'err'); return; }
   try {
     await db.collection('tool_checkouts').doc(id).update({
-      expectedReturnDate: d, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      expectedReturnDate: d, note, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     const m = document.getElementById('tc-edit-modal'); if (m) m.remove();
     toast('✓ Fecha actualizada');
