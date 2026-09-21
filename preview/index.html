@@ -12770,7 +12770,11 @@ function shopComputePeriodSummary(tickets, checkouts, periodStart, periodEnd) {
   const checkoutStatus = (c) => {
     if (c.note) return { text: 'Note: ' + c.note, cls: 'note' };
     const overdue = c.status === 'out' && c.expectedReturnDate && c.expectedReturnDate < todayStr;
-    if (c.status === 'returned') return { text: 'Returned' + (toDate(c.returnedAt) ? ' ' + shopFmtDateOnly(c.returnedAt) : ''), cls: 'ok' };
+    // returnedAt is a Firestore Timestamp (serverTimestamp()), unlike
+    // expectedReturnDate/loanerReturnDate which are plain 'YYYY-MM-DD'
+    // strings — shopFmtDateOnly expects the string form and throws on a
+    // Timestamp, hence shopFmtWhen here instead.
+    if (c.status === 'returned') return { text: 'Returned' + (toDate(c.returnedAt) ? ' ' + shopFmtWhen(c.returnedAt) : ''), cls: 'ok' };
     return overdue
       ? { text: 'Still out — OVERDUE, was due ' + shopFmtDateOnly(c.expectedReturnDate), cls: 'bad' }
       : { text: 'Still out — due ' + shopFmtDateOnly(c.expectedReturnDate), cls: 'warn' };
